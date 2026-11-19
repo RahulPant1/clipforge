@@ -47,7 +47,8 @@ YouTube URL / file
 
 ## Requirements
 - WSL2 Ubuntu (or Linux) with an NVIDIA GPU (CPU works, slowly)
-- Miniconda, Node 18+ (via NVM), FFmpeg
+- Miniconda, Node 18+ (via NVM), FFmpeg with libass — the distro package is fine. Tested with FFmpeg 4.4
+  (Ubuntu 22.04), 8.0/8.0.1 (Ubuntu 26.04), 8.1 and 9.0
 - [Ollama](https://ollama.com) with a Gemma model (`gemma3:4b` default). Thinking models like `gemma4` work too —
   set `CONTENT_THINK=false` for ~2.5× faster post writing
 
@@ -118,6 +119,18 @@ cd frontend && npm run build
 VS Code: open the folder via **Remote - WSL**; launch configs for API and CLI debugging are included (GPU Whisper
 works there too — the app loads cuBLAS from the pip wheel itself).
 See `CLAUDE.md` for architecture, conventions and the roadmap.
+
+### Continuous integration
+Every push and pull request runs [`.github/workflows/ci.yml`](.github/workflows/ci.yml) on GitHub's Ubuntu runner:
+`ruff` + `pytest` for the backend and `npm run build` for the frontend. It needs no GPU or Ollama — the LLM is
+faked in tests — but it does install FFmpeg, fontconfig and DejaVu fonts, so the tests that render real video
+(vertical crop, captions, jump cuts, A/V sync) actually run instead of skipping. Skipped tests are listed in the log.
+
+### FFmpeg compatibility note
+FFmpeg 8.0 and 8.0.1 have a bug where the `aselect` audio filter does nothing (fixed upstream after 8.0.1).
+ClipForge therefore cuts audio with `atrim` + `concat` instead, with every cut snapped to the video frame grid,
+so jump cuts stay in sync on every FFmpeg version. If you change the jump-cut filters, don't reintroduce
+`aselect` — CI would catch it on its FFmpeg 8.0.1.
 
 ## License
 [Apache License 2.0](LICENSE) for ClipForge's own code (copyright notice in [NOTICE](NOTICE)). Models and tools it runs keep their own terms — notably Gemma

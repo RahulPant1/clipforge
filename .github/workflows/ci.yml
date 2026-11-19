@@ -34,6 +34,9 @@ jobs:
       - name: System packages (ffmpeg with libass, fontconfig, DejaVu fonts)
         run: sudo apt-get update -q && sudo apt-get install -y -q --no-install-recommends ffmpeg fontconfig fonts-dejavu-core
 
+      - name: Tool versions
+        run: ffmpeg -hide_banner -version | head -1 && fc-match Arial && python --version
+
       - name: Python dependencies
         run: pip install -r requirements-dev.txt
 

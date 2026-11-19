@@ -38,25 +38,37 @@ def test_render_vertical_with_captions(tmp_path, segs, monkeypatch, style):
 
 
 @needs_ffmpeg
-def test_jumpcut_shortens_output_and_keeps_av_in_sync(tmp_path):
+def _stream(path, sel: str) -> tuple[float, str]:
+    out = subprocess.run(["ffprobe", "-v", "error", "-select_streams", sel, "-count_packets", "-show_entries",
+                          "stream=duration,nb_read_packets", "-of", "csv=p=0", str(path)],
+                         capture_output=True, text=True).stdout.strip()
+    dur, _, packets = out.partition(",")
+    return float(dur), packets
+
+
+def test_jumpcut_shortens_output_and_keeps_av_in_sync(tmp_path, monkeypatch):
     # two words, then 6 s of silence, then two words -> silence should be cut
+    from app.pipeline import render as render_mod
+
     words = [Word(start=1.0, end=1.5, word=" hello"), Word(start=1.6, end=2.0, word=" there"),
              Word(start=8.0, end=8.5, word=" big"), Word(start=8.6, end=9.0, word=" news")]
     segs = [Segment(start=1.0, end=9.0, text="hello there big news", words=words)]
     video = _video(tmp_path, 12)
     clip = Clip(index=1, start=0.0, end=10.0, title="t", hook="h", score=5)
+    cmds: list[list[str]] = []
+    real_run = render_mod.subprocess.run
+    monkeypatch.setattr(render_mod.subprocess, "run", lambda cmd, **kw: cmds.append(cmd) or real_run(cmd, **kw))
     render_clip(video, clip, segs, tmp_path)
 
-    assert clip.cut_seconds > 5
-    dur = float(_probe(tmp_path / "short_1.mp4", "format=duration"))
-    assert abs(dur - clip.out_duration) < 0.3
-    v = float(subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries",
-                              "stream=duration", "-of", "csv=p=0", str(tmp_path / "short_1.mp4")],
-                             capture_output=True, text=True).stdout.strip())
-    a = float(subprocess.run(["ffprobe", "-v", "error", "-select_streams", "a:0", "-show_entries",
-                              "stream=duration", "-of", "csv=p=0", str(tmp_path / "short_1.mp4")],
-                             capture_output=True, text=True).stdout.strip())
-    assert abs(v - a) < 0.15
+    out = tmp_path / "short_1.mp4"
+    dur = float(_probe(out, "format=duration"))
+    (v, v_packets), (a, a_packets) = _stream(out, "v:0"), _stream(out, "a:0")
+    version = subprocess.run(["ffmpeg", "-version"], capture_output=True, text=True).stdout.splitlines()[0]
+    diag = (f"\n{version}\nexpected {clip.out_duration}s; got format={dur}s video={v}s ({v_packets} pkts) "
+            f"audio={a}s ({a_packets} pkts)\nrender cmd: {' '.join(cmds[0])}")
+    assert clip.cut_seconds > 5, diag
+    assert abs(dur - clip.out_duration) < 0.3, diag
+    assert abs(v - a) < 0.15, diag
 
 
 class _FaceRight:

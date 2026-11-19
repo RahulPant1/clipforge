@@ -116,19 +116,39 @@ def video_select_expr(keeps: list[tuple[float, float]], fps: int) -> str:
     return "+".join(f"between(t,{s - h:.6f},{e - h:.6f})" for s, e in keeps)
 
 
-def audio_cut_graph(keeps: list[tuple[float, float]]) -> str:
+def audio_cut_graph(keeps: list[tuple[float, float]], crossfade: float = 0.0) -> str:
     """-af graph cutting audio to exactly the same intervals as the video.
 
     Not `aselect`: in FFmpeg 8.0 and 8.0.1 (Ubuntu 26.04's package) it is a silent no-op — upstream commit
     565d14e4ff "f_select: Added activate for aselect" — which left audio uncut and out of sync with video.
     asplit/atrim/concat behave the same on every FFmpeg version and audio is small, so buffering is cheap.
+
+    `crossfade` (seconds) blends each cut instead of butting waveforms together (which clicks). Segment i is
+    trimmed `d` past its end — into audio that is being removed anyway — and `acrossfade` overlaps that tail
+    with the start of segment i+1. The overlap eats exactly the extra `d`, so every kept segment still starts
+    at the same output time and the total length is unchanged: A/V sync is untouched.
     """
-    trims = [f"atrim=start={s:.6f}:end={e:.6f},asetpts=PTS-STARTPTS" for s, e in keeps]
-    if len(trims) == 1:
+    n = len(keeps)
+    # per-cut fade length: never longer than the removed gap (we borrow audio from it) or the next segment
+    fades = [min(crossfade, max(keeps[i + 1][0] - keeps[i][1], 0.0), keeps[i + 1][1] - keeps[i + 1][0])
+             for i in range(n - 1)]
+    fades = [d if d >= 0.001 else 0.0 for d in fades]
+    ends = [e + (fades[i] if i < n - 1 else 0.0) for i, (_, e) in enumerate(keeps)]
+    trims = [f"atrim=start={s:.6f}:end={e:.6f},asetpts=PTS-STARTPTS" for (s, _), e in zip(keeps, ends, strict=True)]
+    if n == 1:
         return trims[0]
-    n = len(trims)
-    return ";".join([
-        f"asplit={n}" + "".join(f"[a{i}]" for i in range(n)),
-        *(f"[a{i}]{t}[b{i}]" for i, t in enumerate(trims)),
-        "".join(f"[b{i}]" for i in range(n)) + f"concat=n={n}:v=0:a=1",
-    ])
+    if not any(fades):
+        return ";".join([
+            f"asplit={n}" + "".join(f"[a{i}]" for i in range(n)),
+            *(f"[a{i}]{t}[b{i}]" for i, t in enumerate(trims)),
+            "".join(f"[b{i}]" for i in range(n)) + f"concat=n={n}:v=0:a=1",
+        ])
+    parts = [f"asplit={n}" + "".join(f"[a{i}]" for i in range(n)),
+             *(f"[a{i}]{t}[b{i}]" for i, t in enumerate(trims))]
+    prev = "b0"
+    for i, d in enumerate(fades, start=1):
+        join = f"acrossfade=d={d:.6f}" if d else "concat=n=2:v=0:a=1"
+        out = f"[c{i}]" if i < n - 1 else ""  # last link is the graph output
+        parts.append(f"[{prev}][b{i}]{join}{out}")
+        prev = f"c{i}"
+    return ";".join(parts)

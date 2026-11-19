@@ -57,7 +57,7 @@ def render_clip(video: Path, clip: Clip, segs: list[Segment], job_dir: Path) -> 
     if len(plan.keeps) > 1 or plan.removed > 0.05:
         # Same frame-grid intervals for both streams (see jumpcut.snap_to_frames) → no A/V drift
         vf += [f"select='{video_select_expr(plan.keeps, fps)}'", f"setpts=N/{fps}/TB"]
-        af = [audio_cut_graph(plan.keeps)]
+        af = [audio_cut_graph(plan.keeps, settings.jumpcut_crossfade_ms / 1000)]
     vf += ["scale=1080:1920:force_original_aspect_ratio=decrease",
            "pad=1080:1920:(ow-iw)/2:(oh-ih)/2", "setsar=1", subs]
 

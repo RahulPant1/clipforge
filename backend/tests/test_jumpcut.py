@@ -1,3 +1,9 @@
+import array
+import shutil
+import subprocess
+
+import pytest
+
 from app.config import settings
 from app.models import Segment, Word
 from app.pipeline.jumpcut import audio_cut_graph, is_filler, plan_cuts, snap_to_frames, video_select_expr
@@ -77,6 +83,48 @@ def test_audio_cut_graph_avoids_aselect():
     two = audio_cut_graph([(0.0, 1.5), (2.0, 3.0)])
     assert "aselect" not in two and two.startswith("asplit=2[a0][a1];")
     assert two.endswith("[b0][b1]concat=n=2:v=0:a=1") and "atrim=start=2.000000:end=3.000000" in two
+
+
+def test_crossfade_graph_borrows_from_the_removed_gap():
+    g = audio_cut_graph([(0.0, 1.5), (2.0, 3.0), (3.5, 4.0)], crossfade=0.01)
+    assert "aselect" not in g and "concat" not in g
+    # every segment but the last runs 10 ms into the gap after it; the overlap gives that time back
+    assert "atrim=start=0.000000:end=1.510000" in g and "atrim=start=2.000000:end=3.010000" in g
+    assert "atrim=start=3.500000:end=4.000000" in g
+    assert g.endswith("[b0][b1]acrossfade=d=0.010000[c1];[c1][b2]acrossfade=d=0.010000")
+
+
+def test_crossfade_clamps_to_gap_and_falls_back_to_concat():
+    g = audio_cut_graph([(0.0, 1.0), (1.004, 2.0), (2.0, 3.0)], crossfade=0.01)
+    assert "atrim=start=0.000000:end=1.004000" in g and "acrossfade=d=0.004000" in g
+    assert g.endswith("[c1][b2]concat=n=2:v=0:a=1")  # no gap at all -> plain join
+    assert audio_cut_graph([(1.0, 2.5)], crossfade=0.01) == "atrim=start=1.000000:end=2.500000,asetpts=PTS-STARTPTS"
+
+
+def _cut_sine(keeps, crossfade) -> array.array:
+    """Cut a 440 Hz sine with the real graph; return mono s16 samples at 48 kHz."""
+    src = "sine=frequency=440:sample_rate=48000:duration=4"
+    out = subprocess.run(["ffmpeg", "-v", "error", "-f", "lavfi", "-i", src,
+                          "-af", audio_cut_graph(keeps, crossfade), "-f", "s16le", "-ac", "1", "-"],
+                         capture_output=True, check=True).stdout
+    return array.array("h", out)
+
+
+@pytest.mark.skipif(not shutil.which("ffmpeg"), reason="ffmpeg not installed")
+def test_crossfade_removes_clicks_and_keeps_length():
+    # cut points at odd phases of the sine, so a hard cut jumps between unrelated sample values
+    keeps = [(0.0, 1.0013), (2.0071, 3.0), (3.4049, 4.0)]
+    expected = round(sum(e - s for s, e in keeps) * 48000)
+    hard, soft = _cut_sine(keeps, 0.0), _cut_sine(keeps, 0.01)
+    assert abs(len(hard) - expected) <= 3 and abs(len(soft) - expected) <= 3  # same length -> A/V sync kept
+
+    def max_step(x):
+        return max(abs(x[i + 1] - x[i]) for i in range(len(x) - 1))
+
+    # an uncut sine moves ~240 per sample at lavfi's level; a hard cut jumps ~18x that (a click)
+    smooth = max_step(_cut_sine([(0.0, 4.0)], 0.0))
+    assert max_step(hard) > 3 * smooth
+    assert max_step(soft) < 1.5 * smooth
 
 
 def test_settings_default_on():

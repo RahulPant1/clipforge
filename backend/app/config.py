@@ -59,6 +59,7 @@ class Settings(BaseSettings):
     jumpcut_enabled: bool = True
     max_pause: float = 0.4  # pauses longer than this get cut
     pause_padding: float = 0.08  # breathing room kept around each word
+    jumpcut_crossfade_ms: float = 10.0  # audio crossfade at each cut (avoids clicks); 0 = hard cuts
     filler_words: set[str] = {"um", "umm", "uh", "uhh", "uhm", "erm", "er", "ah", "hmm", "mm", "mhm"}
 
     # Render

@@ -1,6 +1,8 @@
 """Step 3 — Gemma reads the transcript and picks the most shareable moments."""
+import hashlib
 import logging
 import math
+import time
 from collections.abc import Callable, Iterator
 
 from ..config import settings
@@ -89,14 +91,28 @@ CHARS_PER_TOKEN = 2.5
 PROMPT_CTX_SHARE = 0.5
 
 
-def transcript_char_budget() -> int:
-    return int(settings.ollama_num_ctx * PROMPT_CTX_SHARE * CHARS_PER_TOKEN) - len(PROMPT)
+def transcript_char_budget(template: str = PROMPT) -> int:
+    return int(settings.ollama_num_ctx * PROMPT_CTX_SHARE * CHARS_PER_TOKEN) - len(template)
 
 
-def build_prompt(win: list[Segment], n: int) -> str:
+PROMPT_FIELDS = ("{n}", "{min_s", "{max_s", "{transcript}")
+
+
+def check_prompt(template: str) -> None:
+    """A custom selection prompt must use the same placeholders as PROMPT (eval script, see app/eval.py)."""
+    missing = [f for f in PROMPT_FIELDS if f not in template]
+    if missing:
+        raise ValueError(f"prompt is missing placeholders: {', '.join(missing)}")
+
+
+def prompt_id(template: str) -> str:
+    return hashlib.sha256(template.encode()).hexdigest()[:10]
+
+
+def build_prompt(win: list[Segment], n: int, template: str = PROMPT) -> str:
     lines = "\n".join(_line(s) for s in win)
-    return PROMPT.format(n=n, min_s=settings.min_clip_seconds,
-                         max_s=settings.max_clip_seconds, transcript=lines)
+    return template.format(n=n, min_s=settings.min_clip_seconds,
+                           max_s=settings.max_clip_seconds, transcript=lines)
 
 
 def snap(start: float, end: float, segs: list[Segment]) -> tuple[float, float]:
@@ -146,37 +162,65 @@ def clips_per_window(want: int, num_windows: int) -> int:
     return min(MAX_CLIPS_PER_WINDOW, max(settings.clips_per_window, need))
 
 
+_SETTING = object()  # "use settings.select_think" (None itself means "don't send think")
+
+
 def select_highlights(segs: list[Segment], n: int, llm: LLM,
-                      on_progress: ProgressFn | None = None, keep: int | None = None) -> list[Clip]:
-    """Returns up to `keep` (default n) non-overlapping candidates; the best `n` are pre-approved."""
-    wins = list(windows(segs, settings.window_seconds, transcript_char_budget()))
+                      on_progress: ProgressFn | None = None, keep: int | None = None, *,
+                      prompt: str = PROMPT, think=_SETTING, trace: dict | None = None) -> list[Clip]:
+    """Returns up to `keep` (default n) non-overlapping candidates; the best `n` are pre-approved.
+
+    `trace` (optional dict) is filled with everything the model returned and what happened to each pick —
+    saved as candidates.json per job and compared across models/prompts by `python -m app.eval`.
+    """
+    think = settings.select_think if think is _SETTING else think
+    wins = list(windows(segs, settings.window_seconds, transcript_char_budget(prompt)))
     want = max(keep or n, n)
     per_window = clips_per_window(want, len(wins))
     candidates: list[Clip] = []
     failures: list[str] = []
+    win_log: list[dict] = []
+    items: list[dict] = []  # every pick the model made, with its fate
     for i, win in enumerate(wins):
         if on_progress:
             on_progress(i / len(wins), f"Gemma reviewing part {i + 1}/{len(wins)}")
+        t0 = time.monotonic()
+        entry = {"window": i, "start": win[0].start, "end": win[-1].end, "asked": per_window}
+        win_log.append(entry)
         try:
-            raw = llm.chat_json(build_prompt(win, per_window), CLIP_SCHEMA, think=settings.select_think)
+            raw = llm.chat_json(build_prompt(win, per_window, prompt), CLIP_SCHEMA, think=think)
         except Exception as e:  # one bad window shouldn't kill the job
             log.warning("window %d skipped: %s", i, e)
             failures.append(str(e))
+            entry.update(seconds=round(time.monotonic() - t0, 1), error=str(e)[:300])
             continue
-        for item in raw.get("clips", []):
+        entry["seconds"] = round(time.monotonic() - t0, 1)
+        returned = raw.get("clips", []) if isinstance(raw, dict) else []
+        entry["returned"] = len(returned)
+        for item in returned:
+            rec = {"window": i, "raw": item}
+            items.append(rec)
             try:
                 start, end = snap(float(item["start"]), float(item["end"]), win)
                 fitted = fit_duration(start, end, win)
                 if not fitted:
+                    rec["outcome"] = "too_short"  # under min_clip_seconds even after snapping
                     continue
-                candidates.append(Clip(
+                clip = Clip(
                     start=fitted[0], end=fitted[1],
                     title=str(item["title"])[:80], hook=str(item["hook"])[:60],
                     score=max(1, min(10, int(item["score"]))),
                     keywords=clean_keywords(item.get("keywords")),
-                ))
+                )
+                candidates.append(clip)
+                rec["clip"] = clip
             except (KeyError, ValueError, TypeError) as e:
                 log.warning("bad clip from model: %s (%s)", item, e)
+                rec["outcome"] = "invalid"
+    if trace is not None:  # filled before a possible raise, so failed runs still show what went wrong
+        trace.update(model=getattr(llm, "model", None), think=think, prompt_id=prompt_id(prompt),
+                     num_ctx=settings.ollama_num_ctx, min_s=settings.min_clip_seconds,
+                     max_s=settings.max_clip_seconds, asked_total=want, windows=win_log, items=items, clips=[])
     if wins and len(failures) == len(wins):
         raise RuntimeError(f"Gemma failed on every transcript chunk — is Ollama running and the model "
                            f"pulled? Last error: {failures[-1][:200]}")
@@ -186,4 +230,13 @@ def select_highlights(segs: list[Segment], n: int, llm: LLM,
     best = {id(c) for c in sorted(clips, key=lambda c: -c.score)[:n]}
     for c in clips:
         c.approved = id(c) in best
+    if trace is not None:
+        kept = {id(c) for c in clips}
+        for rec in items:
+            clip = rec.pop("clip", None)
+            if clip is not None:
+                rec["outcome"] = "kept" if id(clip) in kept else "overlap"  # lost to a higher-scored overlap
+                rec.update(start=clip.start, end=clip.end, score=clip.score)
+        trace["clips"] = [c.model_dump(include={"start", "end", "title", "hook", "score", "keywords", "approved"})
+                          for c in clips]
     return clips

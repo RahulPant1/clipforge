@@ -60,11 +60,14 @@ def prepare(source: str, job_dir: Path, num_clips: int, report: Reporter,
         raise RuntimeError("Not enough speech found. No-speech highlight mode isn't built yet.")
 
     report(Stage.selecting, 0, "Asking Gemma for highlights")
+    trace: dict = {}
     try:
         clips = select_highlights(segs, num_clips, llm, lambda p, m: report(Stage.selecting, p, m),
-                                  keep=candidates or num_clips)
+                                  keep=candidates or num_clips, trace=trace)
     finally:
         llm.unload()
+    # every pick Gemma made and why it was kept/dropped — raw data for prompt eval (python -m app.eval)
+    (job_dir / "candidates.json").write_text(json.dumps(trace, indent=1, ensure_ascii=False, default=str))
     if not clips:
         raise RuntimeError("Gemma returned no usable clips. Try a bigger model or tweak the prompt.")
     report(Stage.selecting, 1.0, f"{len(clips)} candidates ready for review")

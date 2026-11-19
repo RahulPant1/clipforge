@@ -126,6 +126,22 @@ VS Code: open the folder via **Remote - WSL**; launch configs for API and CLI de
 works there too — the app loads cuBLAS from the pip wheel itself).
 See `CLAUDE.md` for architecture, conventions and the roadmap.
 
+### Tuning clip selection (prompt eval)
+Every job saves `candidates.json`: each pick Gemma made and what happened to it (kept, too short, invalid,
+lost to an overlapping better pick), plus per-chunk timings. To compare models, prompts or thinking on the
+**same transcript**:
+```bash
+cd backend
+python -m app.eval --print-prompt > my_prompt.txt          # edit it; keep {n} {min_s} {max_s} {transcript}
+python -m app.eval <job_id> --prompt default --prompt my_prompt.txt
+python -m app.eval <job_id> --model gemma4:e4b-it-q4_K_M --model qwen3.5:4b --think on --think off --repeat 2
+```
+Every combination runs and `data/evals/<timestamp>/report.md` gets a table: time, usable picks, too-short /
+invalid counts, median length, average score, how many of **your approved clips** each variant found, and
+agreement with the first (baseline) variant — then each variant's clips. Your picks came from the original
+run's candidates, so they favour that setup; use `--repeat` to see run-to-run noise. Needs Ollama; don't run
+it while a job is selecting clips.
+
 ### Continuous integration
 Every push and pull request runs [`.github/workflows/ci.yml`](.github/workflows/ci.yml) on GitHub's Ubuntu runner:
 `ruff` + `pytest` for the backend and `npm run build` for the frontend. It needs no GPU or Ollama — the LLM is

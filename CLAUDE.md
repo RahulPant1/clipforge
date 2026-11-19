@@ -19,6 +19,8 @@ backend/                FastAPI + pipeline (Python 3.11, conda env "clipforge")
                         + single Worker thread with task kinds: run | produce | render
   app/main.py           API routes under /api; create_app(pipeline=...) for tests
   app/cli.py            `python -m app.cli <url|file> --clips N`
+  app/eval.py           `python -m app.eval <job> --model A --model B --prompt f.txt --think on/off` → data/evals/
+                        (compares selection variants on one transcript; summarize() is pure + tested)
   app/pipeline/
     download.py         yt-dlp, cookies support, progress hook
     transcribe.py       faster-whisper, caches transcript.json, frees VRAM after; preloads cuBLAS from the pip wheel
@@ -82,7 +84,7 @@ done: PATCH clip options → stale → POST /clips/{i}/render ; PATCH/POST posts
 - Every pipeline step takes an `on_progress(p: float 0..1, msg: str)` callback.
 - LLM calls go through the `LLM` protocol so tests use `FakeLLM` — never call Ollama in tests.
 - One bad Gemma window must not fail the job (log + skip). Validate every model field.
-- Job artifacts live in `backend/data/jobs/<id>/` : source.mp4, transcript.json, short_N.{mp4,srt,jpg}, job.json.
+- Job artifacts live in `backend/data/jobs/<id>/` : source.mp4, transcript.json, candidates.json, short_N.{mp4,srt,jpg}, job.json.
 - File serving only allows names matching `^[\w.\-]+$` (path traversal guard) — keep it.
 - Add/adjust tests with every pipeline change; keep `pytest` and `ruff` green.
 - **Timelines:** clip.start/end are SOURCE seconds. After jump cuts, captions use OUTPUT time —
@@ -95,6 +97,8 @@ done: PATCH clip options → stale → POST /clips/{i}/render ; PATCH/POST posts
   test_jumpcut_shortens_output_and_keeps_av_in_sync — verified on FFmpeg 4.4, 8.0, 8.0.1, 8.1 and 9.0.
 - Anything burned into the mp4 (timing, options, hook, keywords) marks a rendered clip `stale` when edited
   (`burned_in()` in edit_clip); title doesn't.
+- Selection changes: run `python -m app.eval <job>` before/after and compare (select_highlights takes
+  `prompt=`, `think=` and fills `trace=`; prepare() writes the trace to candidates.json).
 - Punch-in zoom (`zoom_graph`) runs AFTER select+setpts and scale/pad (output time, enable bounds from each keep's
   frame count) and BEFORE captions, so text never zooms. Only applied when there are cuts.
 - **Reframe runs BEFORE jump-cut select** in the filter chain, so its keyframes are source-relative
@@ -165,7 +169,8 @@ done: PATCH clip options → stale → POST /clips/{i}/render ; PATCH/POST posts
 5. [x] **Re-render / edit** — UI to nudge start/end ±seconds and re-render a single clip (shipped in v0.5).
 6. [ ] **SSE progress** instead of polling (`/api/jobs/{id}/events`).
 6b.[ ] Pick step: drag handles on a waveform/timeline instead of nudge buttons; keyboard shortcuts (A=approve, J/K nudge).
-7. [ ] **Prompt eval** — save candidates + scores; small script to compare prompts/models on same transcript.
+7. [x] **Prompt eval** — every job saves `candidates.json` (each pick + outcome: kept/overlap/too_short/invalid);
+       `python -m app.eval` compares models × prompts × think on one transcript → report.md + results.json.
 8. [ ] Content: brand-voice profile (paste 5 of your best posts → few-shot examples in PROMPT).
 9. [ ] Content: weekly posting calendar view (spread shorts + posts across days/platforms, .ics export).
 10. [ ] Content: Hinglish mode tuned prompt + language detection from transcript.

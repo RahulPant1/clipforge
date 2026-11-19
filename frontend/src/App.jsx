@@ -11,6 +11,8 @@ export default function App() {
   const [selectedId, setSelectedId] = useState(null) // null = "new job" screen
   const [error, setError] = useState('')
 
+  const [live, setLive] = useState(false) // event stream connected: it keeps `jobs` current
+
   const refresh = useCallback(async () => {
     try {
       setJobs(await api.listJobs())
@@ -20,17 +22,42 @@ export default function App() {
     }
   }, [])
 
+  // Live updates over SSE: a snapshot, then every change (progress, edits, renders) as it happens.
+  // EventSource reconnects by itself after an API restart; the snapshot it gets then resyncs everything.
   useEffect(() => {
-    refresh()
-  }, [refresh])
+    const es = new EventSource(api.eventsUrl())
+    const upsert = (job) =>
+      setJobs((jobs) => {
+        const rest = jobs.filter((j) => j.id !== job.id)
+        return [job, ...rest].sort((a, b) => (a.created_at < b.created_at ? 1 : -1))
+      })
+    es.addEventListener('snapshot', (e) => {
+      setJobs(JSON.parse(e.data))
+      setLive(true)
+      setError('')
+    })
+    es.addEventListener('job', (e) => upsert(JSON.parse(e.data)))
+    es.addEventListener('deleted', (e) => {
+      const { id } = JSON.parse(e.data)
+      setJobs((jobs) => jobs.filter((j) => j.id !== id))
+    })
+    es.onerror = () => setLive(false)
+    return () => es.close()
+  }, [])
 
-  // Poll while anything is queued or running
+  // Without the stream: load once, and poll while anything is queued or running
+  useEffect(() => {
+    if (!live) refresh()
+  }, [live, refresh])
   const active = jobs.some(isBusy)
   useEffect(() => {
-    if (!active) return
+    if (live || !active) return
     const t = setInterval(refresh, 1500)
     return () => clearInterval(t)
-  }, [active, refresh])
+  }, [live, active, refresh])
+
+  // After an action: the stream already delivers the change (in order) — a fetch could only race it
+  const changed = useCallback(() => (live ? Promise.resolve() : refresh()), [live, refresh])
 
   const selected = jobs.find((j) => j.id === selectedId) || null
 
@@ -41,7 +68,7 @@ export default function App() {
     } catch (e) {
       alert(`Could not delete job: ${e.message}`)
     }
-    refresh()
+    changed()
   }
 
   return (
@@ -68,12 +95,12 @@ export default function App() {
         </aside>
         <section className="detail">
           {selected ? (
-            <Workspace key={selected.id} job={selected} onChanged={refresh} />
+            <Workspace key={selected.id} job={selected} onChanged={changed} />
           ) : (
             <NewJob
               onCreated={(job) => {
                 setSelectedId(job.id)
-                refresh()
+                changed()
               }}
             />
           )}

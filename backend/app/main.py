@@ -5,11 +5,12 @@ import re
 import shutil
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 
 from .config import settings
+from .events import job_events
 from .jobs import GPU_LOCK, JobStore, Worker
 from .models import (
     Clip,
@@ -109,6 +110,22 @@ def create_app(pipeline=None, start_worker: bool = True, llm_factory=OllamaClien
     @app.get("/api/jobs", response_model=list[Job])
     def list_jobs() -> list[Job]:
         return store.list()
+
+    def stream(request: Request, job_id: str | None = None) -> StreamingResponse:
+        return StreamingResponse(job_events(store, request.is_disconnected, job_id), media_type="text/event-stream",
+                                 headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+    @app.get("/api/events")
+    def all_events(request: Request) -> StreamingResponse:
+        """Live job updates (SSE): a snapshot of every job, then each change as it happens."""
+        return stream(request)
+
+    @app.get("/api/jobs/{job_id}/events")
+    def events(job_id: str, request: Request) -> StreamingResponse:
+        """Live updates for one job (SSE) — e.g. `curl -N localhost:8000/api/jobs/<id>/events`."""
+        if not store.get(job_id):
+            raise HTTPException(404, "job not found")
+        return stream(request, job_id)
 
     @app.get("/api/jobs/{job_id}", response_model=Job)
     def get_job(job_id: str) -> Job:

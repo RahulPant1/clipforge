@@ -29,6 +29,11 @@ class JobStore:
         self.root.mkdir(parents=True, exist_ok=True)
         self._jobs: dict[str, Job] = {}
         self._lock = threading.Lock()
+        # Change feed for SSE: every save/delete bumps `version`; listeners wait on the condition.
+        self._changed = threading.Condition(self._lock)
+        self.version = 0
+        self._seen: dict[str, int] = {}  # job id -> version of its last change
+        self._deleted: dict[str, int] = {}  # job id -> version it was deleted at
         self._load()
 
     def _load(self) -> None:
@@ -41,6 +46,23 @@ class JobStore:
                     job.status, job.error = JobStatus.failed, "Interrupted by server restart"
                 self._write(job)
             self._jobs[job.id] = job
+
+    def _bump(self, job_id: str, deleted: bool = False) -> None:
+        """Record a change (caller holds the lock) and wake the event streams."""
+        self.version += 1
+        (self._deleted if deleted else self._seen)[job_id] = self.version
+        if not deleted:
+            self._deleted.pop(job_id, None)
+        self._changed.notify_all()
+
+    def changes(self, since: int, timeout: float) -> tuple[int, list[Job], list[str]]:
+        """Block until something changed after version `since` (or timeout).
+        Returns (version, jobs changed since — latest state only, ids deleted since)."""
+        with self._changed:
+            self._changed.wait_for(lambda: self.version > since, timeout=timeout)
+            jobs = [self._jobs[i] for i, v in self._seen.items() if v > since and i in self._jobs]
+            gone = [i for i, v in self._deleted.items() if v > since]
+            return self.version, jobs, gone
 
     def dir(self, job_id: str) -> Path:
         return self.root / job_id
@@ -55,6 +77,7 @@ class JobStore:
         with self._lock:
             self._jobs[job.id] = job
             self._write(job)
+            self._bump(job.id)
         return job
 
     def update(self, job_id: str, **fields) -> Job:
@@ -62,6 +85,7 @@ class JobStore:
             job = self._jobs[job_id].model_copy(update={**fields, "updated_at": datetime.now(UTC)})
             self._jobs[job_id] = job
             self._write(job)
+            self._bump(job_id)
             return job
 
     def update_clip(self, job_id: str, index: int, fn: Callable[[Clip], None]) -> Job:
@@ -76,6 +100,7 @@ class JobStore:
             job = job.model_copy(update={"clips": clips, "updated_at": datetime.now(UTC)})
             self._jobs[job_id] = job
             self._write(job)
+            self._bump(job_id)
             return job
 
     def get(self, job_id: str) -> Job | None:
@@ -87,7 +112,9 @@ class JobStore:
     def delete(self, job_id: str) -> None:
         with self._lock:
             self._jobs.pop(job_id, None)
+            self._seen.pop(job_id, None)
             shutil.rmtree(self.dir(job_id), ignore_errors=True)
+            self._bump(job_id, deleted=True)
 
 
 class Worker:

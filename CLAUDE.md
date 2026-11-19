@@ -15,9 +15,13 @@ platform-native posts for YouTube / Instagram / X / LinkedIn) → **FFmpeg** (ju
 backend/                FastAPI + pipeline (Python 3.11, conda env "clipforge")
   app/config.py         All settings (pydantic-settings, overridable via backend/.env)
   app/models.py         Pydantic models: Segment, Word, Clip, Job, JobStatus, Stage
-  app/jobs.py           File-backed JobStore (data/jobs/<id>/job.json, update_clip for atomic edits)
+  app/jobs.py           File-backed JobStore (data/jobs/<id>/job.json, update_clip for atomic edits;
+                        every save/delete bumps `version` → changes(since, timeout) feeds SSE)
                         + single Worker thread with task kinds: run | produce | render
   app/main.py           API routes under /api; create_app(pipeline=...) for tests
+  app/events.py         SSE: job_events() → snapshot, then job/deleted events (coalesced, MIN_GAP), : ping
+                        (GET /api/events = all jobs, /api/jobs/{id}/events = one). App.jsx: EventSource;
+                        polls only while the stream is down
   app/cli.py            `python -m app.cli <url|file> --clips N`
   app/eval.py           `python -m app.eval <job> --model A --model B --prompt f.txt --think on/off` → data/evals/
                         (compares selection variants on one transcript; summarize() is pure + tested)
@@ -85,6 +89,9 @@ done: PATCH clip options → stale → POST /clips/{i}/render ; PATCH/POST posts
 - `failed` → POST /retry → queued: same folder, so a finished download/transcript is reused (uploads re-run
   from their saved source.mp4; 409 if it's gone).
 - UI cache-busting: rendered files are requested with `?v=<clip.version>`.
+- Live updates: always save through JobStore (update/update_clip/delete) — that's what wakes the SSE streams;
+  a job.json written any other way never reaches the UI. With the stream open, actions don't refetch the list
+  (an older fetch could overwrite a newer event).
 
 ## Rules / conventions
 - **One GPU job at a time.** Worker is single-threaded on purpose; don't add parallel workers.
@@ -200,7 +207,7 @@ done: PATCH clip options → stale → POST /clips/{i}/render ; PATCH/POST posts
    [ ] Emoji per line (needs colour-emoji capable renderer —
        libass draws monochrome; overlay PNG emoji via ffmpeg overlay instead).
 5. [x] **Re-render / edit** — UI to nudge start/end ±seconds and re-render a single clip (shipped in v0.5).
-6. [ ] **SSE progress** instead of polling (`/api/jobs/{id}/events`).
+6. [x] **SSE progress** instead of polling (`/api/events` for the UI, `/api/jobs/{id}/events` per job).
 6b.[ ] Pick step: drag handles on a waveform/timeline instead of nudge buttons; keyboard shortcuts (A=approve, J/K nudge).
 7. [x] **Prompt eval** — every job saves `candidates.json` (each pick + outcome: kept/overlap/too_short/invalid);
        `python -m app.eval` compares models × prompts × think on one transcript → report.md + results.json.

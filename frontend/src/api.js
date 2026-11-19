@@ -18,6 +18,7 @@ export const api = {
   health: () => req('/health'),
   captionPresets: () => req('/caption-presets'),
   listJobs: () => req('/jobs'),
+  eventsUrl: () => '/api/events',
   createJob: (url, num_clips, mode) => req('/jobs', json('POST', { url, num_clips, mode })),
   uploadJob: (file, num_clips, mode) => {
     const fd = new FormData()

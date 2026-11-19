@@ -50,7 +50,8 @@ YouTube URL / file
 - **Variety engine:** 5–6 creative angles per platform (hot take, thread, POV, myth vs fact, framework, …)
   rotated so consecutive posts never feel templated; recent openers are banned; **🎲 New angle** button
 - **Export pack:** one zip with shorts, captions, post copy, carousels and a `titles.csv`
-- Web UI with live progress, preview, download — plus a CLI
+- Web UI with live progress (pushed over Server-Sent Events — no polling), preview, download — plus a CLI.
+  Watch a job from a terminal: `curl -N localhost:8000/api/jobs/<id>/events`
 - One-GPU-friendly: models load sequentially and are freed between stages
 - **Retry failed jobs:** picks up where it stopped — a finished download or transcript is reused
 - Safe while you edit: busy jobs can't be deleted, and edits made while Gemma writes a new angle are kept

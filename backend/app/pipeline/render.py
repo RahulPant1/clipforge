@@ -50,7 +50,9 @@ def render_clip(video: Path, clip: Clip, segs: list[Segment], job_dir: Path) -> 
         (job_dir / cmd_file).write_text(rf.sendcmd(), encoding="utf-8")
 
     middle = rf.mode == "split"  # stacked speakers: captions on the seam, not over the bottom face
-    if caption_style == "karaoke":
+    if caption_style == "none":  # no-speech clips: nothing to caption (and Whisper invents words on music)
+        subs = ""
+    elif caption_style == "karaoke":
         (job_dir / f"{name}.ass").write_text(build_ass(plan.words, clip.keywords, middle=middle), encoding="utf-8")
         subs = f"ass={name}.ass{fontsdir_option(settings.caption_font)}"
     else:
@@ -67,7 +69,8 @@ def render_clip(video: Path, clip: Clip, segs: list[Segment], job_dir: Path) -> 
            "pad=1080:1920:(ow-iw)/2:(oh-ih)/2", "setsar=1"]
     if zoom and af:  # punch-in on alternate segments; output time, before captions so text never zooms
         vf.append(zoom_graph(plan.keeps, fps, settings.jumpcut_zoom_scale))
-    vf.append(subs)
+    if subs:
+        vf.append(subs)
     hook_ass = build_hook_ass(clip.hook, plan.duration, seam=middle) if hook else ""
     if hook_ass:  # last, so the title card sits above captions (and never zooms)
         (job_dir / f"{name}.hook.ass").write_text(hook_ass, encoding="utf-8")

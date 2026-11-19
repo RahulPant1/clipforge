@@ -52,7 +52,7 @@ function ShortCard({ job, clip, busy, act }) {
         <Seg label="Hook title" value={o.hook ?? true} disabled={busy || !clip.hook}
              options={[[true, 'On'], [false, 'Off']]} onChange={(v) => setOpt('hook', v)} />
         <Seg label="Captions" value={o.caption_style ?? 'karaoke'} disabled={busy}
-             options={[['karaoke', 'Animated'], ['simple', 'Simple']]} onChange={(v) => setOpt('caption_style', v)} />
+             options={[['karaoke', 'Animated'], ['simple', 'Simple'], ['none', 'Off']]} onChange={(v) => setOpt('caption_style', v)} />
 
         {clip.render_error && <p className="err">Render failed: {clip.render_error}</p>}
         <div className="actions">

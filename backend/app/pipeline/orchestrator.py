@@ -21,6 +21,7 @@ from .download import download
 from .highlights import select_highlights
 from .history import get_history
 from .llm import LLM, OllamaClient
+from .nospeech import select_no_speech
 from .render import render_clip
 from .transcribe import transcribe, words_per_minute
 
@@ -29,7 +30,7 @@ log = logging.getLogger(__name__)
 # (stage, progress 0..1, message)
 Reporter = Callable[[Stage, float, str], None]
 
-MIN_WPM = 30  # below this the video is mostly music/gameplay — see roadmap "no-speech mode"
+MIN_WPM = 30  # below this the video is mostly music/gameplay/sport → no-speech mode (nospeech.py)
 CANDIDATE_FACTOR = 2  # review mode shows 2x the requested clips so you have real choice
 
 
@@ -56,14 +57,21 @@ def prepare(source: str, job_dir: Path, num_clips: int, report: Reporter,
 
     report(Stage.transcribing, 0, "Loading Whisper")
     segs = transcribe(video, job_dir, lambda p, m: report(Stage.transcribing, p, m))
-    if not segs or words_per_minute(segs) < MIN_WPM:
-        raise RuntimeError("Not enough speech found. No-speech highlight mode isn't built yet.")
+    no_speech = not segs or words_per_minute(segs) < MIN_WPM
+    if no_speech and not settings.no_speech_mode:
+        raise RuntimeError("Not enough speech found (and NO_SPEECH_MODE is off).")
 
-    report(Stage.selecting, 0, "Asking Gemma for highlights")
     trace: dict = {}
+    on_select = lambda p, m: report(Stage.selecting, p, m)  # noqa: E731
     try:
-        clips = select_highlights(segs, num_clips, llm, lambda p, m: report(Stage.selecting, p, m),
-                                  keep=candidates or num_clips, trace=trace)
+        if no_speech:
+            report(Stage.selecting, 0, "Hardly any speech: finding highlights in the sound and picture")
+            clips = select_no_speech(video, num_clips, llm, on_select, keep=candidates or num_clips,
+                                     title=load_meta(job_dir).get("title", ""), cache=job_dir / "signals.json",
+                                     trace=trace)
+        else:
+            report(Stage.selecting, 0, "Asking Gemma for highlights")
+            clips = select_highlights(segs, num_clips, llm, on_select, keep=candidates or num_clips, trace=trace)
     finally:
         llm.unload()
     # every pick Gemma made and why it was kept/dropped — raw data for prompt eval (python -m app.eval)

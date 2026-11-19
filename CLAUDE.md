@@ -26,6 +26,9 @@ backend/                FastAPI + pipeline (Python 3.11, conda env "clipforge")
     transcribe.py       faster-whisper, caches transcript.json, frees VRAM after; preloads cuBLAS from the pip wheel
     llm.py              OllamaClient (chat_json with schema, unload, health) + LLM Protocol
     highlights.py       windows → prompt → snap → fit_duration → dedupe  (prompt + keywords live here)
+    nospeech.py         < 30 wpm: analyse() (one ffmpeg pass of 64x36 grey frames → motion + scene cuts, mono PCM →
+                        loudness; cached signals.json) → excitement() → peak_windows() (payoff 65% in, snap to
+                        cuts) → keyframes → vision Gemma (score/title/hook/description, mostly_text → capped)
     jumpcut.py          silence/filler removal: plan_cuts() → keep intervals + words remapped to output time
     captions.py         karaoke ASS (active word yellow, keywords green, pop-in) + SRT export
     fonts.py            makes CAPTION_FONT real for libass: system font, else copied once from Windows fonts
@@ -88,7 +91,8 @@ done: PATCH clip options → stale → POST /clips/{i}/render ; PATCH/POST posts
 - Every pipeline step takes an `on_progress(p: float 0..1, msg: str)` callback.
 - LLM calls go through the `LLM` protocol so tests use `FakeLLM` — never call Ollama in tests.
 - One bad Gemma window must not fail the job (log + skip). Validate every model field.
-- Job artifacts live in `backend/data/jobs/<id>/` : source.mp4, transcript.json, candidates.json, short_N.{mp4,srt,jpg}, job.json.
+- Job artifacts live in `backend/data/jobs/<id>/` : source.mp4, transcript.json, candidates.json,
+  signals.json (no-speech jobs only — also how main.py knows a job is no-speech), short_N.{mp4,srt,jpg}, job.json.
 - File serving only allows names matching `^[\w.\-]+$` (path traversal guard) — keep it.
 - Add/adjust tests with every pipeline change; keep `pytest` and `ruff` green.
 - **Timelines:** clip.start/end are SOURCE seconds. After jump cuts, captions use OUTPUT time —
@@ -122,6 +126,11 @@ done: PATCH clip options → stale → POST /clips/{i}/render ; PATCH/POST posts
   independent: one failing must not drop the others. Never let prompts invent facts — keep the guardrail line.
 - To add a creative angle: add one entry to `ANGLES[platform]` (label, instruction). To add a platform:
   ANGLES + RULES + SCHEMAS + an `assemble_<platform>` + NAMES + UI tab in PostsPanel.jsx.
+- No-speech clips get `options=RenderOptions(jumpcut=False, caption_style="none")` (Whisper hallucinates words on
+  music) and `clip.visual` (vision description), which `clip_text()` hands to Content Studio instead of speech.
+  Vision is per candidate and may fail (no vision model, bad JSON) → signal score + "Highlight at m:ss". Numbering
+  matches dedupe(): sorted by start, index 1..n. LLM.chat_json takes `images=` (bytes; base64 in OllamaClient);
+  `capabilities()` (Ollama /api/show) skips vision for text-only models.
 - Whisper drops "um/uh" unless prompted; `whisper_initial_prompt` contains fillers on purpose.
 - ASS colours are `&HAABBGGRR` (BGR order!). Canvas is PlayRes 1080x1920.
 
@@ -177,8 +186,9 @@ done: PATCH clip options → stale → POST /clips/{i}/render ; PATCH/POST posts
        or moves (track slope); held `LEAD_HOLD` s so glances don't pan. Also per speaker in split/speaker modes.
 2. [x] **Hook overlay** — `clip.hook` as a boxed title card for the first `HOOK_SECONDS` (own `short_N.hook.ass`,
        burned in after captions; per-clip `options.hook`).
-3. [ ] **No-speech mode** — when words_per_minute < 30: librosa RMS peaks + PySceneDetect cuts,
-       keyframes to a vision-capable Gemma for scoring. Orchestrator currently raises for this case.
+3. [x] **No-speech mode** — < 30 wpm → `nospeech.py`: ffmpeg + numpy signals (no librosa/PySceneDetect),
+       peak windows snapped to scene cuts, 4 keyframes per candidate to vision Gemma (`images=`).
+       [ ] still open: audio-event cues (cheering/laughter/explosions) and beat-synced cut points for music.
 4. [ ] Caption presets in UI (font/colours/position) + emoji per line (needs colour-emoji capable renderer —
        libass draws monochrome; overlay PNG emoji via ffmpeg overlay instead).
 5. [x] **Re-render / edit** — UI to nudge start/end ±seconds and re-render a single clip (shipped in v0.5).

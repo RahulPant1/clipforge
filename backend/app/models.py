@@ -60,7 +60,7 @@ class RenderOptions(BaseModel):
     """Per-clip overrides; None = use the global setting."""
     jumpcut: bool | None = None
     reframe: str | None = None  # auto | face | split | speaker | center
-    caption_style: str | None = None  # karaoke | simple
+    caption_style: str | None = None  # karaoke | simple | none
     zoom: bool | None = None  # punch-in on alternate jump-cut segments
     hook: bool | None = None  # show clip.hook as a title card for the first seconds
 
@@ -80,6 +80,7 @@ class Clip(BaseModel):
     content: dict[str, Post] = {}  # platform -> generated post
     approved: bool = True  # chosen for rendering (review step)
     custom: bool = False  # added by you from the transcript
+    visual: str = ""  # no-speech clips: what the vision model saw on screen (feeds the posts instead of speech)
     options: RenderOptions = RenderOptions()
     stale: bool = False  # edited after rendering -> needs re-render
     version: int = 0  # bumps on every render (cache-busting in the UI)

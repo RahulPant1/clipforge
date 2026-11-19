@@ -29,6 +29,9 @@ YouTube URL / file
 - Whisper transcription with word-level timing, cached per job
 - Gemma ranks moments by hook strength / self-containedness, writes title + hook + virality score
 - Cuts snapped to sentence boundaries, overlaps removed, clips capped at 59 s (Content ID safe zone)
+- **No-speech videos** (music, gameplay, sport, nature): when hardly anything is said, clips come from the
+  loudest, busiest moments (loudness, motion, scene cuts), and Gemma *looks* at keyframes to score and title
+  them; credits and title screens are marked down. Those shorts render without captions or jump cuts
 - **Face tracking:** crop follows the speaker like a camera operator — steady when they're still,
   smooth pans when they move, instant snap on camera cuts; centre crop fallback
 - **Two-speaker layouts:** podcast-style shots (two people side by side) become two stacked close-ups with
@@ -79,6 +82,10 @@ Copy `backend/.env.example` → `backend/.env`. Key options:
 | `OLLAMA_URL` | `http://localhost:11434` | See below if Ollama runs on Windows |
 | `CONTENT_THINK` | unset | `false` = posts skip reasoning on thinking models (gemma4, qwen3): ~2.5× faster. `true` fails on gemma3 |
 | `SELECT_THINK` | unset | Same for clip picking — leave unset: without reasoning gemma4 picks clips that are too short |
+| `NO_SPEECH_MODE` | `true` | Videos under 30 words/min get clips from sound + picture peaks instead of failing |
+| `NO_SPEECH_CLIP_SECONDS` | `30` | Length of no-speech clips (edges snap to nearby scene cuts) |
+| `NO_SPEECH_VISION` | `true` | Gemma scores/titles keyframes (needs a vision model: gemma3 4b+, gemma4); skipped automatically otherwise |
+| `VISION_THINK` | `false` | Reasoning while scoring keyframes (off ≈ 5 s per candidate on gemma4) |
 | `WHISPER_MODEL` | `small` | `medium` is better for Hindi/Hinglish |
 | `WHISPER_DEVICE` | `cuda` | `cpu` + `WHISPER_COMPUTE_TYPE=int8` without GPU |
 | `ENCODER` | `libx264` | `h264_nvenc` for fast GPU encoding |
@@ -101,7 +108,7 @@ Copy `backend/.env.example` → `backend/.env`. Key options:
 | `CONTENT_VOICE` | friendly creator | Describe your tone |
 | `BRAND_HANDLE` | – | e.g. `@rahul.builds` (CTAs + carousel footer) |
 | `CREDIT_SOURCE` | `false` | Add "Clip from …" line (needed for CC-BY videos) |
-| `CAPTION_STYLE` | `karaoke` | `karaoke` (animated) or `simple` |
+| `CAPTION_STYLE` | `karaoke` | `karaoke` (animated), `simple` or `none` |
 | `CAPTION_FONT` | `Arial` | Any installed font, e.g. `Montserrat ExtraBold`. On WSL, Windows fonts are picked up automatically (copied once into `data/fonts`) |
 | `YTDLP_COOKIES` | – | cookies.txt path if YouTube asks for bot check |
 
@@ -121,6 +128,8 @@ or run Ollama with `OLLAMA_HOST=0.0.0.0` and set `OLLAMA_URL=http://<windows-ip>
 - **"Gemma ran out of context"** → raise `OLLAMA_NUM_CTX` (needs more VRAM) or lower `WINDOW_SECONDS`.
 - **Log says "caption font … is not installed"** → install the font, drop its `.ttf` into `backend/data/fonts/`,
   or set `CAPTION_FONT` to one you have.
+- **No-speech clips all get "Highlight at m:ss" titles** → the model can't see images: use a vision model
+  (`gemma4`, `gemma3:4b` or bigger) — the clips themselves still come from the loudness/motion peaks.
 - **CUDA out of memory** → `WHISPER_MODEL=small`, smaller Gemma, close other GPU apps.
 
 ## Development

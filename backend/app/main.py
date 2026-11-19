@@ -21,6 +21,7 @@ from .models import (
     JobStatus,
     Post,
     PostEdit,
+    RenderOptions,
     Segment,
     Stage,
 )
@@ -166,6 +167,8 @@ def create_app(pipeline=None, start_worker: bool = True, llm_factory=OllamaClien
         idx = max((c.index for c in job.clips), default=0) + 1
         clip = Clip(index=idx, start=body.start, end=body.end, title=body.title, hook=body.hook, score=5,
                     custom=True, approved=True)
+        if (store.dir(job_id) / "signals.json").exists():  # no-speech job: same defaults as its picked clips
+            clip.options = RenderOptions(jumpcut=False, caption_style="none")
         clips = sorted([*job.clips, clip], key=lambda c: c.start)
         return store.update(job_id, clips=clips)
 

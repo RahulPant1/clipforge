@@ -37,6 +37,11 @@ class Settings(BaseSettings):
     window_seconds: int = 600  # transcript chunk size sent to Gemma
     clips_per_window: int = 2  # minimum asked per chunk; raised automatically so you get the clips you asked for
     min_clip_seconds: float = 20
+    # No-speech mode (transcript < 30 words/min: music, gameplay, sport): clips from loudness/motion/cut peaks
+    no_speech_mode: bool = True  # false = such videos fail with "not enough speech"
+    no_speech_clip_seconds: float = 30  # length of each no-speech clip (edges snap to scene cuts)
+    no_speech_vision: bool = True  # keyframes → Gemma scores/titles (vision model: gemma3:4b+, gemma4)
+    vision_think: bool | None = False  # reasoning while scoring keyframes (false = much faster)
     max_clip_seconds: float = 59  # keep < 60s: 1-3 min Shorts with any Content ID claim get blocked
 
     # Content Studio (per-platform posts)
@@ -87,7 +92,7 @@ class Settings(BaseSettings):
     scene_cut_threshold: float = 0.5  # histogram correlation below this = camera cut (snap, no pan)
 
     # Captions
-    caption_style: str = "karaoke"  # karaoke (animated ASS) | simple (plain SRT burn-in)
+    caption_style: str = "karaoke"  # karaoke (animated ASS) | simple (plain SRT burn-in) | none
     caption_words: int = 3
     caption_font: str = "Arial"
     caption_size: int = 78  # ASS units on a 1080x1920 canvas

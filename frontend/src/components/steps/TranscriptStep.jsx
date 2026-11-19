@@ -23,6 +23,9 @@ export default function TranscriptStep({ job, busy, act, go, transcript }) {
     v.play().catch(() => {})
   }
 
+  const playhead = () => Math.round((player.current?.currentTime ?? 0) * 100) / 100
+  const noSpeech = !(transcript || []).length || job.clips.some((c) => c.visual)
+
   const dur = sel.start !== null && sel.end !== null ? sel.end - sel.start : null
   const valid = dur !== null && dur >= 3 && dur <= 180
 
@@ -40,7 +43,15 @@ export default function TranscriptStep({ job, busy, act, go, transcript }) {
         <video ref={player} src={api.fileUrl(job.id, 'source.mp4')} controls preload="metadata" />
         <div className="card addclip">
           <h3>Make your own clip</h3>
-          <p className="muted">Click <b>⇤ start</b> and <b>end ⇥</b> on transcript lines.</p>
+          <p className="muted">
+            {noSpeech
+              ? 'Hardly any speech here: play the video and mark start and end at the playhead.'
+              : <>Click <b>⇤ start</b> and <b>end ⇥</b> on transcript lines, or mark them at the playhead.</>}
+          </p>
+          <div className="selrow">
+            <button className="btn" onClick={() => setSel((x) => ({ ...x, start: playhead() }))}>⇤ start at playhead</button>
+            <button className="btn" onClick={() => setSel((x) => ({ ...x, end: playhead() }))}>end ⇥ at playhead</button>
+          </div>
           <div className="selrow">
             <span>Start <b>{sel.start !== null ? fmtPrecise(sel.start) : '—'}</b></span>
             <span>End <b>{sel.end !== null ? fmtPrecise(sel.end) : '—'}</b></span>

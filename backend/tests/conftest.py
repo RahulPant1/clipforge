@@ -38,7 +38,7 @@ class FakeLLM:
         self.calls = 0
         self.unloaded = False
 
-    def chat_json(self, prompt, schema, temperature=None, think=None):
+    def chat_json(self, prompt, schema, temperature=None, think=None, images=None):
         self.calls += 1
         return {"clips": self.clips}
 

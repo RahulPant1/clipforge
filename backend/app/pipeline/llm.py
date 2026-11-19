@@ -1,4 +1,5 @@
 """Thin Ollama client for Gemma with schema-enforced JSON output."""
+import base64
 import json
 from typing import Any, Protocol
 
@@ -9,7 +10,7 @@ from ..config import settings
 
 class LLM(Protocol):
     def chat_json(self, prompt: str, schema: dict, temperature: float | None = None,
-                  think: bool | None = None) -> dict: ...
+                  think: bool | None = None, images: list[bytes] | None = None) -> dict: ...
     # think: None = model default (not sent); False/True = Ollama reasoning off/on (True fails on non-thinking models)
     def unload(self) -> None: ...
 
@@ -31,12 +32,15 @@ class OllamaClient:
         self.model = model or settings.gemma_model
 
     def chat_json(self, prompt: str, schema: dict, temperature: float | None = None,
-                  think: bool | None = None) -> dict:
+                  think: bool | None = None, images: list[bytes] | None = None) -> dict:
+        message: dict[str, Any] = {"role": "user", "content": prompt}
+        if images:  # vision models only (JPEG/PNG bytes)
+            message["images"] = [base64.b64encode(b).decode() for b in images]
         body: dict[str, Any] = {
             "model": self.model,
             "stream": False,
             "format": schema,  # Ollama structured outputs
-            "messages": [{"role": "user", "content": prompt}],
+            "messages": [message],
             "options": {
                 "num_ctx": settings.ollama_num_ctx,
                 "temperature": settings.ollama_temperature if temperature is None else temperature,
@@ -59,6 +63,12 @@ class OllamaClient:
                           json={"model": self.model, "keep_alive": 0}, timeout=30)
         except requests.RequestException:
             pass
+
+    def capabilities(self) -> list[str]:
+        """What the model can do per Ollama (e.g. completion, vision, thinking); [] if this Ollama doesn't say."""
+        r = requests.post(f"{self.url}/api/show", json={"model": self.model}, timeout=10)
+        _raise_for_ollama_error(r)
+        return list(r.json().get("capabilities") or [])
 
     def health(self) -> dict[str, Any]:
         r = requests.get(f"{self.url}/api/tags", timeout=5)

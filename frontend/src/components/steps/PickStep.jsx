@@ -71,7 +71,11 @@ function Candidate({ job, clip, transcript, busy, act }) {
           <Nudge label="End" value={clip.end} disabled={busy} onChange={(v) => save({ end: v })} />
           <span className={`dur ${dur > 59 ? 'warn' : ''}`}>{dur.toFixed(1)}s{dur > 59 && ' ⚠ over 59s'}</span>
         </div>
-        <p className="excerpt">“{clipText(transcript, clip) || '…'}”</p>
+        {clip.visual ? (
+          <p className="excerpt" title="No speech: what Gemma saw in the keyframes">🎞 {clip.visual}</p>
+        ) : (
+          <p className="excerpt">“{clipText(transcript, clip) || '…'}”</p>
+        )}
       </div>
     </div>
   )

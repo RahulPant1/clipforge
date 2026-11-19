@@ -133,6 +133,9 @@ class ContentContext:
 
 
 def clip_text(segs: list[Segment], clip: Clip, limit: int = 2500) -> str:
+    """What's said in the clip; for no-speech clips, what the vision model saw on screen instead."""
+    if clip.visual and clip.options.caption_style == "none":
+        return f"(No speech in this clip. What happens on screen: {clip.visual})"[:limit]
     return " ".join(s.text for s in segs if s.end > clip.start and s.start < clip.end)[:limit]
 
 

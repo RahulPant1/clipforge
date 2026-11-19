@@ -45,7 +45,7 @@ def render_clip(video: Path, clip: Clip, segs: list[Segment], job_dir: Path) -> 
     rf = plan_reframe(video, clip.start, clip.end, mode=reframe_mode)
     clip.reframe = rf.mode
     cmd_file = None
-    if rf.mode == "face":
+    if rf.mode in ("face", "speaker"):
         cmd_file = f"{name}.crop.cmd"
         (job_dir / cmd_file).write_text(rf.sendcmd(), encoding="utf-8")
 

@@ -4,11 +4,15 @@ import subprocess
 import pytest
 
 from app.pipeline.reframe import (
+    PATCH_MARGIN,
     ReframePlan,
     Sample,
+    active_speaker_path,
+    patch_change,
     pick_face,
     plan_reframe,
     smooth,
+    speaker_activity,
     split_panels,
     to_keyframes,
     two_speakers,
@@ -161,3 +165,118 @@ def test_plan_reframe_auto_split_and_face(tmp_path, monkeypatch):
     assert plan_reframe(land, 0, 3, detector=FixedFace()).mode == "face"  # one person: follow them
     assert plan_reframe(land, 0, 3, detector=TwoFaces(), mode="face").mode == "face"  # forced single
     assert plan_reframe(land, 0, 3, detector=TwoFaces(), mode="center").mode == "center"
+
+
+
+# ------------------------------------------------------------------ active speaker
+
+def _talk_samples(talker_by_time, n=40, fps=5):
+    """Two faces; the talker's mouth patch changes every sample, everyone else's stays put."""
+    import numpy as np
+
+    rng = np.random.default_rng(0)
+    shape = (12 + 2 * PATCH_MARGIN, 24 + 2 * PATCH_MARGIN)  # thumbnail + alignment margin
+    still = np.zeros(shape, np.float32)
+    out = []
+    for i in range(n):
+        t = i / fps
+        talker = talker_by_time(t)
+        patches = []
+        for side in (0, 1):
+            mouth = rng.normal(0, 40, shape).astype(np.float32) if side == talker else still
+            patches.append((mouth, still))
+        out.append(Sample(t=t, cx=0.25, faces=[(0.25, 0.03, 0.9, 0.4, 0.2), (0.75, 0.03, 0.9, 0.4, 0.2)],
+                          patches=patches))
+    return out
+
+
+def _speakers():
+    from app.pipeline.reframe import Speaker
+
+    return Speaker(0.25, 0.4, 0.2), Speaker(0.75, 0.4, 0.2)
+
+
+def test_speaker_activity_sees_the_moving_mouth():
+    import numpy as np
+
+    left, right = _speakers()
+    samples = _talk_samples(lambda t: 1)
+    acts = speaker_activity(samples, left, right)
+    assert acts[0] == (0.0, 0.0)  # nothing to compare with yet
+    assert all(r > 30 and lft == 0 for lft, r in acts[1:])
+    # head sway / face-box jitter shifts the whole patch: aligned away, not talking
+    rng = np.random.default_rng(1)
+    face = rng.normal(0, 40, (40, 60)).astype(np.float32)
+    for i, smp in enumerate(samples):
+        dx, dy = (i % 3) - 1, (i % 2)  # wobble by up to a pixel or two each sample
+        win = face[5 + dy:5 + dy + 18, 5 + dx:5 + dx + 30]
+        smp.patches[0] = (win, win)
+    assert all(lft == 0 for lft, _ in speaker_activity(samples, left, right))
+
+
+def test_patch_change_ignores_shifts_but_not_shape_changes():
+    import numpy as np
+
+    rng = np.random.default_rng(2)
+    big = rng.normal(0, 40, (30, 40)).astype(np.float32)
+    a, shifted = big[5:23, 5:35], big[7:25, 4:34]  # same content moved 2 px down, 1 px left
+    assert patch_change(shifted, a) < 1e-6
+    assert patch_change(rng.normal(0, 40, a.shape).astype(np.float32), a) > 20
+
+
+def test_active_speaker_path_cuts_to_the_talker_and_holds():
+    left, right = _speakers()
+    samples = _talk_samples(lambda t: 0 if t < 4 else 1)  # left talks 0-4 s, then right
+    path = active_speaker_path(samples, speaker_activity(samples, left, right), left, right)
+    assert path[0].cx == 0.25 and path[-1].cx == 0.75
+    cuts = [p.t for p in path if p.cut]
+    assert len(cuts) == 1 and 3.6 <= cuts[0] <= 4.8  # one hard cut, shortly after the turn change
+
+
+def test_active_speaker_ignores_quick_interjections_and_silence():
+    left, right = _speakers()
+    # right says "mm-hm" for 0.6 s in the middle of left's 8 s turn -> camera stays on left
+    samples = _talk_samples(lambda t: 1 if 3.0 <= t < 3.6 else 0)
+    path = active_speaker_path(samples, speaker_activity(samples, left, right), left, right)
+    assert {p.cx for p in path} == {0.25} and not any(p.cut for p in path)
+    # nobody talks: stay on the first (bigger/left) speaker, no cuts
+    quiet = _talk_samples(lambda t: None)
+    path = active_speaker_path(quiet, speaker_activity(quiet, left, right), left, right)
+    assert {p.cx for p in path} == {0.25} and not any(p.cut for p in path)
+
+
+def _talking_video(tmp_path):
+    """1280x720 grey; a noise "mouth" flickers under the left face for 0-3 s, then under the right one."""
+    v = tmp_path / "talk.mp4"
+    subprocess.run(["ffmpeg", "-y", "-loglevel", "error",
+                    "-f", "lavfi", "-i", "color=gray:s=1280x720:r=25:d=6",
+                    "-f", "lavfi", "-i", "color=gray:s=200x100:r=25:d=6",
+                    "-filter_complex", "[1:v]noise=alls=100:allf=t+u,split[n1][n2];"
+                    "[0:v][n1]overlay=220:300:enable='lt(t,3)'[a];[a][n2]overlay=860:300:enable='gte(t,3)'",
+                    "-c:v", "libx264", "-qp", "0", str(v)], check=True)
+    return v
+
+
+class TwoTalkers:
+    def detect(self, img):
+        # area 0.05 with face height 0.3 -> mouth box ~x 0.21-0.29, y 0.445-0.535 (on the noise patch)
+        return [(0.25, 0.05, 0.95, 0.4, 0.3), (0.75, 0.05, 0.95, 0.4, 0.3)]
+
+
+@pytest.mark.skipif(not shutil.which("ffmpeg"), reason="ffmpeg not installed")
+def test_plan_reframe_speaker_mode_follows_the_talker(tmp_path, monkeypatch):
+    from app.config import settings
+
+    video = _talking_video(tmp_path)
+    plan = plan_reframe(video, 0, 6, detector=TwoTalkers(), mode="speaker")
+    assert plan.mode == "speaker" and plan.crop_w == 404
+    xs = dict(plan.keyframes)
+    assert plan.keyframes[0][1] == 118  # 0.25*1280 - 404/2: on the left speaker
+    switch = [t for t, x in plan.keyframes if x == 758]  # 0.75*1280 - 404/2
+    assert switch and 2.8 <= switch[0] <= 4.2, xs
+    assert plan.filters("c.cmd")[1].startswith("crop@track=404:720:118:0")
+    # auto keeps stacking unless TWO_SPEAKER_LAYOUT=speaker
+    monkeypatch.setattr(settings, "reframe_mode", "auto")
+    assert plan_reframe(video, 0, 6, detector=TwoTalkers()).mode == "split"
+    monkeypatch.setattr(settings, "two_speaker_layout", "speaker")
+    assert plan_reframe(video, 0, 6, detector=TwoTalkers()).mode == "speaker"

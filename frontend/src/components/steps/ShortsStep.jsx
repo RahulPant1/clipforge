@@ -39,6 +39,7 @@ function ShortCard({ job, clip, busy, act }) {
           {clip.cut_seconds > 0.5 && <span className="cut"> · ✂ {clip.cut_seconds.toFixed(1)}s</span>}
           {clip.reframe === 'face' && <span className="cut"> · 🎯 face</span>}
           {clip.reframe === 'split' && <span className="cut"> · 👥 2 speakers</span>}
+          {clip.reframe === 'speaker' && <span className="cut"> · 🎙 follows talker</span>}
         </p>
 
         <Seg label="Jump cuts" value={o.jumpcut ?? true} disabled={busy}
@@ -46,7 +47,7 @@ function ShortCard({ job, clip, busy, act }) {
         <Seg label="Zoom" value={o.zoom ?? false} disabled={busy || o.jumpcut === false}
              options={[[false, 'Off'], [true, 'Punch-in']]} onChange={(v) => setOpt('zoom', v)} />
         <Seg label="Framing" value={o.reframe ?? 'auto'} disabled={busy}
-             options={[['auto', 'Auto'], ['face', 'Face'], ['split', '2-up'], ['center', 'Centre']]}
+             options={[['auto', 'Auto'], ['face', 'Face'], ['split', '2-up'], ['speaker', 'Talker'], ['center', 'Centre']]}
              onChange={(v) => setOpt('reframe', v)} />
         <Seg label="Hook title" value={o.hook ?? true} disabled={busy || !clip.hook}
              options={[[true, 'On'], [false, 'Off']]} onChange={(v) => setOpt('hook', v)} />

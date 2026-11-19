@@ -62,6 +62,7 @@ class RenderOptions(BaseModel):
     reframe: str | None = None  # face | center
     caption_style: str | None = None  # karaoke | simple
     zoom: bool | None = None  # punch-in on alternate jump-cut segments
+    hook: bool | None = None  # show clip.hook as a title card for the first seconds
 
 
 class Clip(BaseModel):

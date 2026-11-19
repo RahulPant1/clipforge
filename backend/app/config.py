@@ -83,6 +83,13 @@ class Settings(BaseSettings):
     caption_size: int = 78  # ASS units on a 1080x1920 canvas
     highlight_scale: int = 110  # active word size in %
     caption_margin_v: int = 420  # px from bottom; keeps text clear of the Shorts UI
+    # Hook title card: clip.hook as big text for the first seconds (top of frame; captions are at the bottom)
+    hook_overlay: bool = True  # per-clip override in the Shorts step
+    hook_seconds: float = 3.0
+    hook_size: int = 84  # ASS units on a 1080x1920 canvas
+    hook_margin_v: int = 260  # px from the top; clears the Shorts top bar
+    hook_color: str = "&H00000000"  # ASS &HAABBGGRR — black text…
+    hook_box_color: str = "&H0000FFFF"  # …on a yellow box
     caption_color: str = "&H00FFFFFF"  # ASS &HAABBGGRR — white
     highlight_color: str = "&H0000FFFF"  # active word — yellow
     keyword_color: str = "&H0055FF55"  # Gemma keywords — green

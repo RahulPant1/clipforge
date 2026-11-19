@@ -93,6 +93,8 @@ done: PATCH clip options → stale → POST /clips/{i}/render ; PATCH/POST posts
   `d` from the removed gap after each keep, so output length and A/V sync are unchanged. **Never use `aselect`**: it is a
   silent no-op in FFmpeg 8.0/8.0.1 (Ubuntu 26.04), leaving audio uncut and out of sync. Guarded by
   test_jumpcut_shortens_output_and_keeps_av_in_sync — verified on FFmpeg 4.4, 8.0, 8.0.1, 8.1 and 9.0.
+- Anything burned into the mp4 (timing, options, hook, keywords) marks a rendered clip `stale` when edited
+  (`burned_in()` in edit_clip); title doesn't.
 - Punch-in zoom (`zoom_graph`) runs AFTER select+setpts and scale/pad (output time, enable bounds from each keep's
   frame count) and BEFORE captions, so text never zooms. Only applied when there are cuts.
 - **Reframe runs BEFORE jump-cut select** in the filter chain, so its keyframes are source-relative
@@ -154,7 +156,8 @@ done: PATCH clip options → stale → POST /clips/{i}/render ; PATCH/POST posts
 1. [ ] **Two-speaker layouts** — when 2 faces persist (podcast), stack them top/bottom (two crops + vstack),
        or follow the ACTIVE speaker (mouth movement / audio energy per face side).
 1b.[ ] Reframe "lead room": offset crop slightly in the direction the speaker faces / moves.
-2. [ ] **Hook overlay** — show `clip.hook` as big title text for first 3 s (ASS subtitle with own style).
+2. [x] **Hook overlay** — `clip.hook` as a boxed title card for the first `HOOK_SECONDS` (own `short_N.hook.ass`,
+       burned in after captions; per-clip `options.hook`).
 3. [ ] **No-speech mode** — when words_per_minute < 30: librosa RMS peaks + PySceneDetect cuts,
        keyframes to a vision-capable Gemma for scoring. Orchestrator currently raises for this case.
 4. [ ] Caption presets in UI (font/colours/position) + emoji per line (needs colour-emoji capable renderer —

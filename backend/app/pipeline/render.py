@@ -4,7 +4,7 @@ from pathlib import Path
 
 from ..config import settings
 from ..models import Clip, Segment
-from .captions import build_ass, build_srt
+from .captions import build_ass, build_hook_ass, build_srt
 from .fonts import fontsdir_option
 from .jumpcut import audio_cut_graph, plan_cuts, video_select_expr, zoom_graph
 from .reframe import plan_reframe
@@ -32,6 +32,7 @@ def render_clip(video: Path, clip: Clip, segs: list[Segment], job_dir: Path) -> 
     reframe_mode = o.reframe or settings.reframe_mode
     caption_style = o.caption_style or settings.caption_style
     zoom = settings.jumpcut_zoom if o.zoom is None else o.zoom
+    hook = settings.hook_overlay if o.hook is None else o.hook
 
     plan = plan_cuts(segs, clip.start, clip.end, enabled=jumpcut)
     clip.cut_seconds = round(plan.removed, 2)
@@ -64,6 +65,10 @@ def render_clip(video: Path, clip: Clip, segs: list[Segment], job_dir: Path) -> 
     if zoom and af:  # punch-in on alternate segments; output time, before captions so text never zooms
         vf.append(zoom_graph(plan.keeps, fps, settings.jumpcut_zoom_scale))
     vf.append(subs)
+    hook_ass = build_hook_ass(clip.hook, plan.duration) if hook else ""
+    if hook_ass:  # last, so the title card sits above captions (and never zooms)
+        (job_dir / f"{name}.hook.ass").write_text(hook_ass, encoding="utf-8")
+        vf.append(f"ass={name}.hook.ass{fontsdir_option(settings.caption_font)}")
 
     cmd = ["ffmpeg", "-y", "-loglevel", "error",
            "-ss", f"{clip.start:.3f}", "-t", f"{clip.duration:.3f}", "-i", str(video.resolve()),

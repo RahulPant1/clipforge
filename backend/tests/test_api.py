@@ -163,6 +163,10 @@ def test_review_flow_end_to_end(tmp_path, monkeypatch):
         job = _wait_status(c, jid, "done", lambda j: not j["clips"][0]["stale"])
         assert calls["render"] == [1] and job["clips"][0]["version"] == 2
 
+        # title isn't burned in -> still fresh; the hook title card is -> stale
+        assert c.patch(f"/api/jobs/{jid}/clips/1", json={"title": "New"}).json()["clips"][0]["stale"] is False
+        assert c.patch(f"/api/jobs/{jid}/clips/1", json={"hook": "Wait for it"}).json()["clips"][0]["stale"] is True
+
         # edit post text + status
         body = {"parts": ["first", " ", "second"], "status": "approved"}
         r = c.patch(f"/api/jobs/{jid}/clips/1/content/x", json=body)

@@ -120,3 +120,41 @@ def build_ass(words: list[Word], keywords: list[str], n: int | None = None) -> s
             cur[1] = nxt[0]
     body = "\n".join(f"Dialogue: 0,{ts_ass(s)},{ts_ass(e)},Default,,0,0,0,,{t}" for s, e, t in events)
     return _ass_header() + body + "\n"
+
+
+# ---------------------------------------------------------------- hook title (first seconds)
+
+def hook_text(hook: str) -> str:
+    """ASS-safe one-liner: no override braces/backslashes, collapsed whitespace."""
+    return re.sub(r"\s+", " ", re.sub(r"[{}\\]", "", hook)).strip()
+
+
+def build_hook_ass(hook: str, duration: float) -> str:
+    """Big title card for the first `hook_seconds` of the short (own file, so it works with either caption style).
+
+    Top of the frame (captions live at the bottom), boxed text that pops in and fades out. Empty hook -> "".
+    """
+    s = settings
+    text = hook_text(hook)
+    end = min(s.hook_seconds, duration)
+    if not text or end <= 0.3:
+        return ""
+    # BorderStyle 3 = opaque box per line; its colour is OutlineColour, Outline is the padding
+    return f"""[Script Info]
+ScriptType: v4.00+
+PlayResX: 1080
+PlayResY: 1920
+WrapStyle: 0
+ScaledBorderAndShadow: yes
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, \
+Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, \
+Alignment, MarginL, MarginR, MarginV, Encoding
+Style: Hook,{s.caption_font},{s.hook_size},{s.hook_color},{s.hook_color},{s.hook_box_color},&H00000000,\
+-1,0,0,0,100,100,0,0,3,18,0,8,110,110,{s.hook_margin_v},1
+
+[Events]
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+Dialogue: 1,{ts_ass(0)},{ts_ass(end)},Hook,,0,0,0,,{{\\fad(0,250)\\fscx70\\fscy70\\t(0,150,\\fscx100\\fscy100)}}{text}
+"""

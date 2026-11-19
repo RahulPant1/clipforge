@@ -105,6 +105,25 @@ def test_zoom_punches_in_on_alternate_segments_only(tmp_path, monkeypatch):
     assert abs(float(_probe(outs[True], "format=duration")) - float(_probe(outs[False], "format=duration"))) < 0.05
 
 
+@needs_ffmpeg
+def test_hook_title_card_shows_for_the_first_seconds_only(tmp_path, segs, monkeypatch):
+    from app.models import RenderOptions
+
+    monkeypatch.setattr(settings, "reframe_mode", "center")
+    monkeypatch.setattr(settings, "hook_seconds", 2.0)
+    video = _video(tmp_path, 30)
+    outs = {}
+    for hook in (False, True):
+        d = tmp_path / str(hook)
+        d.mkdir()
+        clip = Clip(index=1, start=8.0, end=16.0, title="t", hook="You won't believe this", score=7,
+                    options=RenderOptions(hook=hook, jumpcut=False))
+        outs[hook] = d / render_clip(video, clip, segs, d)
+    assert (tmp_path / "True" / "short_1.hook.ass").exists() and not (tmp_path / "False" / "short_1.hook.ass").exists()
+    assert _diff(_frame(outs[False], 1.0), _frame(outs[True], 1.0)) > 3  # title card on screen
+    assert _diff(_frame(outs[False], 3.0), _frame(outs[True], 3.0)) < 1  # gone after hook_seconds
+
+
 class _FaceRight:
     def detect(self, img):
         return [(0.85, 0.03, 0.99)]

@@ -142,12 +142,15 @@ def create_app(pipeline=None, start_worker: bool = True, llm_factory=OllamaClien
         changes = body.model_dump(exclude_none=True)
 
         def apply(c: Clip) -> None:
-            timing_before = (c.start, c.end, c.options.model_dump())
+            def burned_in(c: Clip) -> tuple:  # everything the rendered mp4 depends on
+                return c.start, c.end, c.options.model_dump(), c.hook, c.keywords
+
+            before = burned_in(c)
             for k, v in changes.items():
                 setattr(c, k, type(c.options)(**v) if k == "options" else v)
             if c.end - c.start < 3 or c.end - c.start > 180:
                 raise HTTPException(400, "clip must be between 3 and 180 seconds")
-            if c.file and (c.start, c.end, c.options.model_dump()) != timing_before:
+            if c.file and burned_in(c) != before:
                 c.stale = True
 
         try:

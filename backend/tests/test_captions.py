@@ -1,6 +1,6 @@
 from app.config import settings
 from app.models import Word
-from app.pipeline.captions import build_ass, build_srt, keyword_set, ts_ass, ts_srt
+from app.pipeline.captions import build_ass, build_hook_ass, build_srt, keyword_set, ts_ass, ts_srt
 from app.pipeline.highlights import clean_keywords
 
 WORDS = [Word(start=i * 0.5, end=i * 0.5 + 0.4, word=f" {w}") for i, w in
@@ -55,3 +55,19 @@ def test_clean_keywords():
 def test_braces_are_stripped_from_text():
     ass = build_ass([Word(start=0, end=1, word=" {evil}\\N")], [])
     assert "{evil}" not in ass and "EVIL" in ass
+
+
+def test_hook_title_card(monkeypatch):
+    monkeypatch.setattr(settings, "hook_seconds", 3.0)
+    ass = build_hook_ass("Stop {\\b1}writing\n resumes  like this", duration=30)
+    assert "PlayResY: 1920" in ass and "\nStyle: Hook," in ass
+    style = next(line for line in ass.splitlines() if line.startswith("Style: Hook,"))
+    assert style.split(",")[15:19] == ["3", "18", "0", "8"]  # boxed, padding, no shadow, top-centre
+    events = [line for line in ass.splitlines() if line.startswith("Dialogue:")]
+    assert len(events) == 1 and events[0].startswith("Dialogue: 1,0:00:00.00,0:00:03.00,Hook,")
+    assert events[0].endswith("}Stop b1writing resumes like this")  # override tags can't be injected
+
+
+def test_hook_title_card_fits_short_clips_and_skips_empty():
+    assert ",0:00:02.00,Hook," in build_hook_ass("Big claim", duration=2.0)
+    assert build_hook_ass("   ", duration=30) == "" and build_hook_ass("Hi", duration=0.2) == ""

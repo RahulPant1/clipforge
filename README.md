@@ -118,7 +118,7 @@ works there too — the app loads cuBLAS from the pip wheel itself).
 See `CLAUDE.md` for architecture, conventions and the roadmap.
 
 ## License
-[MIT](LICENSE) for ClipForge's own code. Models and tools it runs keep their own terms — notably Gemma
+[Apache License 2.0](LICENSE) for ClipForge's own code (copyright notice in [NOTICE](NOTICE)). Models and tools it runs keep their own terms — notably Gemma
 (Gemma Terms of Use), Whisper/faster-whisper (MIT), yt-dlp (Unlicense) and FFmpeg (LGPL/GPL, used as a separate program).
 
 ## Responsible use

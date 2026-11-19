@@ -136,3 +136,10 @@ class Job(BaseModel):
     clips: list[Clip] = []
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+
+class BrandVoice(BaseModel):
+    """Your own writing, used as few-shot examples so posts sound like you (data/brand_voice.json, all jobs)."""
+    enabled: bool = True
+    notes: str = ""  # free-form voice notes ("lowercase, no emojis, Hinglish ok"); replaces CONTENT_VOICE
+    examples: dict[str, list[str]] = {}  # platform -> your best posts on that platform

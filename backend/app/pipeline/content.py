@@ -12,9 +12,11 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from ..config import settings
-from ..models import Clip, Post, Segment
+from ..models import BrandVoice, Clip, Post, Segment
 from .history import ContentHistory
 from .llm import LLM
+from .voice import load as load_voice
+from .voice import voice_block
 
 log = logging.getLogger(__name__)
 ProgressFn = Callable[[float, str], None]
@@ -115,7 +117,7 @@ What is said in the clip:
 \"\"\"{text}\"\"\"
 
 Creative angle for THIS post: {angle_label} — {angle_desc}
-{avoid_block}
+{voice_block}{avoid_block}
 Hard rules:
 - Never invent facts, numbers, names or quotes that are not in the transcript.
 - Write natively for {platform_name}; it must not read like a generic caption.
@@ -147,7 +149,8 @@ def load_meta(job_dir: Path) -> dict:
         return {}
 
 
-def build_prompt(platform: str, angle: str, ctx: ContentContext, avoid: list[str]) -> str:
+def build_prompt(platform: str, angle: str, ctx: ContentContext, avoid: list[str],
+                 brand: BrandVoice | None = None) -> str:
     label, desc = ANGLES[platform][angle]
     fmt = "thread" if angle == "thread" else "single"
     avoid_block = ("Do NOT start the post like any of these recent posts (be fresh):\n"
@@ -155,7 +158,9 @@ def build_prompt(platform: str, angle: str, ctx: ContentContext, avoid: list[str
     cta = f"If there is a call to action, you may mention {settings.brand_handle}." if settings.brand_handle else ""
     c = ctx.clip
     return PROMPT.format(
-        platform_name=NAMES[platform], language=settings.content_language, voice=settings.content_voice,
+        platform_name=NAMES[platform], language=settings.content_language,
+        voice=(brand.notes if brand and brand.enabled and brand.notes else settings.content_voice),
+        voice_block=voice_block(platform, brand, NAMES),
         video_title=ctx.video_title or c.title, by_channel=f" by {ctx.channel}" if ctx.channel else "",
         title=c.title, hook=c.hook, keywords=", ".join(c.keywords) or "-", text=ctx.text,
         angle_label=label, angle_desc=desc, avoid_block=avoid_block,
@@ -274,7 +279,7 @@ def opener(post: Post) -> str:
 def generate_post(platform: str, ctx: ContentContext, llm: LLM, history: ContentHistory,
                   job_dir: Path, exclude_angle: str | None = None) -> Post:
     angle = history.pick_angle(platform, list(ANGLES[platform]), {exclude_angle} if exclude_angle else None)
-    prompt = build_prompt(platform, angle, ctx, history.recent_openers(platform))
+    prompt = build_prompt(platform, angle, ctx, history.recent_openers(platform), load_voice())
     raw = llm.chat_json(prompt, SCHEMAS[platform], temperature=settings.content_temperature,
                         think=settings.content_think)
     post = ASSEMBLERS[platform](raw, angle, ctx)

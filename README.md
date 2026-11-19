@@ -49,6 +49,9 @@ YouTube URL / file
   X (single post or thread, 280-char safe), LinkedIn (hook-driven post)
 - **Variety engine:** 5–6 creative angles per platform (hot take, thread, POV, myth vs fact, framework, …)
   rotated so consecutive posts never feel templated; recent openers are banned; **🎲 New angle** button
+- **Brand voice:** paste a few of your own best posts per platform (or pick from posts you edited or
+  published) and Gemma writes in *your* voice — tone, casing, emoji and hashtag habits — while the facts still
+  come only from the clip
 - **Export pack:** one zip with shorts, captions, post copy, carousels and a `titles.csv`
 - **Pick step timeline:** trim each clip on its audio waveform — drag the edges (they snap to sentence
   boundaries), drag the whole clip, click to seek; keyboard: `A` approve, `[`/`]` pick edge, `J`/`K` nudge

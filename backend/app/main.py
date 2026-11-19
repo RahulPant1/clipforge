@@ -13,6 +13,7 @@ from .config import settings
 from .events import job_events
 from .jobs import GPU_LOCK, JobStore, Worker
 from .models import (
+    BrandVoice,
     Clip,
     ClipAdd,
     ClipEdit,
@@ -26,8 +27,8 @@ from .models import (
     Segment,
     Stage,
 )
-from .pipeline import waveform
-from .pipeline.content import ANGLES, ContentContext, clip_text, generate_post, load_meta, write_posts_md
+from .pipeline import voice, waveform
+from .pipeline.content import ANGLES, NAMES, ContentContext, clip_text, generate_post, load_meta, write_posts_md
 from .pipeline.export import build_pack
 from .pipeline.history import get_history
 from .pipeline.llm import OllamaClient
@@ -68,6 +69,38 @@ def create_app(pipeline=None, start_worker: bool = True, llm_factory=OllamaClien
         return {"default": settings.caption_preset, "position": settings.caption_position,
                 "style": settings.caption_style, "positions": list(POSITIONS),
                 "presets": [p.public() for p in all_presets().values()]}
+
+    # ---------------------------------------------------------------- brand voice (all jobs)
+
+    def voice_info(v: BrandVoice) -> dict:
+        return {"voice": v.model_dump(), "platforms": [{"key": k, "name": NAMES[k]} for k in ANGLES],
+                "max_examples": voice.MAX_EXAMPLES, "max_chars": voice.MAX_CHARS,
+                "default_notes": settings.content_voice}
+
+    @app.get("/api/brand-voice")
+    def get_brand_voice() -> dict:
+        """Your posts used as few-shot examples so Content Studio writes in your voice."""
+        return voice_info(voice.load())
+
+    @app.put("/api/brand-voice")
+    def put_brand_voice(body: BrandVoice) -> dict:
+        return voice_info(voice.save(voice.clean(body, list(ANGLES))))
+
+    @app.get("/api/brand-voice/suggestions")
+    def brand_voice_suggestions() -> dict[str, list[str]]:
+        """Posts you edited by hand or marked posted (newest job first) — good voice examples, not yet added."""
+        have = voice.load().examples
+        out: dict[str, list[str]] = {k: [] for k in ANGLES}
+        for job in store.list():
+            for c in job.clips:
+                for k, post in c.content.items():
+                    if k not in out or not (post.edited or post.status == "posted"):
+                        continue
+                    text = f"{post.title}\n\n{post.text}" if post.title else post.text
+                    text = text.strip()[:voice.MAX_CHARS].strip()
+                    if text and text not in out[k] and text not in have.get(k, []) and len(out[k]) < 8:
+                        out[k].append(text)
+        return out
 
     @app.post("/api/jobs", response_model=Job, status_code=201)
     def create_job(body: JobCreate) -> Job:

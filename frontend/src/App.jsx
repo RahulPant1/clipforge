@@ -1,14 +1,17 @@
 import { useCallback, useEffect, useState } from 'react'
 import { api } from './api.js'
+import BrandVoice from './components/BrandVoice.jsx'
 import HealthBadge from './components/HealthBadge.jsx'
 import JobList from './components/JobList.jsx'
 import NewJob from './components/NewJob.jsx'
 import Workspace from './components/Workspace.jsx'
 import { isBusy } from './util.js'
 
+const VOICE = 'brand-voice'
+
 export default function App() {
   const [jobs, setJobs] = useState([])
-  const [selectedId, setSelectedId] = useState(null) // null = "new job" screen
+  const [selectedId, setSelectedId] = useState(null) // null = "new job" screen, VOICE = brand voice
   const [error, setError] = useState('')
 
   const [live, setLive] = useState(false) // event stream connected: it keeps `jobs` current
@@ -91,10 +94,15 @@ export default function App() {
           <button className={`newjob ${selectedId === null ? 'on' : ''}`} onClick={() => setSelectedId(null)}>
             + New job
           </button>
+          <button className={`voicebtn ${selectedId === VOICE ? 'on' : ''}`} onClick={() => setSelectedId(VOICE)}>
+            🎙 Brand voice
+          </button>
           <JobList jobs={jobs} selectedId={selectedId} onSelect={setSelectedId} onDelete={onDelete} />
         </aside>
         <section className="detail">
-          {selected ? (
+          {selectedId === VOICE ? (
+            <BrandVoice />
+          ) : selected ? (
             <Workspace key={selected.id} job={selected} onChanged={changed} />
           ) : (
             <NewJob

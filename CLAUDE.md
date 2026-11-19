@@ -48,6 +48,8 @@ backend/                FastAPI + pipeline (Python 3.11, conda env "clipforge")
                         (offline turns, cut at turn start) → same sendcmd crop ("speaker" mode)
     content.py          Content Studio: ANGLES (creative styles per platform), RULES, SCHEMAS, PROMPT,
                         assemblers enforcing platform limits, generate_post/generate_all, posts.md writer
+    voice.py            brand voice: your posts per platform (data/brand_voice.json, all jobs) → voice_block()
+                        few-shot examples in PROMPT (≤5 per platform, borrows 2 from others if none); notes → Voice:
     history.py          variety engine: least-recently-used angle rotation + recent openers to avoid
                         (persisted in data/content_history.json across jobs)
     carousel.py         Instagram carousel PNGs (1080x1350, Pillow)
@@ -135,7 +137,8 @@ done: PATCH clip options → stale → POST /clips/{i}/render ; PATCH/POST posts
   LFS pointer). Any failure → Haar cascade → if <30% of samples have faces → centre crop. Never crash a job.
 - **Content Studio:** stage order is selecting → writing → (unload Gemma) → rendering, so Gemma loads once.
   `GPU_LOCK` (jobs.py) serialises jobs and the "new angle" endpoint (409 if busy). Each platform is
-  independent: one failing must not drop the others. Never let prompts invent facts — keep the guardrail line.
+  independent: one failing must not drop the others. Never let prompts invent facts — keep the guardrail line. Brand-voice examples are
+  about other topics: voice_block() tells the model to copy the voice only, never their facts/phrases — keep that too.
 - To add a creative angle: add one entry to `ANGLES[platform]` (label, instruction). To add a platform:
   ANGLES + RULES + SCHEMAS + an `assemble_<platform>` + NAMES + UI tab in PostsPanel.jsx.
 - No-speech clips get `options=RenderOptions(jumpcut=False, caption_style="none")` (Whisper hallucinates words on
@@ -214,7 +217,8 @@ done: PATCH clip options → stale → POST /clips/{i}/render ; PATCH/POST posts
        playhead, Alt = free), drag the clip to move it, click to seek; keys A / [ ] / J K (⇧ 1 s) / I O / Space.
 7. [x] **Prompt eval** — every job saves `candidates.json` (each pick + outcome: kept/overlap/too_short/invalid);
        `python -m app.eval` compares models × prompts × think on one transcript → report.md + results.json.
-8. [ ] Content: brand-voice profile (paste 5 of your best posts → few-shot examples in PROMPT).
+8. [x] Content: brand-voice profile (🎙 Brand voice screen: paste up to 5 posts per platform, or take your hand-edited /
+       posted ones → few-shot examples in PROMPT; voice notes replace CONTENT_VOICE).
 9. [ ] Content: weekly posting calendar view (spread shorts + posts across days/platforms, .ics export).
 10. [ ] Content: Hinglish mode tuned prompt + language detection from transcript.
 11. [ ] Auto-publish to own channels (YouTube Data API upload + scheduled publish).

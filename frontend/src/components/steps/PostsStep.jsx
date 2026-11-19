@@ -16,7 +16,8 @@ export default function PostsStep({ job, busy, act, go }) {
           <h2>Posts</h2>
           <p className="muted">
             Edit the copy, try a <b>🎲 New angle</b> if it feels samey, and mark each one <b>Approved</b> when it's
-            ready. Each platform gets its own style.
+            ready. Each platform gets its own style. Want them to sound like you? Add a few of your posts
+            under <b>🎙 Brand voice</b> in the sidebar.
           </p>
         </div>
       </div>

@@ -17,6 +17,9 @@ const json = (method, body) => ({
 export const api = {
   health: () => req('/health'),
   captionPresets: () => req('/caption-presets'),
+  brandVoice: () => req('/brand-voice'),
+  saveBrandVoice: (voice) => req('/brand-voice', json('PUT', voice)),
+  voiceSuggestions: () => req('/brand-voice/suggestions'),
   listJobs: () => req('/jobs'),
   eventsUrl: () => '/api/events',
   createJob: (url, num_clips, mode) => req('/jobs', json('POST', { url, num_clips, mode })),

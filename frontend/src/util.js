@@ -49,3 +49,53 @@ export function defaultStep(job) {
   if (job.clips.some((c) => c.file)) return 'shorts'
   return 'pick'
 }
+
+// ---------------------------------------------------------------- Pick step timeline
+
+export const MIN_CLIP = 3 // the API refuses shorter clips
+export const MAX_SHORT = 59 // longer is allowed but warned about (Content ID)
+const round2 = (t) => Math.round(t * 100) / 100
+
+// Visible span around a clip: its length plus 40% each side (≥ 8 s), inside the video
+export function timelineWindow(start, end, total) {
+  const pad = Math.max(8, (end - start) * 0.4)
+  return [Math.max(0, start - pad), total ? Math.min(total, end + pad) : end + pad]
+}
+
+// Nearest edge within tol seconds, else t
+export function snapTime(t, edges, tol) {
+  let best = t
+  let dist = tol
+  for (const e of edges) {
+    const d = Math.abs(e - t)
+    if (d <= dist) {
+      best = e
+      dist = d
+    }
+  }
+  return best
+}
+
+// New [start, end] after moving one edge ('start' | 'end') or the whole clip ('move') to/by t.
+// Keeps ≥ MIN_CLIP long and inside [0, total].
+export function moveEdge(kind, t, start, end, total) {
+  const max = total || Infinity
+  if (kind === 'start') return [round2(Math.min(Math.max(0, t), end - MIN_CLIP)), end]
+  if (kind === 'end') return [start, round2(Math.max(Math.min(max, t), start + MIN_CLIP))]
+  const d = Math.min(Math.max(t, -start), max - end) // 'move': t is the offset
+  return [round2(start + d), round2(end + d)]
+}
+
+// Waveform bars for [lo, hi]: the loudest level in each of n bins (0..100)
+export function waveBars(levels, rate, lo, hi, n) {
+  if (!levels?.length || hi <= lo) return []
+  const out = []
+  for (let i = 0; i < n; i++) {
+    const a = Math.floor((lo + ((hi - lo) * i) / n) * rate)
+    const b = Math.max(a + 1, Math.floor((lo + ((hi - lo) * (i + 1)) / n) * rate))
+    let m = 0
+    for (let j = a; j < b && j < levels.length; j++) m = Math.max(m, levels[j])
+    out.push(m)
+  }
+  return out
+}

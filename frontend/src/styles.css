@@ -278,3 +278,29 @@ input:focus, textarea:focus { outline: none; border-color: #4a5164; }
 .stbtn.approved { background: #133a2a; color: var(--good); }
 .stbtn.posted { background: #1f2b3a; color: var(--info); }
 @media (max-width: 1000px) { .pub-row { grid-template-columns: 1fr 1fr; } .pub-row.head { display: none; } }
+
+/* Pick step timeline */
+.cand-card:focus-visible, .cand-card:focus-within { outline: 1px solid #3a4152; outline-offset: 2px; }
+.tl-wrap { user-select: none; }
+.tl { position: relative; height: 58px; background: var(--bg); border: 1px solid var(--line); border-radius: 9px;
+      overflow: hidden; cursor: text; touch-action: none; }
+.tl.off { opacity: 0.5; pointer-events: none; }
+.tl-wave { position: absolute; inset: 4px 0; width: 100%; height: calc(100% - 8px); }
+.tl-wave path { fill: #4a5164; }
+.tl-tick { position: absolute; top: 0; bottom: 0; width: 1px; background: #2c3140; }
+.tl-other { position: absolute; top: 0; bottom: 0; background: repeating-linear-gradient(135deg, #ffffff0d 0 6px, transparent 6px 12px);
+            border-left: 1px dashed #4a5164; border-right: 1px dashed #4a5164; pointer-events: none; }
+.tl-sel { position: absolute; top: 0; bottom: 0; background: #ff4d6d26; border-top: 2px solid var(--accent);
+          border-bottom: 2px solid var(--accent); cursor: grab; }
+.tl-sel:active { cursor: grabbing; }
+.tl-h { position: absolute; top: -2px; bottom: -2px; width: 14px; cursor: ew-resize; display: grid; place-items: center; }
+.tl-h::after { content: ''; width: 5px; height: 26px; border-radius: 3px; background: var(--accent); box-shadow: 0 0 0 2px var(--bg); }
+.tl-h.start { left: -7px; }
+.tl-h.end { right: -7px; }
+.tl-h.on::after { background: #fff; }
+.tl-play { position: absolute; top: 0; bottom: 0; width: 2px; margin-left: -1px; background: #fff; pointer-events: none; }
+.tl-scale { display: flex; justify-content: space-between; font-size: 11px; margin-top: 3px; font-variant-numeric: tabular-nums; }
+.nudge.on { border-color: var(--accent); }
+.nudge { cursor: pointer; }
+.keys kbd { font: inherit; font-size: 11px; background: var(--line); border-radius: 4px; padding: 0 5px; }
+@media (hover: none) { .keys { display: none; } }

@@ -51,6 +51,7 @@ backend/                FastAPI + pipeline (Python 3.11, conda env "clipforge")
     history.py          variety engine: least-recently-used angle rotation + recent openers to avoid
                         (persisted in data/content_history.json across jobs)
     carousel.py         Instagram carousel PNGs (1080x1350, Pillow)
+    waveform.py         Pick timeline: loudness 0-100 at 20/s from one chunked ffmpeg PCM pass → waveform.json
     export.py           export pack zip (shorts, srt, posts, carousels, titles.csv)
     render.py           plan_cuts + plan_reframe → captions → ffmpeg
                         (fps → sendcmd+crop@track → select → scale/pad → ass; audio: asplit/atrim/concat) + thumbnail
@@ -60,7 +61,8 @@ backend/                FastAPI + pipeline (Python 3.11, conda env "clipforge")
 frontend/               React 18 + Vite (JSX, no TS). /api proxied to :8000
   src/components/Workspace.jsx   6-step stepper: Source → Transcript → Pick clips → Shorts → Posts → Publish
   src/components/steps/*.jsx     one file per step; PostEditor.jsx = per-platform editor (used by Posts)
-  src/util.js                    stepStates()/defaultStep() decide which steps unlock and where a job opens
+  src/util.js                    stepStates()/defaultStep() decide which steps unlock and where a job opens;
+                                 timeline maths (timelineWindow/snapTime/moveEdge/waveBars) for Timeline.jsx
 scripts/setup_wsl.sh    one-time setup;  scripts/dev.sh  runs API + UI
 ```
 
@@ -102,7 +104,7 @@ done: PATCH clip options → stale → POST /clips/{i}/render ; PATCH/POST posts
 - LLM calls go through the `LLM` protocol so tests use `FakeLLM` — never call Ollama in tests.
 - One bad Gemma window must not fail the job (log + skip). Validate every model field.
 - Job artifacts live in `backend/data/jobs/<id>/` : source.mp4, transcript.json, candidates.json,
-  signals.json (no-speech jobs only — also how main.py knows a job is no-speech), short_N.{mp4,srt,jpg}, job.json.
+  signals.json (no-speech jobs only — also how main.py knows a job is no-speech), waveform.json (Pick timeline), short_N.{mp4,srt,jpg}, job.json.
 - File serving only allows names matching `^[\w.\-]+$` (path traversal guard) — keep it.
 - Add/adjust tests with every pipeline change; keep `pytest` and `ruff` green.
 - **Timelines:** clip.start/end are SOURCE seconds. After jump cuts, captions use OUTPUT time —
@@ -208,7 +210,8 @@ done: PATCH clip options → stale → POST /clips/{i}/render ; PATCH/POST posts
        libass draws monochrome; overlay PNG emoji via ffmpeg overlay instead).
 5. [x] **Re-render / edit** — UI to nudge start/end ±seconds and re-render a single clip (shipped in v0.5).
 6. [x] **SSE progress** instead of polling (`/api/events` for the UI, `/api/jobs/{id}/events` per job).
-6b.[ ] Pick step: drag handles on a waveform/timeline instead of nudge buttons; keyboard shortcuts (A=approve, J/K nudge).
+6b.[x] Pick step timeline: waveform (`waveform.py`, cached waveform.json) with drag handles (snap to sentence edges +
+       playhead, Alt = free), drag the clip to move it, click to seek; keys A / [ ] / J K (⇧ 1 s) / I O / Space.
 7. [x] **Prompt eval** — every job saves `candidates.json` (each pick + outcome: kept/overlap/too_short/invalid);
        `python -m app.eval` compares models × prompts × think on one transcript → report.md + results.json.
 8. [ ] Content: brand-voice profile (paste 5 of your best posts → few-shot examples in PROMPT).

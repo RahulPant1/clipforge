@@ -1,21 +1,23 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { api } from '../../api.js'
-import { clipText, fmtPrecise } from '../../util.js'
+import { MAX_SHORT, clipText, fmtPrecise, moveEdge, timelineWindow } from '../../util.js'
+import Timeline from '../Timeline.jsx'
 
-function Nudge({ label, value, onChange, disabled }) {
+const KEY_SAVE_MS = 600 // keyboard / button nudges are saved once you pause
+
+// One edge: value + fine nudges (touch screens have no J/K); clicking it makes it the edge the keys move
+function Edge({ label, value, on, onPick, onNudge, disabled }) {
   return (
-    <div className="nudge">
+    <div className={`nudge ${on ? 'on' : ''}`} onClick={onPick}>
       <span className="muted">{label}</span>
-      <button disabled={disabled} onClick={() => onChange(value - 1)}>−1s</button>
-      <button disabled={disabled} onClick={() => onChange(value - 0.2)}>−.2</button>
+      <button disabled={disabled} onClick={() => onNudge(-0.2)} aria-label={`${label} 0.2 s earlier`}>−</button>
       <b>{fmtPrecise(value)}</b>
-      <button disabled={disabled} onClick={() => onChange(value + 0.2)}>+.2</button>
-      <button disabled={disabled} onClick={() => onChange(value + 1)}>+1s</button>
+      <button disabled={disabled} onClick={() => onNudge(0.2)} aria-label={`${label} 0.2 s later`}>+</button>
     </div>
   )
 }
 
-function Candidate({ job, clip, transcript, busy, act }) {
+function Candidate({ job, clip, others, transcript, wave, total, busy, act }) {
   const [title, setTitle] = useState(clip.title)
   const [hook, setHook] = useState(clip.hook)
   const [kw, setKw] = useState(clip.keywords.join(', '))
@@ -26,12 +28,74 @@ function Candidate({ job, clip, transcript, busy, act }) {
   }, [clip.title, clip.hook, clip.keywords])
 
   const save = (changes) => act(() => api.editClip(job.id, clip.index, changes)).catch(() => {})
-  const dur = clip.end - clip.start
+
+  // Timing being edited (drag / keys) — shown at once, saved on release or after a pause
+  const [draft, setDraft] = useState(null) // [start, end] | null
+  const [edge, setEdge] = useState('end') // the edge J/K and the ± buttons move
+  const [playhead, setPlayhead] = useState(null)
+  const video = useRef(null)
+  const timer = useRef(null)
+  const [start, end] = draft || [clip.start, clip.end]
+  useEffect(() => setDraft(null), [clip.start, clip.end]) // saved (or changed elsewhere): show the real clip
+  useEffect(() => () => clearTimeout(timer.current), [])
+
+  const commit = (s, e) => {
+    clearTimeout(timer.current)
+    const changes = {}
+    if (Math.abs(s - clip.start) > 0.005) changes.start = s
+    if (Math.abs(e - clip.end) > 0.005) changes.end = e
+    if (!Object.keys(changes).length) return setDraft(null)
+    setDraft([s, e])
+    // success: the clip update (SSE) clears the draft — clearing it here would flash the old timing first
+    act(() => api.editClip(job.id, clip.index, changes)).catch(() => setDraft(null))
+  }
+  const later = (s, e) => {
+    setDraft([s, e])
+    clearTimeout(timer.current)
+    timer.current = setTimeout(() => commit(s, e), KEY_SAVE_MS)
+  }
+  const nudge = (which, by) => later(...moveEdge(which, (which === 'start' ? start : end) + by, start, end, total))
+
+  const win = useMemo(() => timelineWindow(clip.start, clip.end, total), [clip.start, clip.end, total])
+  const edges = useMemo(
+    () => (transcript || []).flatMap((x) => [x.start, x.end]).filter((t) => t > win[0] && t < win[1]),
+    [transcript, win],
+  )
+  const seek = (t) => {
+    if (!video.current) return
+    video.current.currentTime = t
+    setPlayhead(t)
+  }
+
+  const onKey = (e) => {
+    if (busy || e.ctrlKey || e.metaKey || ['INPUT', 'TEXTAREA', 'SELECT', 'VIDEO'].includes(e.target.tagName)) return
+    const k = e.key.toLowerCase()
+    const step = e.shiftKey ? 1 : 0.2
+    const v = video.current
+    const actions = {
+      a: () => save({ approved: !clip.approved }),
+      j: () => nudge(edge, -step),
+      k: () => nudge(edge, step),
+      '[': () => setEdge('start'),
+      ']': () => setEdge('end'),
+      i: () => playhead != null && later(...moveEdge('start', playhead, start, end, total)),
+      o: () => playhead != null && later(...moveEdge('end', playhead, start, end, total)),
+      ' ': () => v && (v.paused ? v.play() : v.pause()),
+    }
+    if (actions[k]) {
+      e.preventDefault()
+      actions[k]()
+    }
+  }
+
+  const dur = end - start
   const src = `${api.fileUrl(job.id, 'source.mp4')}#t=${clip.start.toFixed(2)},${clip.end.toFixed(2)}`
 
   return (
-    <div className={`cand-card ${clip.approved ? 'is-approved' : ''}`}>
-      <video key={src} src={src} controls preload="metadata" />
+    <div className={`cand-card ${clip.approved ? 'is-approved' : ''}`} tabIndex={0} onKeyDown={onKey}>
+      <video key={src} ref={video} src={src} controls preload="metadata"
+             onTimeUpdate={(e) => setPlayhead(e.currentTarget.currentTime)}
+             onSeeked={(e) => setPlayhead(e.currentTarget.currentTime)} />
       <div className="cand-body">
         <div className="cand-head">
           <span className="score" title="Gemma virality score">{clip.score}/10</span>
@@ -66,11 +130,26 @@ function Candidate({ job, clip, transcript, busy, act }) {
                  }} />
         </label>
 
+        <Timeline
+          start={start} end={end} win={win} total={total} wave={wave} edges={edges} others={others}
+          playhead={playhead} active={edge} disabled={busy}
+          onDrag={(s, e) => { clearTimeout(timer.current); setDraft([s, e]) }}
+          onCommit={commit} onSeek={seek} onActive={setEdge}
+        />
         <div className="timing">
-          <Nudge label="Start" value={clip.start} disabled={busy} onChange={(v) => save({ start: Math.max(0, v) })} />
-          <Nudge label="End" value={clip.end} disabled={busy} onChange={(v) => save({ end: v })} />
-          <span className={`dur ${dur > 59 ? 'warn' : ''}`}>{dur.toFixed(1)}s{dur > 59 && ' ⚠ over 59s'}</span>
+          <Edge label="Start" value={start} on={edge === 'start'} onPick={() => setEdge('start')}
+                onNudge={(by) => nudge('start', by)} disabled={busy} />
+          <Edge label="End" value={end} on={edge === 'end'} onPick={() => setEdge('end')}
+                onNudge={(by) => nudge('end', by)} disabled={busy} />
+          <span className={`dur ${dur > MAX_SHORT ? 'warn' : ''}`}>
+            {dur.toFixed(1)}s{dur > MAX_SHORT && ` ⚠ over ${MAX_SHORT}s`}
+          </span>
         </div>
+        <p className="keys hint">
+          Keys: <kbd>A</kbd> approve · <kbd>[</kbd> <kbd>]</kbd> pick edge · <kbd>J</kbd> <kbd>K</kbd> nudge
+          0.2 s (<kbd>⇧</kbd> 1 s) · <kbd>I</kbd> <kbd>O</kbd> start/end at playhead · <kbd>Space</kbd> play ·
+          drag snaps to sentence edges (<kbd>Alt</kbd>: free)
+        </p>
         {clip.visual ? (
           <p className="excerpt" title="No speech: what Gemma saw in the keyframes">🎞 {clip.visual}</p>
         ) : (
@@ -83,6 +162,13 @@ function Candidate({ job, clip, transcript, busy, act }) {
 
 export default function PickStep({ job, busy, act, go, transcript }) {
   const [filter, setFilter] = useState('all')
+  const [wave, setWave] = useState(null)
+  useEffect(() => {
+    api.waveform(job.id).then(setWave).catch(() => setWave(null)) // no waveform: the timeline still works
+  }, [job.id])
+  const total =
+    (wave?.levels?.length ? wave.levels.length / wave.rate : 0) ||
+    Math.max(0, ...(transcript || []).map((s) => s.end), ...job.clips.map((c) => c.end))
   const clips = [...job.clips].sort((a, b) => (filter === 'score' ? b.score - a.score : a.start - b.start))
   const shown = filter === 'approved' ? clips.filter((c) => c.approved) : clips
   const approved = job.clips.filter((c) => c.approved)
@@ -95,7 +181,7 @@ export default function PickStep({ job, busy, act, go, transcript }) {
           <h2>Pick clips</h2>
           <p className="muted">
             {approved.length} approved of {job.clips.length} candidates (you asked for {job.num_clips}). Trim with
-            the nudge buttons, fix titles, then create. Need a moment Gemma missed? Add it from the{' '}
+            the timeline (or the keys — click a card first), fix titles, then create. Need a moment Gemma missed? Add it from the{' '}
             <a onClick={() => go('transcript')}>Transcript</a>.
           </p>
         </div>
@@ -108,7 +194,9 @@ export default function PickStep({ job, busy, act, go, transcript }) {
 
       <div className="cands">
         {shown.map((c) => (
-          <Candidate key={c.index} job={job} clip={c} transcript={transcript} busy={busy} act={act} />
+          <Candidate key={c.index} job={job} clip={c} transcript={transcript} wave={wave} total={total}
+                     others={job.clips.filter((o) => o.index !== c.index).map((o) => [o.start, o.end])}
+                     busy={busy} act={act} />
         ))}
       </div>
 

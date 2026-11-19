@@ -26,6 +26,7 @@ from .models import (
     Segment,
     Stage,
 )
+from .pipeline import waveform
 from .pipeline.content import ANGLES, ContentContext, clip_text, generate_post, load_meta, write_posts_md
 from .pipeline.export import build_pack
 from .pipeline.history import get_history
@@ -161,6 +162,13 @@ def create_app(pipeline=None, start_worker: bool = True, llm_factory=OllamaClien
         if not p.exists():
             return []
         return [{"start": s["start"], "end": s["end"], "text": s["text"]} for s in json.loads(p.read_text())]
+
+    @app.get("/api/jobs/{job_id}/waveform")
+    def get_waveform(job_id: str) -> dict:
+        """Loudness levels (0-100, `rate` per second) of the whole source for the Pick timeline; cached."""
+        if not store.get(job_id) or not (store.dir(job_id) / "source.mp4").is_file():
+            raise HTTPException(404, "no source video yet")
+        return waveform.load(store.dir(job_id))
 
     @app.patch("/api/jobs/{job_id}/clips/{index}", response_model=Job)
     def edit_clip(job_id: str, index: int, body: ClipEdit) -> Job:

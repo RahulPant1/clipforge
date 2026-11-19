@@ -30,6 +30,7 @@ export const api = {
   deleteJob: (id) => req(`/jobs/${id}`, { method: 'DELETE' }),
   retry: (id) => req(`/jobs/${id}/retry`, { method: 'POST' }),
   transcript: (id) => req(`/jobs/${id}/transcript`),
+  waveform: (id) => req(`/jobs/${id}/waveform`),
 
   // review & editing
   editClip: (id, index, changes) => req(`/jobs/${id}/clips/${index}`, json('PATCH', changes)),

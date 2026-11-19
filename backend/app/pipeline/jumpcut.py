@@ -70,11 +70,31 @@ def plan_cuts(segs: list[Segment], start: float, end: float, enabled: bool | Non
             keeps[-1][1] = max(keeps[-1][1], e)  # short pause: keep it, merge
         else:
             keeps.append([s, e])
-    merged = [(round(s, 3), round(e, 3)) for s, e in keeps if e - s > 0.05]
+    merged = snap_to_frames([(s, e) for s, e in keeps if e - s > 0.05], settings.output_fps, total)
 
     plan = CutPlan(keeps=merged, words=[], source_duration=total)
     plan.words = _remap_words(plan, spoken)
     return plan
+
+
+def snap_to_frames(keeps: list[tuple[float, float]], fps: int, total: float) -> list[tuple[float, float]]:
+    """Move every cut onto the output frame grid (multiples of 1/fps).
+
+    Video keeps whole frames, audio is trimmed to the exact same instants, so each segment is exactly
+    N frames in both streams and A/V never drifts, however many cuts there are. Overlaps created by
+    rounding are merged; segments shorter than one frame are dropped.
+    """
+    last = int(total * fps + 1e-9)  # frames available in the clip: n/fps < total
+    out: list[list[int]] = []
+    for s, e in keeps:
+        a, b = max(round(s * fps), 0), min(round(e * fps), last)
+        if b <= a:
+            continue
+        if out and a <= out[-1][1]:
+            out[-1][1] = max(out[-1][1], b)
+        else:
+            out.append([a, b])
+    return [(a / fps, b / fps) for a, b in out]
 
 
 def _remap_words(plan: CutPlan, words: list[Word]) -> list[Word]:
@@ -86,6 +106,29 @@ def _remap_words(plan: CutPlan, words: list[Word]) -> list[Word]:
     return out
 
 
-def select_expr(keeps: list[tuple[float, float]]) -> str:
-    """ffmpeg select/aselect expression keeping only the given intervals."""
-    return "+".join(f"between(t,{s:.3f},{e:.3f})" for s, e in keeps)
+def video_select_expr(keeps: list[tuple[float, float]], fps: int) -> str:
+    """`select` expression keeping frames with s <= t < e (keeps are on the 1/fps grid, see snap_to_frames).
+
+    Bounds sit half a frame early so float noise in frame times can't add or drop a frame:
+    each segment yields exactly (e - s) * fps frames.
+    """
+    h = 0.5 / fps
+    return "+".join(f"between(t,{s - h:.6f},{e - h:.6f})" for s, e in keeps)
+
+
+def audio_cut_graph(keeps: list[tuple[float, float]]) -> str:
+    """-af graph cutting audio to exactly the same intervals as the video.
+
+    Not `aselect`: in FFmpeg 8.0 and 8.0.1 (Ubuntu 26.04's package) it is a silent no-op — upstream commit
+    565d14e4ff "f_select: Added activate for aselect" — which left audio uncut and out of sync with video.
+    asplit/atrim/concat behave the same on every FFmpeg version and audio is small, so buffering is cheap.
+    """
+    trims = [f"atrim=start={s:.6f}:end={e:.6f},asetpts=PTS-STARTPTS" for s, e in keeps]
+    if len(trims) == 1:
+        return trims[0]
+    n = len(trims)
+    return ";".join([
+        f"asplit={n}" + "".join(f"[a{i}]" for i in range(n)),
+        *(f"[a{i}]{t}[b{i}]" for i, t in enumerate(trims)),
+        "".join(f"[b{i}]" for i in range(n)) + f"concat=n={n}:v=0:a=1",
+    ])

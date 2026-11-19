@@ -37,7 +37,7 @@ backend/                FastAPI + pipeline (Python 3.11, conda env "clipforge")
     carousel.py         Instagram carousel PNGs (1080x1350, Pillow)
     export.py           export pack zip (shorts, srt, posts, carousels, titles.csv)
     render.py           plan_cuts + plan_reframe → captions → ffmpeg
-                        (fps → sendcmd+crop@track → select/aselect → scale/pad → ass) + thumbnail
+                        (fps → sendcmd+crop@track → select → scale/pad → ass; audio: asplit/atrim/concat) + thumbnail
     orchestrator.py     prepare() → [review in UI] → produce(); render_one(); run_pipeline() = auto mode.
                         `Steps` dataclass makes phases injectable (tests use fakes)
   tests/                pytest; FakeLLM in conftest; real-ffmpeg render test
@@ -87,8 +87,11 @@ done: PATCH clip options → stale → POST /clips/{i}/render ; PATCH/POST posts
 - Add/adjust tests with every pipeline change; keep `pytest` and `ruff` green.
 - **Timelines:** clip.start/end are SOURCE seconds. After jump cuts, captions use OUTPUT time —
   always go through `CutPlan.remap()`; never time captions from source words directly.
-- Jump cuts use ffmpeg `select`/`aselect` + `setpts=N/FPS/TB` / `asetpts=N/SR/TB` after `fps=` normalisation.
-  Keep video and audio expressions identical or A/V drifts (test_jumpcut_shortens_output_and_keeps_av_in_sync).
+- Jump cuts: `plan_cuts` snaps every cut to the 1/fps frame grid (`snap_to_frames`). Video: `select` with
+  half-frame-offset bounds (`video_select_expr`, exactly N frames per segment) + `setpts=N/FPS/TB` after `fps=`.
+  Audio: `asplit` → `atrim` → `concat` on the SAME keeps (`audio_cut_graph`). **Never use `aselect`**: it is a
+  silent no-op in FFmpeg 8.0/8.0.1 (Ubuntu 26.04), leaving audio uncut and out of sync. Guarded by
+  test_jumpcut_shortens_output_and_keeps_av_in_sync — verified on FFmpeg 4.4, 8.0, 8.0.1, 8.1 and 9.0.
 - **Reframe runs BEFORE jump-cut select** in the filter chain, so its keyframes are source-relative
   (clip.start = 0). If you move it after select, keyframes must be remapped with CutPlan.remap().
 - YuNet model downloads once to data/models from media.githubusercontent.com (github.com/raw gives an

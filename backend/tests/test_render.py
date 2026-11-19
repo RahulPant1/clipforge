@@ -65,7 +65,8 @@ def test_jumpcut_shortens_output_and_keeps_av_in_sync(tmp_path, monkeypatch):
     (v, v_packets), (a, a_packets) = _stream(out, "v:0"), _stream(out, "a:0")
     version = subprocess.run(["ffmpeg", "-version"], capture_output=True, text=True).stdout.splitlines()[0]
     diag = (f"\n{version}\nexpected {clip.out_duration}s; got format={dur}s video={v}s ({v_packets} pkts) "
-            f"audio={a}s ({a_packets} pkts)\nrender cmd: {' '.join(cmds[0])}")
+            f"audio={a}s ({a_packets} pkts)\nrender cmd: "
+            f"{' '.join(next(c for c in cmds if c[0] == 'ffmpeg' and '-vf' in c))}")
     assert clip.cut_seconds > 5, diag
     assert abs(dur - clip.out_duration) < 0.3, diag
     assert abs(v - a) < 0.15, diag

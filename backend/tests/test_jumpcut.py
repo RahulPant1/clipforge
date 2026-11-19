@@ -1,6 +1,6 @@
 from app.config import settings
 from app.models import Segment, Word
-from app.pipeline.jumpcut import is_filler, plan_cuts, select_expr
+from app.pipeline.jumpcut import audio_cut_graph, is_filler, plan_cuts, snap_to_frames, video_select_expr
 
 
 def _segs(words):
@@ -49,8 +49,34 @@ def test_remap_snaps_gap_to_next_keep():
     assert plan.remap(e0 + 0.5) == round(e0 - s0, 3) or plan.remap(e0 + 0.5) >= e0 - s0
 
 
-def test_select_expr():
-    assert select_expr([(0, 1.5), (2, 3)]) == "between(t,0.000,1.500)+between(t,2.000,3.000)"
+def test_cuts_land_on_the_frame_grid():
+    plan = plan_cuts(_segs(W), 10.0, 15.2, enabled=True)
+    for s, e in plan.keeps:  # every cut is a whole number of output frames
+        assert abs(s * 30 - round(s * 30)) < 1e-9 and abs(e * 30 - round(e * 30)) < 1e-9
+
+
+def test_snap_to_frames_merges_drops_and_clamps():
+    assert snap_to_frames([(0.01, 1.0), (1.01, 2.0)], 30, 5) == [(0.0, 2.0)]  # rounding made them touch
+    assert snap_to_frames([(1.0, 1.01)], 30, 5) == []  # shorter than a frame
+    assert snap_to_frames([(4.5, 9.0)], 30, 5.0) == [(4.5, 5.0)]  # never past the clip end
+
+
+def test_video_select_counts_exact_frames():
+    expr = video_select_expr([(0.0, 1.5), (2.0, 3.0)], 30)
+    assert expr == "between(t,-0.016667,1.483333)+between(t,1.983333,2.983333)"
+    # frames at n/30: 0..44 (45 frames = 1.5 s) and 60..89 (30 frames = 1.0 s) — no off-by-one either side
+    kept = [n for n in range(200) if any(lo <= n / 30 <= hi for lo, hi in
+                                         [(-1 / 60, 1.5 - 1 / 60), (2 - 1 / 60, 3 - 1 / 60)])]
+    assert len(kept) == 75 and kept[0] == 0 and kept[44] == 44 and kept[45] == 60
+
+
+def test_audio_cut_graph_avoids_aselect():
+    # aselect is a no-op in FFmpeg 8.0/8.0.1 — audio must be cut with atrim
+    one = audio_cut_graph([(1.0, 2.5)])
+    assert one == "atrim=start=1.000000:end=2.500000,asetpts=PTS-STARTPTS"
+    two = audio_cut_graph([(0.0, 1.5), (2.0, 3.0)])
+    assert "aselect" not in two and two.startswith("asplit=2[a0][a1];")
+    assert two.endswith("[b0][b1]concat=n=2:v=0:a=1") and "atrim=start=2.000000:end=3.000000" in two
 
 
 def test_settings_default_on():

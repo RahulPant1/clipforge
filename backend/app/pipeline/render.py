@@ -6,7 +6,7 @@ from ..config import settings
 from ..models import Clip, Segment
 from .captions import build_ass, build_srt
 from .fonts import fontsdir_option
-from .jumpcut import plan_cuts, select_expr
+from .jumpcut import audio_cut_graph, plan_cuts, video_select_expr
 from .reframe import plan_reframe
 
 
@@ -55,9 +55,9 @@ def render_clip(video: Path, clip: Clip, segs: list[Segment], job_dir: Path) -> 
     vf = [f"fps={fps}", *rf.filters(cmd_file)]
     af = []
     if len(plan.keeps) > 1 or plan.removed > 0.05:
-        expr = select_expr(plan.keeps)
-        vf += [f"select='{expr}'", f"setpts=N/{fps}/TB"]
-        af += [f"aselect='{expr}'", "asetpts=N/SR/TB"]
+        # Same frame-grid intervals for both streams (see jumpcut.snap_to_frames) → no A/V drift
+        vf += [f"select='{video_select_expr(plan.keeps, fps)}'", f"setpts=N/{fps}/TB"]
+        af = [audio_cut_graph(plan.keeps)]
     vf += ["scale=1080:1920:force_original_aspect_ratio=decrease",
            "pad=1080:1920:(ow-iw)/2:(oh-ih)/2", "setsar=1", subs]
 

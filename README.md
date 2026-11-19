@@ -117,6 +117,10 @@ VS Code: open the folder via **Remote - WSL**; launch configs for API and CLI de
 works there too — the app loads cuBLAS from the pip wheel itself).
 See `CLAUDE.md` for architecture, conventions and the roadmap.
 
+## License
+[MIT](LICENSE) for ClipForge's own code. Models and tools it runs keep their own terms — notably Gemma
+(Gemma Terms of Use), Whisper/faster-whisper (MIT), yt-dlp (Unlicense) and FFmpeg (LGPL/GPL, used as a separate program).
+
 ## Responsible use
 Only process videos you own or have rights to (e.g. your own channel, client content, Creative Commons).
 Downloading from YouTube may be restricted by its Terms of Service.

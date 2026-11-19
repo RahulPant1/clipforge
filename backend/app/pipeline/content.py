@@ -72,7 +72,7 @@ RULES = {
     "instagram": """- caption_hook: the first line, under 125 characters, must stop the scroll.
 - caption_body: 2-6 short lines separated by line breaks, emoji welcome.
 - cta: one line asking to save, share, comment or follow.
-- hashtags: 12-18 relevant hashtags, mix of broad and niche, no spaces.
+- hashtags: 3-5 specific, relevant hashtags (Instagram allows at most 5 per post), no spaces.
 - carousel: 5-7 slides for a companion carousel. Slide 1 = cover with a big promise, middle slides = one idea
   each, last slide = call to action. Each title max 6 words, each text max 25 words.
 - cover_text: 2-6 words to print on the reel cover.""",
@@ -236,10 +236,16 @@ def assemble_x(raw: dict, angle: str, ctx: ContentContext) -> Post:
     return Post(platform="x", angle=angle, text="\n\n---\n\n".join(posts), parts=posts, hashtags=tags)
 
 
+IG_MAX_HASHTAGS = 5
+
+
 def assemble_instagram(raw: dict, angle: str, ctx: ContentContext) -> Post:
-    tags = norm_tags(raw.get("hashtags"), 20)
     credit = _credit(ctx)
     lines = [_s(raw, "caption_hook"), _s(raw, "caption_body"), _s(raw, "cta"), credit]
+    # Instagram allows IG_MAX_HASHTAGS per caption (since Dec 2025), counting any the model wrote inline
+    inline = {t.lower() for t in re.findall(r"#\w+", " ".join(lines))}
+    tags = [t for t in norm_tags(raw.get("hashtags"), 30) if t.lower() not in inline]
+    tags = tags[:max(IG_MAX_HASHTAGS - len(inline), 0)]
     text = "\n\n".join(x for x in lines if x) + ("\n.\n.\n.\n" + " ".join(tags) if tags else "")
     slides = [{"title": _s(s, "title"), "text": _s(s, "text")}
               for s in (raw.get("carousel") or []) if isinstance(s, dict) and (s.get("title") or s.get("text"))][:8]

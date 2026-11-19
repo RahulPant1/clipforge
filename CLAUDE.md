@@ -111,6 +111,9 @@ done: PATCH clip options → stale → POST /clips/{i}/render ; PATCH/POST posts
 - Add/adjust tests with every pipeline change; keep `pytest` and `ruff` green.
 - **Timelines:** clip.start/end are SOURCE seconds. After jump cuts, captions use OUTPUT time —
   always go through `CutPlan.remap()`; never time captions from source words directly.
+- Pauses: Whisper word timings often run straight over pauses (cut_seconds was 0 on real footage), so
+  render passes `audio_silences()` (clip-relative quiet runs: speech p90 − SILENCE_DROP_DB, capped at SILENCE_MAX_DB)
+  into `plan_cuts(silences=)`, which subtracts them minus pause_padding each side. Needs ~25 dB voice-to-room SNR.
 - Jump cuts: `plan_cuts` snaps every cut to the 1/fps frame grid (`snap_to_frames`). Video: `select` with
   half-frame-offset bounds (`video_select_expr`, exactly N frames per segment) + `setpts=N/FPS/TB` after `fps=`.
   Audio: `asplit` → `atrim` → `acrossfade` (or `concat`) on the SAME keeps (`audio_cut_graph`). Crossfades borrow
@@ -149,6 +152,12 @@ done: PATCH clip options → stale → POST /clips/{i}/render ; PATCH/POST posts
 - Whisper drops "um/uh" unless prompted; `whisper_initial_prompt` contains fillers on purpose.
 - ASS colours are `&HAABBGGRR` (BGR order!). Canvas is PlayRes 1080x1920. `\c` ignores the AA byte and every
   override carries to later words in the line, so `_colour()` emits `\1a&HAA&\c…&` for EVERY word.
+- Anything burned in (hook card, captions, carousel PNGs) goes through `fonts.strip_emoji()`: libass/Pillow draw
+  colour emoji as empty boxes. Titles and post copy keep emoji.
+- Instagram allows 5 hashtags per caption (since Dec 2025): `assemble_instagram` caps at `IG_MAX_HASHTAGS`, counting
+  any the model wrote inline.
+- candidates.json outcomes: kept | overlap (lost to a higher-scored clip on the same moment) | ranked_out (fine, but
+  more candidates than asked for) | too_short | invalid.
 - Captions have no "top" position on purpose: tracked faces sit in the upper half (tested: covered the eyes) and
   the hook card owns the top. The hook card uses the preset's font.
 

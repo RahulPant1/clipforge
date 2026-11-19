@@ -102,6 +102,8 @@ Copy `backend/.env.example` → `backend/.env`. Key options:
 | `MAX_CLIP_SECONDS` | `59` | Keep < 60 to avoid Content ID blocking |
 | `JUMPCUT_ENABLED` | `true` | Remove silences + filler words |
 | `MAX_PAUSE` | `0.4` | Pauses longer than this (s) are cut |
+| `JUMPCUT_AUDIO` | `true` | Also find pauses in the audio (Whisper's word timings often run over them) |
+| `SILENCE_DROP_DB` | `25` | A pause is this many dB under the speech level; lower it for noisy rooms |
 | `JUMPCUT_CROSSFADE_MS` | `10` | Audio crossfade at each cut (avoids clicks); `0` = hard cuts |
 | `JUMPCUT_ZOOM` | `false` | Punch in on every other jump-cut segment (per-short toggle in the UI) |
 | `JUMPCUT_ZOOM_SCALE` | `1.05` | How far to punch in (1.05 = 5%) |
@@ -142,6 +144,8 @@ or run Ollama with `OLLAMA_HOST=0.0.0.0` and set `OLLAMA_URL=http://<windows-ip>
   or set `CAPTION_FONT` to one you have.
 - **No-speech clips all get "Highlight at m:ss" titles** → the model can't see images: use a vision model
   (`gemma4`, `gemma3:4b` or bigger) — the clips themselves still come from the loudness/motion peaks.
+- **Shorts show "✂ no pauses"** → the speaker never paused longer than `MAX_PAUSE` (0.4 s + padding). In a noisy
+  room, lower `SILENCE_DROP_DB` (e.g. 18) so quieter gaps count as pauses.
 - **CUDA out of memory** → `WHISPER_MODEL=small`, smaller Gemma, close other GPU apps.
 
 ## Development

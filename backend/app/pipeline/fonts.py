@@ -7,6 +7,7 @@ look the family up once, copy just its files into data/fonts/ and hand libass th
 """
 import functools
 import logging
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -17,6 +18,14 @@ log = logging.getLogger(__name__)
 
 WINDOWS_FONTS = Path("/mnt/c/Windows/Fonts")
 SCAN_CACHE = "windows_fonts.tsv"  # family<TAB>file, so the 14 s scan of the Windows folder happens once
+
+# libass and Pillow draw colour emoji as empty boxes ("tofu") with normal fonts — strip them from anything we
+# burn into a video or image (hook card, captions, carousels). Titles and post copy keep theirs.
+EMOJI = re.compile("[\U00010000-\U0010FFFF\u2600-\u27BF\u2B00-\u2BFF\uFE0F\u200D\u20E3]")
+
+
+def strip_emoji(text: str) -> str:
+    return re.sub(r"[ \t]+", " ", EMOJI.sub("", text or "")).strip()
 
 
 def fonts_dir() -> Path:

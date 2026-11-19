@@ -6,6 +6,7 @@ import re
 
 from ..config import settings
 from ..models import Word
+from .fonts import strip_emoji
 from .jumpcut import norm
 from .presets import CaptionPreset, get_preset, placement
 
@@ -44,7 +45,7 @@ def chunk_words(words: list[Word], n: int | None = None) -> list[Chunk]:
 
 
 def _text(w: Word, preset: CaptionPreset | None = None) -> str:
-    t = re.sub(r"[{}\\]", "", w.word).strip()
+    t = strip_emoji(re.sub(r"[{}\\]", "", w.word))
     return preset.transform(t) if preset else t.upper()
 
 
@@ -148,7 +149,7 @@ def build_ass(words: list[Word], keywords: list[str], n: int | None = None, midd
 
 def hook_text(hook: str) -> str:
     """ASS-safe one-liner: no override braces/backslashes, collapsed whitespace."""
-    return re.sub(r"\s+", " ", re.sub(r"[{}\\]", "", hook)).strip()
+    return re.sub(r"\s+", " ", strip_emoji(re.sub(r"[{}\\]", "", hook))).strip()
 
 
 SEAM_HOOK_MARGIN_V = 1040  # card's bottom edge just above seam captions (centred at y=960)

@@ -6,7 +6,7 @@ from ..config import settings
 from ..models import Clip, Segment
 from .captions import build_ass, build_hook_ass, build_srt
 from .fonts import fontsdir_option
-from .jumpcut import audio_cut_graph, plan_cuts, video_select_expr, zoom_graph
+from .jumpcut import audio_cut_graph, audio_silences, plan_cuts, video_select_expr, zoom_graph
 from .presets import get_preset
 from .reframe import plan_reframe
 
@@ -30,7 +30,8 @@ def render_clip(video: Path, clip: Clip, segs: list[Segment], job_dir: Path) -> 
     zoom = settings.jumpcut_zoom if o.zoom is None else o.zoom
     hook = settings.hook_overlay if o.hook is None else o.hook
 
-    plan = plan_cuts(segs, clip.start, clip.end, enabled=jumpcut)
+    silences = audio_silences(video, clip.start, clip.end) if jumpcut and settings.jumpcut_audio else None
+    plan = plan_cuts(segs, clip.start, clip.end, enabled=jumpcut, silences=silences)
     clip.cut_seconds = round(plan.removed, 2)
     clip.out_duration = round(plan.duration, 2)
 

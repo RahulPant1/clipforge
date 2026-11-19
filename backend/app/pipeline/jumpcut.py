@@ -1,10 +1,14 @@
-"""Silence + filler-word removal using Whisper word timestamps.
+"""Silence + filler-word removal using Whisper word timestamps, cross-checked against the audio.
 
 Produces "keep" intervals (relative to the clip start) and remaps word timings onto the
 shortened output timeline so captions stay in sync after the cuts.
 """
 import re
+import subprocess
 from dataclasses import dataclass
+from pathlib import Path
+
+import numpy as np
 
 from ..config import settings
 from ..models import Segment, Word
@@ -50,7 +54,59 @@ def clip_words(segs: list[Segment], start: float, end: float) -> list[Word]:
     return [w for s in segs for w in s.words if w.start >= start - 0.05 and w.end <= end + 0.05]
 
 
-def plan_cuts(segs: list[Segment], start: float, end: float, enabled: bool | None = None) -> CutPlan:
+SILENCE_FRAME = 0.02  # s per loudness frame
+SILENCE_RATE = 16000
+
+
+def find_silences(pcm: np.ndarray, rate: int, min_len: float) -> list[tuple[float, float]]:
+    """Quiet runs >= min_len s in mono float PCM, as (start, end) seconds.
+
+    "Quiet" is relative to this clip's speech (90th percentile frame level - SILENCE_DROP_DB), so a noisy room
+    or a quiet mic still shows its pauses, but the threshold never goes above SILENCE_MAX_DB, so soft speech in a
+    loud clip isn't mistaken for silence.
+    """
+    hop = int(rate * SILENCE_FRAME)
+    n = len(pcm) // hop
+    if n == 0:
+        return []
+    db = 20 * np.log10(np.sqrt(np.mean(pcm[:n * hop].reshape(n, hop) ** 2, axis=1)) + 1e-9)
+    thr = min(float(np.percentile(db, 90)) - settings.silence_drop_db, settings.silence_max_db)
+    quiet = np.concatenate([[False], db < thr, [False]])
+    edges = np.flatnonzero(np.diff(quiet.astype(np.int8)))
+    runs = [(a * SILENCE_FRAME, b * SILENCE_FRAME) for a, b in zip(edges[::2], edges[1::2], strict=True)]
+    return [(round(a, 3), round(b, 3)) for a, b in runs if b - a >= min_len]
+
+
+def audio_silences(video: Path, start: float, end: float) -> list[tuple[float, float]]:
+    """Pauses in the clip's audio, relative to the clip start ([] if it can't be read)."""
+    res = subprocess.run(["ffmpeg", "-v", "error", "-ss", f"{start:.3f}", "-t", f"{end - start:.3f}", "-i", str(video),
+                          "-vn", "-ac", "1", "-ar", str(SILENCE_RATE), "-f", "s16le", "-"], capture_output=True)
+    if res.returncode != 0 or not res.stdout:
+        return []
+    pcm = np.frombuffer(res.stdout, dtype="<i2").astype(np.float32) / 32768
+    return find_silences(pcm, SILENCE_RATE, settings.max_pause + 2 * settings.pause_padding)
+
+
+def _subtract(keeps: list[list[float]], gaps: list[tuple[float, float]]) -> list[list[float]]:
+    out = keeps
+    for gs, ge in gaps:
+        nxt = []
+        for s, e in out:
+            if ge <= s or gs >= e:
+                nxt.append([s, e])
+                continue
+            if gs > s:
+                nxt.append([s, gs])
+            if ge < e:
+                nxt.append([ge, e])
+        out = nxt
+    return out
+
+
+def plan_cuts(segs: list[Segment], start: float, end: float, enabled: bool | None = None,
+              silences: list[tuple[float, float]] | None = None) -> CutPlan:
+    """Keep intervals from the word timings; `silences` (clip-relative, from audio_silences) also removes pauses
+    that Whisper's timings ran over — each keeps pause_padding of air at both edges."""
     enabled = settings.jumpcut_enabled if enabled is None else enabled
     total = end - start
     words = clip_words(segs, start, end)
@@ -70,6 +126,8 @@ def plan_cuts(segs: list[Segment], start: float, end: float, enabled: bool | Non
             keeps[-1][1] = max(keeps[-1][1], e)  # short pause: keep it, merge
         else:
             keeps.append([s, e])
+    gaps = [(s + pad, e - pad) for s, e in silences or [] if e - s - 2 * pad >= max_pause]
+    keeps = _subtract(keeps, gaps)
     merged = snap_to_frames([(s, e) for s, e in keeps if e - s > 0.05], settings.output_fps, total)
 
     plan = CutPlan(keeps=merged, words=[], source_duration=total)

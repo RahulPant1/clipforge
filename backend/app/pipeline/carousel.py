@@ -3,6 +3,7 @@ import re
 from pathlib import Path
 
 from ..config import settings
+from .fonts import strip_emoji
 
 W, H = 1080, 1350
 PAD = 96
@@ -13,8 +14,6 @@ FONT_CANDIDATES = [
     "C:/Windows/Fonts/arialbd.ttf",
     "/System/Library/Fonts/Supplemental/Arial Bold.ttf",
 ]
-# libraries render colour emoji as tofu boxes with normal fonts — strip them from slide text
-_EMOJI = re.compile("[\U00010000-\U0010FFFF\u2600-\u27BF\u2B00-\u2BFF\uFE0F\u200D]")
 
 
 def _font(size: int):
@@ -27,7 +26,7 @@ def _font(size: int):
 
 
 def clean(text: str) -> str:
-    return re.sub(r"\s+", " ", _EMOJI.sub("", text or "")).strip()
+    return re.sub(r"\s+", " ", strip_emoji(text)).strip()
 
 
 def wrap(draw, text: str, font, max_w: int) -> list[str]:

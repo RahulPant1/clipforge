@@ -235,7 +235,12 @@ def select_highlights(segs: list[Segment], n: int, llm: LLM,
         for rec in items:
             clip = rec.pop("clip", None)
             if clip is not None:
-                rec["outcome"] = "kept" if id(clip) in kept else "overlap"  # lost to a higher-scored overlap
+                if id(clip) in kept:
+                    rec["outcome"] = "kept"
+                elif any(clip.start < k.end and clip.end > k.start for k in clips):
+                    rec["outcome"] = "overlap"  # lost to a higher-scored clip covering the same moment
+                else:
+                    rec["outcome"] = "ranked_out"  # fine, but more candidates than asked for and others scored higher
                 rec.update(start=clip.start, end=clip.end, score=clip.score)
         trace["clips"] = [c.model_dump(include={"start", "end", "title", "hook", "score", "keywords", "approved"})
                           for c in clips]

@@ -69,7 +69,13 @@ function ShortCard({ job, clip, busy, act, presets }) {
         </div>
         <p className="meta">
           {fmt(clip.start)}→{fmt(clip.end)} · {(clip.out_duration ?? clip.end - clip.start).toFixed(0)}s
-          {clip.cut_seconds > 0.5 && <span className="cut"> · ✂ {clip.cut_seconds.toFixed(1)}s</span>}
+          {clip.cut_seconds > 0.5 ? (
+            <span className="cut"> · ✂ {clip.cut_seconds.toFixed(1)}s</span>
+          ) : (
+            clip.file && clip.options.jumpcut !== false && (
+              <span className="muted" title="Jump cuts found no pause longer than MAX_PAUSE in this clip"> · ✂ no pauses</span>
+            )
+          )}
           {clip.reframe === 'face' && <span className="cut"> · 🎯 face</span>}
           {clip.reframe === 'split' && <span className="cut"> · 👥 2 speakers</span>}
           {clip.reframe === 'speaker' && <span className="cut"> · 🎙 follows talker</span>}

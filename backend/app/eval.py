@@ -63,7 +63,9 @@ class Variant:
 def summarize(v: Variant, picks: list[tuple[float, float]], baseline: list[tuple[float, float]] | None) -> dict:
     """Pure metrics from a variant's trace (tested without Ollama)."""
     items = v.trace.get("items", [])
-    outcomes = {k: sum(1 for i in items if i.get("outcome") == k) for k in ("kept", "overlap", "too_short", "invalid")}
+    kinds = ("kept", "overlap", "ranked_out", "too_short", "invalid")
+    outcomes = {k: sum(1 for i in items if i.get("outcome") == k) for k in kinds}
+    usable = outcomes["kept"] + outcomes["overlap"] + outcomes["ranked_out"]
     clips = v.trace.get("clips", [])
     spans = [(c["start"], c["end"]) for c in clips]
     durs = [e - s for s, e in spans]
@@ -72,7 +74,7 @@ def summarize(v: Variant, picks: list[tuple[float, float]], baseline: list[tuple
         "label": v.label, "error": v.error, "seconds": round(v.seconds, 1),
         "windows": len(wins), "windows_failed": sum(1 for w in wins if w.get("error")),
         "returned": len(items), **outcomes,
-        "usable_rate": round((outcomes["kept"] + outcomes["overlap"]) / len(items), 2) if items else 0.0,
+        "usable_rate": round(usable / len(items), 2) if items else 0.0,
         "candidates": len(clips),
         "median_s": round(statistics.median(durs), 1) if durs else 0.0,
         "min_s": round(min(durs), 1) if durs else 0.0, "max_s": round(max(durs), 1) if durs else 0.0,
@@ -87,6 +89,7 @@ def summarize(v: Variant, picks: list[tuple[float, float]], baseline: list[tuple
 
 COLUMNS = [("label", "variant"), ("seconds", "time s"), ("candidates", "cands"), ("returned", "returned"),
            ("usable_rate", "usable"), ("too_short", "too short"), ("invalid", "invalid"), ("overlap", "overlap"),
+           ("ranked_out", "ranked out"),
            ("median_s", "median s"), ("mean_score", "avg score"), ("picks_found", "your picks"),
            ("agree_baseline", "≈ baseline"), ("windows_failed", "failed chunks")]
 

@@ -64,6 +64,12 @@ class Settings(BaseSettings):
     jumpcut_enabled: bool = True
     max_pause: float = 0.4  # pauses longer than this get cut
     pause_padding: float = 0.08  # breathing room kept around each word
+    # Whisper often stretches word timings over pauses, so pauses are also found in the audio itself:
+    # 20 ms frames quieter than (speech level - SILENCE_DROP_DB); that threshold is never above SILENCE_MAX_DB.
+    # Needs room noise ~25 dB under the voice (normal for a close mic); noisier rooms: lower SILENCE_DROP_DB
+    jumpcut_audio: bool = True
+    silence_drop_db: float = 25.0
+    silence_max_db: float = -30.0
     jumpcut_crossfade_ms: float = 10.0  # audio crossfade at each cut (avoids clicks); 0 = hard cuts
     jumpcut_zoom: bool = False  # punch in on every other segment (per-clip override in the Shorts step)
     jumpcut_zoom_scale: float = 1.05  # 1.05 = 5% punch-in

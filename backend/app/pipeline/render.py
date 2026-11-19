@@ -6,7 +6,7 @@ from ..config import settings
 from ..models import Clip, Segment
 from .captions import build_ass, build_srt
 from .fonts import fontsdir_option
-from .jumpcut import audio_cut_graph, plan_cuts, video_select_expr
+from .jumpcut import audio_cut_graph, plan_cuts, video_select_expr, zoom_graph
 from .reframe import plan_reframe
 
 
@@ -31,6 +31,7 @@ def render_clip(video: Path, clip: Clip, segs: list[Segment], job_dir: Path) -> 
     jumpcut = settings.jumpcut_enabled if o.jumpcut is None else o.jumpcut
     reframe_mode = o.reframe or settings.reframe_mode
     caption_style = o.caption_style or settings.caption_style
+    zoom = settings.jumpcut_zoom if o.zoom is None else o.zoom
 
     plan = plan_cuts(segs, clip.start, clip.end, enabled=jumpcut)
     clip.cut_seconds = round(plan.removed, 2)
@@ -59,7 +60,10 @@ def render_clip(video: Path, clip: Clip, segs: list[Segment], job_dir: Path) -> 
         vf += [f"select='{video_select_expr(plan.keeps, fps)}'", f"setpts=N/{fps}/TB"]
         af = [audio_cut_graph(plan.keeps, settings.jumpcut_crossfade_ms / 1000)]
     vf += ["scale=1080:1920:force_original_aspect_ratio=decrease",
-           "pad=1080:1920:(ow-iw)/2:(oh-ih)/2", "setsar=1", subs]
+           "pad=1080:1920:(ow-iw)/2:(oh-ih)/2", "setsar=1"]
+    if zoom and af:  # punch-in on alternate segments; output time, before captions so text never zooms
+        vf.append(zoom_graph(plan.keeps, fps, settings.jumpcut_zoom_scale))
+    vf.append(subs)
 
     cmd = ["ffmpeg", "-y", "-loglevel", "error",
            "-ss", f"{clip.start:.3f}", "-t", f"{clip.duration:.3f}", "-i", str(video.resolve()),

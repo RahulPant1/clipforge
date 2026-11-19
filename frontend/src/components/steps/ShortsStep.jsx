@@ -42,6 +42,8 @@ function ShortCard({ job, clip, busy, act }) {
 
         <Seg label="Jump cuts" value={o.jumpcut ?? true} disabled={busy}
              options={[[true, 'On'], [false, 'Off']]} onChange={(v) => setOpt('jumpcut', v)} />
+        <Seg label="Zoom" value={o.zoom ?? false} disabled={busy || o.jumpcut === false}
+             options={[[false, 'Off'], [true, 'Punch-in']]} onChange={(v) => setOpt('zoom', v)} />
         <Seg label="Framing" value={o.reframe ?? 'face'} disabled={busy}
              options={[['face', 'Follow face'], ['center', 'Centre']]} onChange={(v) => setOpt('reframe', v)} />
         <Seg label="Captions" value={o.caption_style ?? 'karaoke'} disabled={busy}

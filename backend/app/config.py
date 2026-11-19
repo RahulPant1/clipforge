@@ -60,6 +60,8 @@ class Settings(BaseSettings):
     max_pause: float = 0.4  # pauses longer than this get cut
     pause_padding: float = 0.08  # breathing room kept around each word
     jumpcut_crossfade_ms: float = 10.0  # audio crossfade at each cut (avoids clicks); 0 = hard cuts
+    jumpcut_zoom: bool = False  # punch in on every other segment (per-clip override in the Shorts step)
+    jumpcut_zoom_scale: float = 1.05  # 1.05 = 5% punch-in
     filler_words: set[str] = {"um", "umm", "uh", "uhh", "uhm", "erm", "er", "ah", "hmm", "mm", "mhm"}
 
     # Render

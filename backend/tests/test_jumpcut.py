@@ -6,7 +6,14 @@ import pytest
 
 from app.config import settings
 from app.models import Segment, Word
-from app.pipeline.jumpcut import audio_cut_graph, is_filler, plan_cuts, snap_to_frames, video_select_expr
+from app.pipeline.jumpcut import (
+    audio_cut_graph,
+    is_filler,
+    plan_cuts,
+    snap_to_frames,
+    video_select_expr,
+    zoom_graph,
+)
 
 
 def _segs(words):
@@ -127,5 +134,22 @@ def test_crossfade_removes_clicks_and_keeps_length():
     assert max_step(soft) < 1.5 * smooth
 
 
+def test_zoom_graph_punches_in_on_odd_segments_in_output_time():
+    keeps = [(0.0, 1.0), (2.0, 2.5), (4.0, 5.0), (6.0, 6.2)]  # 30, 15, 30, 6 frames at 30 fps
+    g = zoom_graph(keeps, 30, 1.05)
+    assert g.startswith("split[zm][zs];[zs]scale=1134:2016,crop=1080:1920[zz];[zm][zz]overlay=enable='")
+    h = 0.5 / 30
+    spans = g.split("enable='")[1].rstrip("'").split("+")
+    # segment 1 = output frames 30..45, segment 3 = 75..81 (source gaps don't count)
+    assert spans == [f"between(t,{30 / 30 - h:.6f},{45 / 30 - h:.6f})",
+                     f"between(t,{75 / 30 - h:.6f},{81 / 30 - h:.6f})"]
+
+
+def test_zoom_graph_off_without_cuts_or_scale():
+    assert zoom_graph([(0.0, 3.0)], 30, 1.05) == ""
+    assert zoom_graph([(0.0, 1.0), (2.0, 3.0)], 30, 1.0) == ""
+
+
 def test_settings_default_on():
     assert settings.jumpcut_enabled is True and settings.max_pause < 1
+    assert settings.jumpcut_zoom is False  # punch-in is opt-in

@@ -20,7 +20,7 @@ YouTube URL / file
 | **1 Source** | Paste a YouTube link or upload. Pick *Review each step* (default) or *Fully automatic*. If it fails: fix the cause, then **↻ Retry** |
 | **2 Transcript** | Read/search the transcript, click timestamps to play, mark start/end to **add your own clip** |
 | **3 Pick clips** | Gemma gives 2× the clips you asked for. Watch each, **trim with ±1s/±0.2s**, fix title/hook/keywords, **approve** → *Create shorts & posts* |
-| **4 Shorts** | Watch the vertical shorts. Toggle jump cuts / face-follow / caption style per short → **re-render just that one** |
+| **4 Shorts** | Watch the vertical shorts. Toggle jump cuts / punch-in zoom / face-follow / caption style per short → **re-render just that one** |
 | **5 Posts** | Per-platform tabs. Edit copy inline (X threads post-by-post with 280 counters), 🎲 **New angle**, mark **Approved** |
 | **6 Publish** | Checklist of every short × platform: copy, post, click to mark **posted**. Download the full pack |
 
@@ -31,7 +31,7 @@ YouTube URL / file
 - Cuts snapped to sentence boundaries, overlaps removed, clips capped at 59 s (Content ID safe zone)
 - **Face tracking:** crop follows the speaker like a camera operator — steady when they're still,
   smooth pans when they move, instant snap on camera cuts; centre crop fallback
-- **Jump cuts:** pauses > 0.4 s and filler words ("um", "uh") removed automatically using word timestamps, with a 10 ms audio crossfade at every cut so there are no clicks
+- **Jump cuts:** pauses > 0.4 s and filler words ("um", "uh") removed automatically using word timestamps, with a 10 ms audio crossfade at every cut so there are no clicks; optional 5% punch-in zoom on every other segment so cuts feel intentional
 - **Animated captions:** active word pops in yellow, Gemma-picked keywords and numbers in green
 - Vertical 1080×1920 render + thumbnails + `.srt` export for YouTube upload
 - **Content Studio:** for every short, Gemma writes platform-native posts —
@@ -82,6 +82,8 @@ Copy `backend/.env.example` → `backend/.env`. Key options:
 | `JUMPCUT_ENABLED` | `true` | Remove silences + filler words |
 | `MAX_PAUSE` | `0.4` | Pauses longer than this (s) are cut |
 | `JUMPCUT_CROSSFADE_MS` | `10` | Audio crossfade at each cut (avoids clicks); `0` = hard cuts |
+| `JUMPCUT_ZOOM` | `false` | Punch in on every other jump-cut segment (per-short toggle in the UI) |
+| `JUMPCUT_ZOOM_SCALE` | `1.05` | How far to punch in (1.05 = 5%) |
 | `REFRAME_MODE` | `face` | `face` (track speaker) or `center` |
 | `FACE_SMOOTHING` | `0.35` | Higher = faster camera pans |
 | `FACE_DEADZONE` | `0.05` | Ignore small head moves (fraction of width) |

@@ -72,6 +72,39 @@ def test_jumpcut_shortens_output_and_keeps_av_in_sync(tmp_path, monkeypatch):
     assert abs(v - a) < 0.15, diag
 
 
+def _frame(path, t: float) -> bytes:
+    """One 108x192 grayscale frame at output time t."""
+    return subprocess.run(["ffmpeg", "-v", "error", "-ss", f"{t:.3f}", "-i", str(path), "-frames:v", "1",
+                           "-vf", "scale=108:192,format=gray", "-f", "rawvideo", "-"],
+                          capture_output=True, check=True).stdout
+
+
+def _diff(a: bytes, b: bytes) -> float:
+    return sum(abs(x - y) for x, y in zip(a, b, strict=True)) / len(a)
+
+
+@needs_ffmpeg
+def test_zoom_punches_in_on_alternate_segments_only(tmp_path, monkeypatch):
+    from app.models import RenderOptions
+
+    monkeypatch.setattr(settings, "reframe_mode", "center")
+    words = [Word(start=1.0, end=1.5, word=" hello"), Word(start=1.6, end=2.0, word=" there"),
+             Word(start=8.0, end=8.5, word=" big"), Word(start=8.6, end=9.0, word=" news")]
+    segs = [Segment(start=1.0, end=9.0, text="", words=words)]
+    video = _video(tmp_path, 12)
+    outs = {}
+    for zoom in (False, True):
+        d = tmp_path / str(zoom)
+        d.mkdir()
+        clip = Clip(index=1, start=0.0, end=10.0, title="t", hook="h", score=5, options=RenderOptions(zoom=zoom))
+        outs[zoom] = d / render_clip(video, clip, segs, d)
+    # keeps ~[0.92, 2.08] and [7.92, 9.08] -> segment 0 plays 0-1.17 s, segment 1 (zoomed) 1.17-2.33 s
+    first, second = 0.5, 1.8
+    assert _diff(_frame(outs[False], first), _frame(outs[True], first)) < 1  # untouched (measured 0.02)
+    assert _diff(_frame(outs[False], second), _frame(outs[True], second)) > 3  # zoomed (measured ~5)
+    assert abs(float(_probe(outs[True], "format=duration")) - float(_probe(outs[False], "format=duration"))) < 0.05
+
+
 class _FaceRight:
     def detect(self, img):
         return [(0.85, 0.03, 0.99)]

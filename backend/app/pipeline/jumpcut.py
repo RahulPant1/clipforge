@@ -152,3 +152,25 @@ def audio_cut_graph(keeps: list[tuple[float, float]], crossfade: float = 0.0) ->
         parts.append(f"[{prev}][b{i}]{join}{out}")
         prev = f"c{i}"
     return ";".join(parts)
+
+
+def zoom_graph(keeps: list[tuple[float, float]], fps: int, scale: float, size: tuple[int, int] = (1080, 1920)) -> str:
+    """-vf fragment punching in by `scale` (e.g. 1.05) on every other segment, so cuts read as intentional.
+
+    Runs on the finished canvas AFTER select+setpts (OUTPUT time) and BEFORE captions (they never zoom).
+    A zoomed copy (scale up, centre crop) is overlaid only while an odd segment plays; its bounds are the
+    output frames of each segment, offset half a frame like video_select_expr, so it switches exactly on the cut.
+    """
+    if len(keeps) < 2 or scale <= 1.0:
+        return ""
+    w, h = size
+    zw, zh = (2 * round(v * scale / 2) for v in size)  # even dims for yuv420
+    half = 0.5 / fps
+    frame, spans = 0, []
+    for i, (s, e) in enumerate(keeps):
+        n = round((e - s) * fps)
+        if i % 2:
+            spans.append(f"between(t,{frame / fps - half:.6f},{(frame + n) / fps - half:.6f})")
+        frame += n
+    return (f"split[zm][zs];[zs]scale={zw}:{zh},crop={w}:{h}[zz];"
+            f"[zm][zz]overlay=enable='{'+'.join(spans)}'")

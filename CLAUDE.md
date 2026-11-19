@@ -93,6 +93,8 @@ done: PATCH clip options → stale → POST /clips/{i}/render ; PATCH/POST posts
   `d` from the removed gap after each keep, so output length and A/V sync are unchanged. **Never use `aselect`**: it is a
   silent no-op in FFmpeg 8.0/8.0.1 (Ubuntu 26.04), leaving audio uncut and out of sync. Guarded by
   test_jumpcut_shortens_output_and_keeps_av_in_sync — verified on FFmpeg 4.4, 8.0, 8.0.1, 8.1 and 9.0.
+- Punch-in zoom (`zoom_graph`) runs AFTER select+setpts and scale/pad (output time, enable bounds from each keep's
+  frame count) and BEFORE captions, so text never zooms. Only applied when there are cuts.
 - **Reframe runs BEFORE jump-cut select** in the filter chain, so its keyframes are source-relative
   (clip.start = 0). If you move it after select, keyframes must be remapped with CutPlan.remap().
 - YuNet model downloads once to data/models from media.githubusercontent.com (github.com/raw gives an
@@ -147,8 +149,8 @@ done: PATCH clip options → stale → POST /clips/{i}/render ; PATCH/POST posts
       - UI: delete disabled while busy, long errors wrap/clamp, failed stage marked ✕, Publish fits phone width
 
 ## Roadmap (pick up here)
-0. [~] Jump-cut polish: [x] 10 ms audio crossfades at cut points (`JUMPCUT_CROSSFADE_MS`);
-       [ ] optional subtle zoom (105%) on alternate segments so jump cuts feel intentional.
+0. [x] Jump-cut polish: 10 ms audio crossfades at cut points (`JUMPCUT_CROSSFADE_MS`); optional 5% punch-in
+       on alternate segments (`JUMPCUT_ZOOM` / per-clip `options.zoom`, `zoom_graph`).
 1. [ ] **Two-speaker layouts** — when 2 faces persist (podcast), stack them top/bottom (two crops + vstack),
        or follow the ACTIVE speaker (mouth movement / audio energy per face side).
 1b.[ ] Reframe "lead room": offset crop slightly in the direction the speaker faces / moves.

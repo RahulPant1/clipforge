@@ -61,6 +61,7 @@ class RenderOptions(BaseModel):
     jumpcut: bool | None = None
     reframe: str | None = None  # face | center
     caption_style: str | None = None  # karaoke | simple
+    zoom: bool | None = None  # punch-in on alternate jump-cut segments
 
 
 class Clip(BaseModel):

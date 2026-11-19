@@ -31,7 +31,8 @@ backend/                FastAPI + pipeline (Python 3.11, conda env "clipforge")
     fonts.py            makes CAPTION_FONT real for libass: system font, else copied once from Windows fonts
                         into data/fonts (passed as fontsdir=); warns instead of silently substituting
     reframe.py          face tracking: sample faces (YuNet, Haar fallback) → smooth (deadzone, snap on cuts)
-                        → per-frame crop x → ffmpeg sendcmd file driving `crop@track`
+                        → per-frame crop x → ffmpeg sendcmd file driving `crop@track`.
+                        two_speakers() → split_panels(): static 9:8 crop per speaker, split+vstack ("split" mode)
     content.py          Content Studio: ANGLES (creative styles per platform), RULES, SCHEMAS, PROMPT,
                         assemblers enforcing platform limits, generate_post/generate_all, posts.md writer
     history.py          variety engine: least-recently-used angle rotation + recent openers to avoid
@@ -99,6 +100,8 @@ done: PATCH clip options → stale → POST /clips/{i}/render ; PATCH/POST posts
   (`burned_in()` in edit_clip); title doesn't.
 - Selection changes: run `python -m app.eval <job>` before/after and compare (select_highlights takes
   `prompt=`, `think=` and fills `trace=`; prepare() writes the trace to candidates.json).
+- Two-speaker "split": captions (`build_ass(middle=)` / `_simple_style(middle)`) sit on the seam (y=960) and the
+  hook card is bottom-anchored just above it (`build_hook_ass(seam=)`), so neither covers a face.
 - Punch-in zoom (`zoom_graph`) runs AFTER select+setpts and scale/pad (output time, enable bounds from each keep's
   frame count) and BEFORE captions, so text never zooms. Only applied when there are cuts.
 - **Reframe runs BEFORE jump-cut select** in the filter chain, so its keyframes are source-relative
@@ -157,8 +160,10 @@ done: PATCH clip options → stale → POST /clips/{i}/render ; PATCH/POST posts
 ## Roadmap (pick up here)
 0. [x] Jump-cut polish: 10 ms audio crossfades at cut points (`JUMPCUT_CROSSFADE_MS`); optional 5% punch-in
        on alternate segments (`JUMPCUT_ZOOM` / per-clip `options.zoom`, `zoom_graph`).
-1. [ ] **Two-speaker layouts** — when 2 faces persist (podcast), stack them top/bottom (two crops + vstack),
-       or follow the ACTIVE speaker (mouth movement / audio energy per face side).
+1. [~] **Two-speaker layouts** — [x] stacked: REFRAME_MODE=auto (default) splits when 2 far-apart faces are in
+       ≥60% of samples (static crops, left person on top; captions + hook card move to the seam).
+       [ ] follow the ACTIVE speaker (mouth movement / audio energy per face side); [ ] per-speaker tracking
+       for moving cameras / shots that alternate between a two-shot and close-ups (those fall back to face).
 1b.[ ] Reframe "lead room": offset crop slightly in the direction the speaker faces / moves.
 2. [x] **Hook overlay** — `clip.hook` as a boxed title card for the first `HOOK_SECONDS` (own `short_N.hook.ass`,
        burned in after captions; per-clip `options.hook`).

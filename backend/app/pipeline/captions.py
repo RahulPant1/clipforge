@@ -63,8 +63,10 @@ def keyword_set(keywords: list[str], words: list[Word]) -> set[str]:
     return ks | {norm(w.word) for w in words if re.search(r"\d|%|₹|\$", w.word)}
 
 
-def _ass_header() -> str:
+def _ass_header(middle: bool = False) -> str:
+    """middle=True centres captions on the canvas (two-speaker stack: the seam between the panels)."""
     s = settings
+    align, margin_v = (5, 0) if middle else (2, s.caption_margin_v)
     return f"""[Script Info]
 ScriptType: v4.00+
 PlayResX: 1080
@@ -77,7 +79,7 @@ Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour,
 Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, \
 Alignment, MarginL, MarginR, MarginV, Encoding
 Style: Default,{s.caption_font},{s.caption_size},{s.caption_color},{s.caption_color},&H00000000,&H96000000,\
--1,0,0,0,100,100,0,0,1,7,3,2,60,60,{s.caption_margin_v},1
+-1,0,0,0,100,100,0,0,1,7,3,{align},60,60,{margin_v},1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -105,7 +107,7 @@ def _line(chunk: Chunk, active: int, keywords: set[str], pop: bool) -> str:
     return " ".join(parts)
 
 
-def build_ass(words: list[Word], keywords: list[str], n: int | None = None) -> str:
+def build_ass(words: list[Word], keywords: list[str], n: int | None = None, middle: bool = False) -> str:
     ks = keyword_set(keywords, words)
     chunks = chunk_words(words, n)
     events: list[list] = []  # [start, end, text]
@@ -119,7 +121,7 @@ def build_ass(words: list[Word], keywords: list[str], n: int | None = None) -> s
         if 0 < nxt[0] - cur[1] < 0.6:
             cur[1] = nxt[0]
     body = "\n".join(f"Dialogue: 0,{ts_ass(s)},{ts_ass(e)},Default,,0,0,0,,{t}" for s, e, t in events)
-    return _ass_header() + body + "\n"
+    return _ass_header(middle) + body + "\n"
 
 
 # ---------------------------------------------------------------- hook title (first seconds)
@@ -129,12 +131,18 @@ def hook_text(hook: str) -> str:
     return re.sub(r"\s+", " ", re.sub(r"[{}\\]", "", hook)).strip()
 
 
-def build_hook_ass(hook: str, duration: float) -> str:
+SEAM_HOOK_MARGIN_V = 1040  # card's bottom edge just above seam captions (centred at y=960)
+
+
+def build_hook_ass(hook: str, duration: float, seam: bool = False) -> str:
     """Big title card for the first `hook_seconds` of the short (own file, so it works with either caption style).
 
     Top of the frame (captions live at the bottom), boxed text that pops in and fades out. Empty hook -> "".
+    seam=True (two-speaker stack): the top would cover the upper speaker's face, so the card sits on that
+    speaker's chest instead, bottom edge just above the captions on the seam.
     """
     s = settings
+    align, margin_v = (2, SEAM_HOOK_MARGIN_V) if seam else (8, s.hook_margin_v)
     text = hook_text(hook)
     end = min(s.hook_seconds, duration)
     if not text or end <= 0.3:
@@ -152,7 +160,7 @@ Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour,
 Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, \
 Alignment, MarginL, MarginR, MarginV, Encoding
 Style: Hook,{s.caption_font},{s.hook_size},{s.hook_color},{s.hook_color},{s.hook_box_color},&H00000000,\
--1,0,0,0,100,100,0,0,3,18,0,8,110,110,{s.hook_margin_v},1
+-1,0,0,0,100,100,0,0,3,18,0,{align},110,110,{margin_v},1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text

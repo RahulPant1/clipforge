@@ -144,6 +144,39 @@ def test_render_with_face_tracking_sendcmd(tmp_path, segs, monkeypatch):
     assert _probe(tmp_path / "short_1.mp4", "stream=width,height").splitlines()[0] == "1080,1920"
 
 
+class _TwoFaces:
+    def detect(self, img):
+        return [(0.25, 0.03, 0.95, 0.4, 0.2), (0.75, 0.03, 0.95, 0.45, 0.2)]
+
+
+@needs_ffmpeg
+@pytest.mark.parametrize("style", ["karaoke", "simple"])
+def test_render_two_speakers_stacked_with_captions_on_the_seam(tmp_path, segs, monkeypatch, style):
+    pytest.importorskip("cv2")
+    from app.pipeline import reframe
+
+    monkeypatch.setattr(settings, "reframe_mode", "auto")
+    monkeypatch.setattr(settings, "caption_style", style)
+    monkeypatch.setattr(reframe, "_detector", _TwoFaces())
+    video = _video(tmp_path, 12)
+    clip = Clip(index=1, start=0.0, end=10.0, title="t", hook="h", score=7)
+    cmds: list[list[str]] = []
+    from app.pipeline import render as render_mod
+    real_run = render_mod.subprocess.run
+    monkeypatch.setattr(render_mod.subprocess, "run", lambda cmd, **kw: cmds.append(cmd) or real_run(cmd, **kw))
+    render_clip(video, clip, segs, tmp_path)
+    assert clip.reframe == "split" and not (tmp_path / "short_1.crop.cmd").exists()
+    assert _probe(tmp_path / "short_1.mp4", "stream=width,height").splitlines()[0] == "1080,1920"
+    vf = next(c for c in cmds if c[0] == "ffmpeg" and "-vf" in c)
+    vf = vf[vf.index("-vf") + 1]
+    assert "vstack" in vf
+    if style == "karaoke":
+        style_line = next(x for x in (tmp_path / "short_1.ass").read_text().splitlines() if x.startswith("Style:"))
+        assert style_line.split(",")[18:22] == ["5", "60", "60", "0"]  # middle-centre, no bottom margin
+    else:
+        assert "Alignment=5" in vf
+
+
 def test_cuda_preload_never_breaks_transcription(tmp_path, monkeypatch, caplog):
     """No GPU needed: a missing wheel or unloadable .so must log and fall back (to LD_LIBRARY_PATH), not raise."""
     import logging

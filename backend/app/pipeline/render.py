@@ -16,9 +16,10 @@ def _encoder_args() -> list[str]:
     return ["-c:v", settings.encoder, "-preset", "veryfast", "-crf", "21"]
 
 
-def _simple_style() -> str:
+def _simple_style(middle: bool = False) -> str:
+    place = "Alignment=5,MarginV=0" if middle else "Alignment=2,MarginV=70"
     return (f"FontName={settings.caption_font},FontSize=16,Bold=1,PrimaryColour=&H00FFFFFF,"
-            "OutlineColour=&H00000000,BorderStyle=1,Outline=3,Shadow=0,Alignment=2,MarginV=70")
+            f"OutlineColour=&H00000000,BorderStyle=1,Outline=3,Shadow=0,{place}")
 
 
 def render_clip(video: Path, clip: Clip, segs: list[Segment], job_dir: Path) -> str:
@@ -39,11 +40,6 @@ def render_clip(video: Path, clip: Clip, segs: list[Segment], job_dir: Path) -> 
     clip.out_duration = round(plan.duration, 2)
 
     (job_dir / f"{name}.srt").write_text(build_srt(plan.words), encoding="utf-8")  # for YouTube upload
-    if caption_style == "karaoke":
-        (job_dir / f"{name}.ass").write_text(build_ass(plan.words, clip.keywords), encoding="utf-8")
-        subs = f"ass={name}.ass{fontsdir_option(settings.caption_font)}"
-    else:
-        subs = f"subtitles={name}.srt:force_style='{_simple_style()}'{fontsdir_option(settings.caption_font)}"
 
     # Speaker-following crop (runs before jump-cut select, so it works in source-relative time)
     rf = plan_reframe(video, clip.start, clip.end, mode=reframe_mode)
@@ -52,6 +48,13 @@ def render_clip(video: Path, clip: Clip, segs: list[Segment], job_dir: Path) -> 
     if rf.mode == "face":
         cmd_file = f"{name}.crop.cmd"
         (job_dir / cmd_file).write_text(rf.sendcmd(), encoding="utf-8")
+
+    middle = rf.mode == "split"  # stacked speakers: captions on the seam, not over the bottom face
+    if caption_style == "karaoke":
+        (job_dir / f"{name}.ass").write_text(build_ass(plan.words, clip.keywords, middle=middle), encoding="utf-8")
+        subs = f"ass={name}.ass{fontsdir_option(settings.caption_font)}"
+    else:
+        subs = f"subtitles={name}.srt:force_style='{_simple_style(middle)}'{fontsdir_option(settings.caption_font)}"
 
     fps = settings.output_fps
     vf = [f"fps={fps}", *rf.filters(cmd_file)]
@@ -65,7 +68,7 @@ def render_clip(video: Path, clip: Clip, segs: list[Segment], job_dir: Path) -> 
     if zoom and af:  # punch-in on alternate segments; output time, before captions so text never zooms
         vf.append(zoom_graph(plan.keeps, fps, settings.jumpcut_zoom_scale))
     vf.append(subs)
-    hook_ass = build_hook_ass(clip.hook, plan.duration) if hook else ""
+    hook_ass = build_hook_ass(clip.hook, plan.duration, seam=middle) if hook else ""
     if hook_ass:  # last, so the title card sits above captions (and never zooms)
         (job_dir / f"{name}.hook.ass").write_text(hook_ass, encoding="utf-8")
         vf.append(f"ass={name}.hook.ass{fontsdir_option(settings.caption_font)}")

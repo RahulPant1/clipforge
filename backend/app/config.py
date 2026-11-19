@@ -69,11 +69,13 @@ class Settings(BaseSettings):
     output_fps: int = 30
 
     # Reframe (speaker-following crop)
-    reframe_mode: str = "face"  # face | center
+    reframe_mode: str = "auto"  # auto (split for two speakers, else face) | face | split | center
     face_sample_fps: float = 5  # detections per second
     face_deadzone: float = 0.05  # ignore face moves smaller than this (fraction of frame width)
     face_smoothing: float = 0.35  # 0..1 per sample; higher = faster pans
     face_min_coverage: float = 0.3  # need faces in >=30% of samples, else centre crop
+    two_speaker_min_share: float = 0.6  # auto: two faces in >=60% of samples -> stacked two-speaker layout
+    split_face_height: float = 0.3  # stacked layout: face height as a share of its 960 px panel
     scene_cut_threshold: float = 0.5  # histogram correlation below this = camera cut (snap, no pan)
 
     # Captions

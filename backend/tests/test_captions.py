@@ -71,3 +71,8 @@ def test_hook_title_card(monkeypatch):
 def test_hook_title_card_fits_short_clips_and_skips_empty():
     assert ",0:00:02.00,Hook," in build_hook_ass("Big claim", duration=2.0)
     assert build_hook_ass("   ", duration=30) == "" and build_hook_ass("Hi", duration=0.2) == ""
+
+
+def test_hook_card_moves_above_the_seam_for_two_speakers():
+    style = next(x for x in build_hook_ass("Big claim", 30, seam=True).splitlines() if x.startswith("Style: Hook,"))
+    assert style.split(",")[18:22] == ["2", "110", "110", "1040"]  # bottom-anchored, ends above y=880

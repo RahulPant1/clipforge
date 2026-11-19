@@ -280,3 +280,97 @@ def test_plan_reframe_speaker_mode_follows_the_talker(tmp_path, monkeypatch):
     assert plan_reframe(video, 0, 6, detector=TwoTalkers()).mode == "split"
     monkeypatch.setattr(settings, "two_speaker_layout", "speaker")
     assert plan_reframe(video, 0, 6, detector=TwoTalkers()).mode == "speaker"
+
+
+# ------------------------------------------------------------------ lead room
+
+def L(t, cx, look=None, cut=False):
+    return Sample(t, cx, cut, look=look)
+
+
+def test_head_turn_sign_and_clamp():
+    from app.pipeline.reframe import head_turn
+
+    assert head_turn(100, 140, 120) == 0  # nose between the eyes: frontal
+    assert head_turn(100, 140, 132) == pytest.approx(0.3)  # nose toward image-right
+    assert head_turn(140, 100, 108) == pytest.approx(-0.3)  # eye order doesn't matter
+    assert head_turn(100, 100.0001, 300) == 0 and head_turn(100, 110, 400) == 1.0
+
+
+def test_lead_follows_a_sustained_turn_but_not_a_glance():
+    from app.pipeline.reframe import lead_directions
+
+    # frontal 0-2 s, turned left 2-8 s with a 0.6 s glance back at the camera at 5 s, frontal again 8-12 s
+    def look(t):
+        return -0.3 if 2 <= t < 8 and not 5 <= t < 5.6 else 0.0
+
+    s = [L(i / 5, 0.5, look(i / 5)) for i in range(60)]
+    d = dict(zip([x.t for x in s], lead_directions(s, window=1.0, hold=2.0), strict=True))
+    assert d[0.0] == 0 and d[3.0] == -1 and d[5.2] == -1 and d[7.0] == -1 and d[10.0] == 0
+    assert set(d.values()) <= {-1.0, 0.0, 1.0}
+    # unknown look (Haar) and a still face: no lead room at all
+    assert set(lead_directions([L(i / 5, 0.5) for i in range(30)])) == {0.0}
+
+
+def test_lead_toward_where_the_face_moves():
+    from app.pipeline.reframe import lead_directions
+
+    walking = [L(i / 5, 0.3 + 0.15 * i / 5) for i in range(30)]  # 0.15 frame widths/s to the right
+    assert lead_directions(walking, window=1.5, hold=1.0)[15] == 1
+    swaying = [L(i / 5, 0.5 + (0.01 if i % 4 < 2 else -0.01)) for i in range(30)]
+    assert set(lead_directions(swaying, window=1.5, hold=1.0)) == {0.0}
+
+
+def test_smooth_adds_lead_room_and_pans_gently_even_inside_the_deadzone():
+    s = [L(i / 5, 0.5, 0.3 if i >= 20 else 0.0) for i in range(50)]
+    out = smooth(s, deadzone=0.05, alpha=0.35, lead=0.04)  # 0.04 < deadzone: would never move otherwise
+    xs = [o.cx for o in out]
+    assert xs[0] == 0.5 and xs[-1] == pytest.approx(0.54, abs=1e-3)  # crop centre right of the face
+    assert all(b >= a for a, b in zip(xs, xs[1:], strict=False)) and xs[22] < 0.54  # eased, not a jump
+    assert [o.cx for o in smooth(s, deadzone=0.05, alpha=0.35)] == [0.5] * 50  # lead=0: unchanged
+    cut = smooth([L(0, 0.5, 0.0), L(0.2, 0.5, 0.0), L(0.4, 0.5, -0.4, cut=True), L(0.6, 0.5, -0.4)],
+                 alpha=0.35, lead=0.04)
+    assert cut[2].cx == pytest.approx(0.46)  # a new shot starts with its lead room, no pan
+
+
+def test_split_panels_lead_room_never_pulls_in_the_other_face():
+    from app.pipeline.reframe import Speaker
+
+    plain = split_panels(Speaker(0.25, 0.4, 0.2), Speaker(0.75, 0.45, 0.2), 1920, 1080, lead=0)
+    lead = split_panels(Speaker(0.25, 0.4, 0.2, look=0.4), Speaker(0.75, 0.45, 0.2, look=-0.4), 1920, 1080,
+                        lead=0.15)
+    (w, _, x0, _), (_, _, x1, _) = plain
+    assert abs(lead[0][2] - (x0 + 0.15 * w)) <= 2 and abs(lead[1][2] - (x1 - 0.15 * w)) <= 2  # toward each other
+    # close together: lead room stops 0.6 face heights short of the other face's centre
+    (w, _, x0, _), (_, _, x1, _) = split_panels(Speaker(0.35, 0.4, 0.3, look=0.4), Speaker(0.65, 0.4, 0.3, look=-0.4),
+                                                1920, 1080, lead=0.3)
+    assert x0 + w <= 0.65 * 1920 - 0.6 * 0.3 * 1080 + 1 and x1 >= 0.35 * 1920 + 0.6 * 0.3 * 1080 - 1
+    # big faces: no room to lead at all, panels stay centred on each face
+    big = split_panels(Speaker(0.35, 0.4, 0.45, look=0.4), Speaker(0.65, 0.4, 0.45, look=-0.4), 1920, 1080, lead=0.15)
+    assert big == split_panels(Speaker(0.35, 0.4, 0.45), Speaker(0.65, 0.4, 0.45), 1920, 1080, lead=0)
+
+
+def test_active_speaker_shot_gets_lead_room():
+    from app.pipeline.reframe import Speaker
+
+    left, right = Speaker(0.25, 0.4, 0.2, look=0.4), Speaker(0.75, 0.4, 0.2, look=0.0)
+    s = _talk_samples(lambda t: 0 if t < 4 else 1)
+    path = active_speaker_path(s, speaker_activity(s, left, right), left, right, lead=0.05)
+    assert path[0].cx == pytest.approx(0.30) and path[-1].cx == pytest.approx(0.75)  # frontal: none
+
+
+class LookingFace:
+    def detect(self, img):  # one face at 0.5 turned toward image-right
+        return [(0.5, 0.03, 0.99, 0.4, 0.2, 0.4)]
+
+
+@pytest.mark.skipif(not shutil.which("ffmpeg"), reason="ffmpeg not installed")
+def test_plan_reframe_face_with_lead_room(tmp_path, monkeypatch):
+    from app.config import settings
+
+    land = _video(tmp_path, "1280x720")
+    monkeypatch.setattr(settings, "reframe_lead", 0.0)
+    assert plan_reframe(land, 0, 3, detector=LookingFace(), mode="face").keyframes == [(0.0, 438)]  # 640 - 202
+    monkeypatch.setattr(settings, "reframe_lead", 0.15)
+    keys = plan_reframe(land, 0, 3, detector=LookingFace(), mode="face").keyframes
+    assert keys[0][1] == 438 + round(0.15 * 404)  # crop shifted right: space in front of the face

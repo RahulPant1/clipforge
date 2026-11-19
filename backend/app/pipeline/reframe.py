@@ -3,6 +3,7 @@
 1. sample frames (~5/s) inside the clip and detect faces (OpenCV YuNet, Haar fallback)
 2. pick the main face (big + confident, sticky to the previous one so it doesn't flip between people)
 3. smooth: ignore small moves (deadzone), ease toward big moves, SNAP on camera cuts
+   + lead room: shift the crop toward where the face looks / moves (YuNet eye+nose landmarks, track slope)
 4. emit an ffmpeg `sendcmd` file that moves `crop@track`'s x per frame
 
 Two-speaker shots (podcast: two faces too far apart for one 9:16 crop, on screen most of the clip) get a
@@ -25,8 +26,9 @@ YUNET_URL = ("https://media.githubusercontent.com/media/opencv/opencv_zoo/main/m
 DETECT_WIDTH = 640
 
 
-# A detected face: (cx, area, score[, cy, fh]) — centre x 0..1 of width, area 0..1 of frame, confidence,
-# centre y 0..1 of height, face height 0..1 of frame height (cy/fh optional for simple/fake detectors).
+# A detected face: (cx, area, score[, cy, fh[, look]]) — centre x 0..1 of width, area 0..1 of frame, confidence,
+# centre y 0..1 of height, face height 0..1 of frame height (cy/fh optional for simple/fake detectors),
+# look = head turn from landmarks, (nose x − eye-midpoint x) / eye distance: 0 frontal, + turned to image-right.
 Face = tuple
 
 
@@ -37,6 +39,7 @@ class Sample:
     cut: bool = False  # camera/scene change since previous sample
     faces: list[Face] = field(default_factory=list)  # every face seen (two-speaker detection)
     patches: list = field(default_factory=list)  # per face: (mouth, eyes) small grey arrays, or None
+    look: float | None = None  # the picked face's head turn (see Face); None = unknown (Haar, no face)
 
 
 @dataclass
@@ -44,6 +47,7 @@ class Speaker:
     cx: float  # 0..1 of width
     cy: float  # 0..1 of height
     fh: float  # face height, 0..1 of frame height
+    look: float = 0.0  # median head turn over the clip (see Face)
 
 
 PANEL_W, PANEL_H = 1080, 960  # two panels stacked = the 1080x1920 canvas
@@ -119,11 +123,20 @@ class FaceDetector:
             _, faces = self.yunet.detect(img)
             if faces is None:
                 return []
-            return [((f[0] + f[2] / 2) / w, (f[2] * f[3]) / (w * h), float(f[-1]), (f[1] + f[3] / 2) / h, f[3] / h)
-                    for f in faces]
+            # row: x, y, w, h, right eye xy, left eye xy, nose xy, mouth corners xy ×2, score
+            return [((f[0] + f[2] / 2) / w, (f[2] * f[3]) / (w * h), float(f[-1]), (f[1] + f[3] / 2) / h, f[3] / h,
+                     head_turn(f[4], f[6], f[8])) for f in faces]
         gray = self.cv2.cvtColor(img, self.cv2.COLOR_BGR2GRAY)
         rects = self.haar.detectMultiScale(gray, 1.1, 6, minSize=(max(24, w // 25),) * 2)
         return [((x + fw / 2) / w, (fw * fh) / (w * h), 1.0, (y + fh / 2) / h, fh / h) for x, y, fw, fh in rects]
+
+
+def head_turn(eye_a_x: float, eye_b_x: float, nose_x: float) -> float:
+    """Nose offset from the eye midpoint in eye distances, −1..1: + = face turned toward image-right."""
+    dist = abs(eye_b_x - eye_a_x)
+    if dist < 1e-3:
+        return 0.0
+    return float(max(-1.0, min(1.0, (nose_x - (eye_a_x + eye_b_x) / 2) / dist)))
 
 
 def pick_face(faces: list[tuple[float, float, float]], prev: float | None) -> float | None:
@@ -172,8 +185,9 @@ def sample_faces(video: Path, start: float, end: float,
             cx = pick_face(faces, None if cut else prev_cx)
             prev_cx = cx if cx is not None else prev_cx
             gray = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
+            look = next((float(f[5]) for f in faces if f[0] == cx and len(f) > 5), None)
             samples.append(Sample(t=max(t, 0.0), cx=cx, cut=cut, faces=list(faces),
-                                  patches=[face_patches(gray, f) for f in faces]))
+                                  patches=[face_patches(gray, f) for f in faces], look=look))
         idx += 1
     cap.release()
     return samples, src_w, src_h
@@ -228,7 +242,7 @@ def patch_change(cur, prev) -> float:
 def _speaker(f: Face) -> Speaker:
     cy = f[3] if len(f) > 3 else 0.4
     fh = f[4] if len(f) > 4 else max(f[1], 0.0) ** 0.5 * 1.3  # area -> rough height for 3-tuple detectors
-    return Speaker(cx=f[0], cy=cy, fh=fh)
+    return Speaker(cx=f[0], cy=cy, fh=fh, look=float(f[5]) if len(f) > 5 else 0.0)
 
 
 def two_speakers(samples: list[Sample], crop_frac: float,
@@ -258,13 +272,16 @@ def two_speakers(samples: list[Sample], crop_frac: float,
     def med(xs: list[Speaker]) -> Speaker:
         def m(v):
             return sorted(v)[len(v) // 2]
-        return Speaker(cx=m([x.cx for x in xs]), cy=m([x.cy for x in xs]), fh=m([x.fh for x in xs]))
+        return Speaker(cx=m([x.cx for x in xs]), cy=m([x.cy for x in xs]), fh=m([x.fh for x in xs]),
+                       look=m([x.look for x in xs]))
 
     return med(lefts), med(rights)
 
 
-def split_panels(left: Speaker, right: Speaker, src_w: int, src_h: int) -> list[tuple[int, int, int, int]]:
-    """One 9:8 crop (w, h, x, y) per speaker, same size for both, face ~40% down the panel.
+def split_panels(left: Speaker, right: Speaker, src_w: int, src_h: int,
+                 lead: float | None = None) -> list[tuple[int, int, int, int]]:
+    """One 9:8 crop (w, h, x, y) per speaker, same size for both, face ~40% down the panel, with lead room
+    (`lead` × panel width toward where the speaker looks) as long as the other face stays out.
 
     Sized so the face fills ~split_face_height of the panel, never wider than the gap between the two faces
     (so the other person stays out of frame) and never bigger than the source.
@@ -277,9 +294,17 @@ def split_panels(left: Speaker, right: Speaker, src_w: int, src_h: int) -> list[
         w = max_w
         h = w * PANEL_H / PANEL_W
     w, h = int(w) // 2 * 2, int(h) // 2 * 2
+    lead = settings.reframe_lead if lead is None else lead
     panels = []
-    for sp in (left, right):
-        x = int(min(max(sp.cx * src_w - w / 2, 0), src_w - w))
+    for sp, other in ((left, right), (right, left)):
+        cx = sp.cx * src_w + lead * w * look_direction(sp.look)
+        # lead room may not pull the other person's face into the panel
+        keep_out = other.cx * src_w - (0.6 * other.fh * src_h if other is right else -0.6 * other.fh * src_h)
+        if other is right:
+            cx = min(cx, max(keep_out - w / 2, sp.cx * src_w))
+        else:
+            cx = max(cx, min(keep_out + w / 2, sp.cx * src_w))
+        x = int(min(max(cx - w / 2, 0), src_w - w))
         y = int(min(max(sp.cy * src_h - 0.4 * h, 0), src_h - h))
         panels.append((w, h, x, y))
     return panels
@@ -316,7 +341,8 @@ def speaker_activity(samples: list[Sample], left: Speaker, right: Speaker) -> li
 
 def active_speaker_path(samples: list[Sample], acts: list[tuple[float, float]], left: Speaker, right: Speaker,
                         window: float | None = None, min_shot: float | None = None,
-                        margin: float | None = None, min_turn: float | None = None) -> list[Sample]:
+                        margin: float | None = None, min_turn: float | None = None,
+                        lead: float = 0.0) -> list[Sample]:
     """Camera path that hard-cuts between the two speakers' fixed positions, following the talker.
 
     Offline (the whole clip is known), so cuts land where a turn STARTS instead of lagging behind it:
@@ -325,6 +351,7 @@ def active_speaker_path(samples: list[Sample], acts: list[tuple[float, float]], 
     2. turns shorter than `min_turn` s ("mm-hm", a laugh) are ignored
     3. cut at the start of each other-speaker turn, but never sooner than `min_shot` s after the last cut
     Starts on the first real turn's speaker (bigger face if nobody talks).
+    `lead` (fraction of source width) shifts each shot toward where that speaker looks (lead room).
     """
     window = settings.speaker_window if window is None else window
     min_shot = settings.speaker_min_shot if min_shot is None else min_shot
@@ -373,7 +400,7 @@ def active_speaker_path(samples: list[Sample], acts: list[tuple[float, float]], 
             switches.append((at, who))
             cur, since = who, at
 
-    pos = (left.cx, right.cx)
+    pos = (left.cx + lead * look_direction(left.look), right.cx + lead * look_direction(right.look))
     cur = turns[0][0] if turns else (0 if left.fh >= right.fh else 1)
     path, k = [], 0
     for i, s in enumerate(samples):
@@ -384,12 +411,72 @@ def active_speaker_path(samples: list[Sample], acts: list[tuple[float, float]], 
     return path
 
 
+# ------------------------------------------------------------------ lead room
+
+LOOK_DEADBAND, LOOK_FULL = 0.1, 0.35  # head turn (eye distances): ignore below, full lead room at
+MOVE_DEADBAND, MOVE_FULL = 0.02, 0.08  # face speed (frame widths / s): ignore below, full lead room at
+
+
+def _ramp(x: float, dead: float, full: float) -> float:
+    """0 inside ±dead, ±1 beyond ±full, linear between."""
+    mag = min(max((abs(x) - dead) / (full - dead), 0.0), 1.0)
+    return mag if x > 0 else -mag
+
+
+def look_direction(look: float | None) -> float:
+    return 0.0 if look is None else _ramp(look, LOOK_DEADBAND, LOOK_FULL)
+
+
+def lead_directions(samples: list[Sample], window: float | None = None, hold: float | None = None) -> list[float]:
+    """Per sample, −1 / 0 / +1: lead room to the left, none, to the right (where the face looks or moves).
+
+    1. over `window` s centred on the sample, within the shot: the median head turn (landmark jitter doesn't
+       count) plus the least-squares slope of the face track (walking toward one side), rounded to a side
+    2. a new side must last `hold` s, else the previous one stays — a glance at the camera mustn't pan away and back
+    """
+    window = settings.lead_window if window is None else window
+    hold = settings.lead_hold if hold is None else hold
+    shot, ids = 0, []
+    for i, s in enumerate(samples):
+        shot += bool(i and s.cut)
+        ids.append(shot)
+    out = []
+    for i, s in enumerate(samples):
+        near = [samples[j] for j in range(len(samples)) if ids[j] == ids[i] and abs(samples[j].t - s.t) <= window / 2]
+        looks = sorted(n.look for n in near if n.look is not None)
+        d = look_direction(looks[len(looks) // 2]) if looks else 0.0
+        pts = [(n.t, n.cx) for n in near if n.cx is not None]
+        if len(pts) >= 3 and pts[-1][0] - pts[0][0] >= 0.5 * window:
+            mt, mx = sum(p[0] for p in pts) / len(pts), sum(p[1] for p in pts) / len(pts)
+            var = sum((p[0] - mt) ** 2 for p in pts)
+            if var > 0:
+                d += _ramp(sum((p[0] - mt) * (p[1] - mx) for p in pts) / var, MOVE_DEADBAND, MOVE_FULL)
+        out.append(float(round(max(-1.0, min(1.0, d)))))
+
+    i = 0
+    while i < len(samples):  # runs of one side within a shot; too-short runs keep the previous side
+        j = i
+        while j + 1 < len(samples) and out[j + 1] == out[i] and ids[j + 1] == ids[i]:
+            j += 1
+        end_t = samples[j + 1].t if j + 1 < len(samples) and ids[j + 1] == ids[i] else samples[j].t
+        if i > 0 and ids[i - 1] == ids[i] and end_t - samples[i].t < hold:
+            out[i:j + 1] = [out[i - 1]] * (j + 1 - i)
+        i = j + 1
+    return out
+
+
 # ------------------------------------------------------------------ smoothing
 
-def smooth(samples: list[Sample], deadzone: float | None = None, alpha: float | None = None) -> list[Sample]:
-    """Virtual cameraman: hold steady inside the deadzone, ease toward big moves, snap on cuts."""
+def smooth(samples: list[Sample], deadzone: float | None = None, alpha: float | None = None,
+           lead: float = 0.0) -> list[Sample]:
+    """Virtual cameraman: hold steady inside the deadzone, ease toward big moves, snap on cuts.
+
+    `lead` (fraction of source width at full direction) adds lead room on top of the tracked face: its own
+    eased offset, so turning the head pans gently even when the face itself stays inside the deadzone.
+    """
     deadzone = settings.face_deadzone if deadzone is None else deadzone
     alpha = settings.face_smoothing if alpha is None else alpha
+    dirs = lead_directions(samples) if lead else [0.0] * len(samples)
     known = [s.cx for s in samples if s.cx is not None]
     if not known:
         return []
@@ -407,13 +494,15 @@ def smooth(samples: list[Sample], deadzone: float | None = None, alpha: float | 
                if 0 <= j < len(filled) and not (j > i and filled[j].cut) and not (j < i and s.cut)]
         med.append(Sample(s.t, sorted(win)[1] if len(win) == 3 else s.cx, s.cut))
 
-    out, pos = [], None
-    for s in med:
+    out, pos, off = [], None, 0.0
+    for s, d in zip(med, dirs, strict=True):
         if pos is None or s.cut:
-            pos = s.cx
-        elif abs(s.cx - pos) > deadzone:
-            pos += alpha * (s.cx - pos)
-        out.append(Sample(s.t, pos, s.cut))
+            pos, off = s.cx, lead * d
+        else:
+            if abs(s.cx - pos) > deadzone:
+                pos += alpha * (s.cx - pos)
+            off += alpha * (lead * d - off)
+        out.append(Sample(s.t, pos + off, s.cut))
     return out
 
 
@@ -487,8 +576,9 @@ def plan_reframe(video: Path, start: float, end: float, detector: FaceDetector |
         # explicit split/speaker: two people showing up at all is enough; auto wants them most of the time
         pair = two_speakers(samples, crop_w / src_w, min_share=None if mode == "auto" else 0.15)
         layout = settings.two_speaker_layout if mode == "auto" else mode
+        lead = settings.reframe_lead * crop_w / src_w
         if pair and layout == "speaker":
-            path = active_speaker_path(samples, speaker_activity(samples, *pair), *pair)
+            path = active_speaker_path(samples, speaker_activity(samples, *pair), *pair, lead=lead)
             return ReframePlan("speaker", src_w, src_h, crop_w, to_keyframes(path, src_w, crop_w, end - start))
         if pair:
             return ReframePlan("split", src_w, src_h, crop_w, panels=split_panels(*pair, src_w, src_h))
@@ -497,5 +587,5 @@ def plan_reframe(video: Path, start: float, end: float, detector: FaceDetector |
     if not samples or found / len(samples) < settings.face_min_coverage:
         return ReframePlan("center", src_w, src_h, crop_w)
 
-    keys = to_keyframes(smooth(samples), src_w, crop_w, end - start)
+    keys = to_keyframes(smooth(samples, lead=settings.reframe_lead * crop_w / src_w), src_w, crop_w, end - start)
     return ReframePlan("face", src_w, src_h, crop_w, keys)

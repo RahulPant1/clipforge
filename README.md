@@ -94,6 +94,8 @@ Copy `backend/.env.example` → `backend/.env`. Key options:
 | `TWO_SPEAKER_LAYOUT` | `stack` | What `auto` does with two speakers: `stack` both, or `speaker` = follow the talker |
 | `FACE_SMOOTHING` | `0.35` | Higher = faster camera pans |
 | `FACE_DEADZONE` | `0.05` | Ignore small head moves (fraction of width) |
+| `REFRAME_LEAD` | `0.15` | Lead room: shift the crop this share of its width toward where the speaker looks or moves (`0` = off) |
+| `LEAD_HOLD` | `2.0` | Seconds a new look direction must last before the crop shifts (glances don't pan) |
 | `CONTENT_PLATFORMS` | all four | JSON list, e.g. `["x","linkedin"]` |
 | `CONTENT_LANGUAGE` | `English` | e.g. `Hinglish`, `Hindi` |
 | `CONTENT_VOICE` | friendly creator | Describe your tone |

@@ -74,6 +74,9 @@ class Settings(BaseSettings):
     face_sample_fps: float = 5  # detections per second
     face_deadzone: float = 0.05  # ignore face moves smaller than this (fraction of frame width)
     face_smoothing: float = 0.35  # 0..1 per sample; higher = faster pans
+    reframe_lead: float = 0.15  # lead room: crop shift (share of its width) toward where the face looks/moves; 0 = off
+    lead_window: float = 1.5  # s of head turn / movement read (median) per decision
+    lead_hold: float = 2.0  # a new lead-room side must last this long (glances don't pan)
     face_min_coverage: float = 0.3  # need faces in >=30% of samples, else centre crop
     two_speaker_min_share: float = 0.6  # auto: two faces in >=60% of samples -> stacked two-speaker layout
     speaker_window: float = 1.0  # s of mouth activity averaged before deciding who talks

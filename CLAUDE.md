@@ -31,7 +31,8 @@ backend/                FastAPI + pipeline (Python 3.11, conda env "clipforge")
     fonts.py            makes CAPTION_FONT real for libass: system font, else copied once from Windows fonts
                         into data/fonts (passed as fontsdir=); warns instead of silently substituting
     reframe.py          face tracking: sample faces (YuNet, Haar fallback) → smooth (deadzone, snap on cuts)
-                        → per-frame crop x → ffmpeg sendcmd file driving `crop@track`.
+                        + lead room (head turn from landmarks / movement) → per-frame crop x → ffmpeg sendcmd
+                        file driving `crop@track`.
                         two_speakers() → split_panels(): static 9:8 crop per speaker, split+vstack ("split" mode)
                         or speaker_activity() (aligned mouth-minus-eye thumbnail change) → active_speaker_path()
                         (offline turns, cut at turn start) → same sendcmd crop ("speaker" mode)
@@ -106,6 +107,10 @@ done: PATCH clip options → stale → POST /clips/{i}/render ; PATCH/POST posts
   hook card is bottom-anchored just above it (`build_hook_ass(seam=)`), so neither covers a face.
 - Active speaker: compare thumbnails only after alignment (`patch_change`, ±PATCH_MARGIN px) — raw diffs made a
   swaying silent face look like talking. Tune with SPEAKER_* settings; turns < SPEAKER_MIN_TURN are ignored.
+- Lead room: `head_turn()` = (nose x − eye midpoint) / eye distance, + = turned toward image-right (checked on real
+  footage both ways). `lead_directions()` is −1/0/+1 per sample with a hold; `smooth()` eases the lead offset
+  separately from the face position, so a head turn pans even inside the deadzone. Haar has no landmarks → no
+  look lead (movement only). Split panels never lead to within 0.6 face heights of the other face's centre.
 - Punch-in zoom (`zoom_graph`) runs AFTER select+setpts and scale/pad (output time, enable bounds from each keep's
   frame count) and BEFORE captions, so text never zooms. Only applied when there are cuts.
 - **Reframe runs BEFORE jump-cut select** in the filter chain, so its keyframes are source-relative
@@ -168,7 +173,8 @@ done: PATCH clip options → stale → POST /clips/{i}/render ; PATCH/POST posts
        hook on the seam) and follow-the-talker (`speaker`, or auto with TWO_SPEAKER_LAYOUT=speaker).
        [ ] still open: per-speaker tracking for moving cameras / edits that alternate two-shot and close-ups
        (those fall back to face); audio-based tie-break when both mouths move (crosstalk).
-1b.[ ] Reframe "lead room": offset crop slightly in the direction the speaker faces / moves.
+1b.[x] Reframe "lead room": crop shifts `REFRAME_LEAD` × crop width toward where the speaker looks (YuNet landmarks)
+       or moves (track slope); held `LEAD_HOLD` s so glances don't pan. Also per speaker in split/speaker modes.
 2. [x] **Hook overlay** — `clip.hook` as a boxed title card for the first `HOOK_SECONDS` (own `short_N.hook.ass`,
        burned in after captions; per-clip `options.hook`).
 3. [ ] **No-speech mode** — when words_per_minute < 30: librosa RMS peaks + PySceneDetect cuts,

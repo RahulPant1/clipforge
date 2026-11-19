@@ -7,6 +7,7 @@ from ..models import Clip, Segment
 from .captions import build_ass, build_hook_ass, build_srt
 from .fonts import fontsdir_option
 from .jumpcut import audio_cut_graph, plan_cuts, video_select_expr, zoom_graph
+from .presets import get_preset
 from .reframe import plan_reframe
 
 
@@ -14,12 +15,6 @@ def _encoder_args() -> list[str]:
     if "nvenc" in settings.encoder:
         return ["-c:v", settings.encoder, "-preset", "p5", "-cq", "23"]
     return ["-c:v", settings.encoder, "-preset", "veryfast", "-crf", "21"]
-
-
-def _simple_style(middle: bool = False) -> str:
-    place = "Alignment=5,MarginV=0" if middle else "Alignment=2,MarginV=70"
-    return (f"FontName={settings.caption_font},FontSize=16,Bold=1,PrimaryColour=&H00FFFFFF,"
-            f"OutlineColour=&H00000000,BorderStyle=1,Outline=3,Shadow=0,{place}")
 
 
 def render_clip(video: Path, clip: Clip, segs: list[Segment], job_dir: Path) -> str:
@@ -50,13 +45,15 @@ def render_clip(video: Path, clip: Clip, segs: list[Segment], job_dir: Path) -> 
         (job_dir / cmd_file).write_text(rf.sendcmd(), encoding="utf-8")
 
     middle = rf.mode == "split"  # stacked speakers: captions on the seam, not over the bottom face
+    preset = get_preset(o.caption_preset)
+    font = preset.font
     if caption_style == "none":  # no-speech clips: nothing to caption (and Whisper invents words on music)
         subs = ""
-    elif caption_style == "karaoke":
-        (job_dir / f"{name}.ass").write_text(build_ass(plan.words, clip.keywords, middle=middle), encoding="utf-8")
-        subs = f"ass={name}.ass{fontsdir_option(settings.caption_font)}"
-    else:
-        subs = f"subtitles={name}.srt:force_style='{_simple_style(middle)}'{fontsdir_option(settings.caption_font)}"
+    else:  # karaoke = word-by-word highlight; simple = whole line in the same look, no animation
+        ass = build_ass(plan.words, clip.keywords, middle=middle, preset=preset,
+                        position=o.caption_position, animate=caption_style != "simple")
+        (job_dir / f"{name}.ass").write_text(ass, encoding="utf-8")
+        subs = f"ass={name}.ass{fontsdir_option(font)}"
 
     fps = settings.output_fps
     vf = [f"fps={fps}", *rf.filters(cmd_file)]
@@ -71,10 +68,10 @@ def render_clip(video: Path, clip: Clip, segs: list[Segment], job_dir: Path) -> 
         vf.append(zoom_graph(plan.keeps, fps, settings.jumpcut_zoom_scale))
     if subs:
         vf.append(subs)
-    hook_ass = build_hook_ass(clip.hook, plan.duration, seam=middle) if hook else ""
+    hook_ass = build_hook_ass(clip.hook, plan.duration, seam=middle, font=font) if hook else ""
     if hook_ass:  # last, so the title card sits above captions (and never zooms)
         (job_dir / f"{name}.hook.ass").write_text(hook_ass, encoding="utf-8")
-        vf.append(f"ass={name}.hook.ass{fontsdir_option(settings.caption_font)}")
+        vf.append(f"ass={name}.hook.ass{fontsdir_option(font)}")
 
     cmd = ["ffmpeg", "-y", "-loglevel", "error",
            "-ss", f"{clip.start:.3f}", "-t", f"{clip.duration:.3f}", "-i", str(video.resolve()),

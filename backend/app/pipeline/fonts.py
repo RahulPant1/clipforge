@@ -87,6 +87,21 @@ def _resolve(family: str, local: Path, windows: Path) -> Path | None:
     return None
 
 
+def font_available(family: str) -> bool:
+    """True if libass can render `family` for real: in data/fonts, installed system-wide, or copyable from Windows."""
+    return _available(family, fonts_dir(), WINDOWS_FONTS)
+
+
+@functools.lru_cache(maxsize=32)
+def _available(family: str, local: Path, windows: Path) -> bool:
+    if _has(_families_in(local), family):
+        return True
+    matched = _fc("match", "-f", "%{family}", family)
+    if family.casefold() in (f.strip().casefold() for f in matched.split(",")):
+        return True
+    return bool(_has(_windows_index(local, windows), family))
+
+
 def fontsdir_option(family: str) -> str:
     """`:fontsdir='…'` suffix for ffmpeg's ass/subtitles filters, or '' when not needed."""
     d = caption_fonts_dir(family)

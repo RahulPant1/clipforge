@@ -39,6 +39,9 @@ YouTube URL / file
   short "mm-hm"s don't steal the shot)
 - **Jump cuts:** pauses > 0.4 s and filler words ("um", "uh") removed automatically using word timestamps, with a 10 ms audio crossfade at every cut so there are no clicks; optional 5% punch-in zoom on every other segment so cuts feel intentional
 - **Animated captions:** active word pops in yellow, Gemma-picked keywords and numbers in green
+- **Caption looks:** Classic, Punch (Impact, gold/cyan), Clean (sentence case, the spoken word lights up),
+  Boxed (text on a dark box) and Neon (glow) — per short, with bottom/middle placement; add your own in
+  `backend/data/caption_presets.json`
 - **Hook title card:** Gemma's hook shown big at the top for the first 3 s (editable in the Pick step)
 - Vertical 1080×1920 render + thumbnails + `.srt` export for YouTube upload
 - **Content Studio:** for every short, Gemma writes platform-native posts —
@@ -108,7 +111,9 @@ Copy `backend/.env.example` → `backend/.env`. Key options:
 | `CONTENT_VOICE` | friendly creator | Describe your tone |
 | `BRAND_HANDLE` | – | e.g. `@rahul.builds` (CTAs + carousel footer) |
 | `CREDIT_SOURCE` | `false` | Add "Clip from …" line (needed for CC-BY videos) |
-| `CAPTION_STYLE` | `karaoke` | `karaoke` (animated), `simple` or `none` |
+| `CAPTION_STYLE` | `karaoke` | `karaoke` (word-by-word highlight), `simple` (whole line) or `none` |
+| `CAPTION_PRESET` | `classic` | Caption look: `classic` (uses the `CAPTION_*` colours/font), `punch`, `clean`, `boxed`, `neon` or one of yours |
+| `CAPTION_POSITION` | `bottom` | `bottom` or `middle` (two-speaker stacks always use the seam) |
 | `CAPTION_FONT` | `Arial` | Any installed font, e.g. `Montserrat ExtraBold`. On WSL, Windows fonts are picked up automatically (copied once into `data/fonts`) |
 | `YTDLP_COOKIES` | – | cookies.txt path if YouTube asks for bot check |
 

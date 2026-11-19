@@ -29,6 +29,7 @@ from .pipeline.content import ANGLES, ContentContext, clip_text, generate_post, 
 from .pipeline.export import build_pack
 from .pipeline.history import get_history
 from .pipeline.llm import OllamaClient
+from .pipeline.presets import POSITIONS, all_presets
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 
@@ -58,6 +59,13 @@ def create_app(pipeline=None, start_worker: bool = True, llm_factory=OllamaClien
             llm = {"ok": False, "error": str(e)}
         return {"api": "ok", "ollama": llm, "whisper": settings.whisper_model,
                 "encoder": settings.encoder}
+
+    @app.get("/api/caption-presets")
+    def caption_presets() -> dict:
+        """Caption looks for the Shorts step (built-in + data/caption_presets.json) and the global defaults."""
+        return {"default": settings.caption_preset, "position": settings.caption_position,
+                "style": settings.caption_style, "positions": list(POSITIONS),
+                "presets": [p.public() for p in all_presets().values()]}
 
     @app.post("/api/jobs", response_model=Job, status_code=201)
     def create_job(body: JobCreate) -> Job:

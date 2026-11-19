@@ -30,7 +30,10 @@ backend/                FastAPI + pipeline (Python 3.11, conda env "clipforge")
                         loudness; cached signals.json) → excitement() → peak_windows() (payoff 65% in, snap to
                         cuts) → keyframes → vision Gemma (score/title/hook/description, mostly_text → capped)
     jumpcut.py          silence/filler removal: plan_cuts() → keep intervals + words remapped to output time
-    captions.py         karaoke ASS (active word yellow, keywords green, pop-in) + SRT export
+    captions.py         karaoke ASS (per-word colours from a preset, pop-in) or one plain line per chunk (simple)
+                        + SRT export (still written for YouTube upload; no longer used for burn-in)
+    presets.py          CaptionPreset looks: font fallback list (first one fonts.font_available() finds),
+                        colours, outline/box, case, words/line; placement(position); data/caption_presets.json
     fonts.py            makes CAPTION_FONT real for libass: system font, else copied once from Windows fonts
                         into data/fonts (passed as fontsdir=); warns instead of silently substituting
     reframe.py          face tracking: sample faces (YuNet, Haar fallback) → smooth (deadzone, snap on cuts)
@@ -107,7 +110,7 @@ done: PATCH clip options → stale → POST /clips/{i}/render ; PATCH/POST posts
   (`burned_in()` in edit_clip); title doesn't.
 - Selection changes: run `python -m app.eval <job>` before/after and compare (select_highlights takes
   `prompt=`, `think=` and fills `trace=`; prepare() writes the trace to candidates.json).
-- Two-speaker "split": captions (`build_ass(middle=)` / `_simple_style(middle)`) sit on the seam (y=960) and the
+- Two-speaker "split": captions (`build_ass(middle=)`, both styles) sit on the seam (y=960) and the
   hook card is bottom-anchored just above it (`build_hook_ass(seam=)`), so neither covers a face.
 - Active speaker: compare thumbnails only after alignment (`patch_change`, ±PATCH_MARGIN px) — raw diffs made a
   swaying silent face look like talking. Tune with SPEAKER_* settings; turns < SPEAKER_MIN_TURN are ignored.
@@ -132,7 +135,10 @@ done: PATCH clip options → stale → POST /clips/{i}/render ; PATCH/POST posts
   matches dedupe(): sorted by start, index 1..n. LLM.chat_json takes `images=` (bytes; base64 in OllamaClient);
   `capabilities()` (Ollama /api/show) skips vision for text-only models.
 - Whisper drops "um/uh" unless prompted; `whisper_initial_prompt` contains fillers on purpose.
-- ASS colours are `&HAABBGGRR` (BGR order!). Canvas is PlayRes 1080x1920.
+- ASS colours are `&HAABBGGRR` (BGR order!). Canvas is PlayRes 1080x1920. `\c` ignores the AA byte and every
+  override carries to later words in the line, so `_colour()` emits `\1a&HAA&\c…&` for EVERY word.
+- Captions have no "top" position on purpose: tracked faces sit in the upper half (tested: covered the eyes) and
+  the hook card owns the top. The hook card uses the preset's font.
 
 ## Environment notes
 - Ollama may run in WSL or on Windows. If on Windows, WSL reaches it at `localhost` only with
@@ -189,7 +195,9 @@ done: PATCH clip options → stale → POST /clips/{i}/render ; PATCH/POST posts
 3. [x] **No-speech mode** — < 30 wpm → `nospeech.py`: ffmpeg + numpy signals (no librosa/PySceneDetect),
        peak windows snapped to scene cuts, 4 keyframes per candidate to vision Gemma (`images=`).
        [ ] still open: audio-event cues (cheering/laughter/explosions) and beat-synced cut points for music.
-4. [ ] Caption presets in UI (font/colours/position) + emoji per line (needs colour-emoji capable renderer —
+4. [x] Caption presets (`presets.py`: classic = CAPTION_* settings, punch/clean/boxed/neon, custom JSON; per-clip
+       `options.caption_preset` / `caption_position` bottom|middle; chips with live CSS previews in ShortsStep).
+   [ ] Emoji per line (needs colour-emoji capable renderer —
        libass draws monochrome; overlay PNG emoji via ffmpeg overlay instead).
 5. [x] **Re-render / edit** — UI to nudge start/end ±seconds and re-render a single clip (shipped in v0.5).
 6. [ ] **SSE progress** instead of polling (`/api/jobs/{id}/events`).

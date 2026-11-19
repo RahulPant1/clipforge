@@ -170,11 +170,8 @@ def test_render_two_speakers_stacked_with_captions_on_the_seam(tmp_path, segs, m
     vf = next(c for c in cmds if c[0] == "ffmpeg" and "-vf" in c)
     vf = vf[vf.index("-vf") + 1]
     assert "vstack" in vf
-    if style == "karaoke":
-        style_line = next(x for x in (tmp_path / "short_1.ass").read_text().splitlines() if x.startswith("Style:"))
-        assert style_line.split(",")[18:22] == ["5", "60", "60", "0"]  # middle-centre, no bottom margin
-    else:
-        assert "Alignment=5" in vf
+    style_line = next(x for x in (tmp_path / "short_1.ass").read_text().splitlines() if x.startswith("Style:"))
+    assert style_line.split(",")[18:22] == ["5", "60", "60", "0"]  # middle-centre, no bottom margin
 
 
 def test_cuda_preload_never_breaks_transcription(tmp_path, monkeypatch, caplog):

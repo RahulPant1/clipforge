@@ -7,6 +7,7 @@ import re
 from ..config import settings
 from ..models import Word
 from .jumpcut import norm
+from .presets import CaptionPreset, get_preset, placement
 
 Chunk = list[Word]
 
@@ -42,8 +43,9 @@ def chunk_words(words: list[Word], n: int | None = None) -> list[Chunk]:
     return chunks
 
 
-def _text(w: Word) -> str:
-    return re.sub(r"[{}\\]", "", w.word).strip().upper()
+def _text(w: Word, preset: CaptionPreset | None = None) -> str:
+    t = re.sub(r"[{}\\]", "", w.word).strip()
+    return preset.transform(t) if preset else t.upper()
 
 
 def build_srt(words: list[Word], n: int | None = None) -> str:
@@ -63,10 +65,12 @@ def keyword_set(keywords: list[str], words: list[Word]) -> set[str]:
     return ks | {norm(w.word) for w in words if re.search(r"\d|%|₹|\$", w.word)}
 
 
-def _ass_header(middle: bool = False) -> str:
-    """middle=True centres captions on the canvas (two-speaker stack: the seam between the panels)."""
-    s = settings
-    align, margin_v = (5, 0) if middle else (2, s.caption_margin_v)
+def _ass_header(preset: CaptionPreset, position: str | None = None, middle: bool = False) -> str:
+    """Style from the preset; middle=True (two-speaker stack) puts captions on the seam whatever the position."""
+    align, margin_v = placement("middle" if middle else position)
+    p = preset
+    border = 3 if p.box else 1
+    back = "&H00000000" if p.box else "&H96000000"  # shadow colour (unused with a box)
     return f"""[Script Info]
 ScriptType: v4.00+
 PlayResX: 1080
@@ -78,50 +82,66 @@ ScaledBorderAndShadow: yes
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, \
 Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, \
 Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Default,{s.caption_font},{s.caption_size},{s.caption_color},{s.caption_color},&H00000000,&H96000000,\
--1,0,0,0,100,100,0,0,1,7,3,{align},60,60,{margin_v},1
+Style: Default,{p.font},{p.size},{p.text},{p.text},{p.outline_color},{back},\
+{-1 if p.bold else 0},0,0,0,100,100,0,0,{border},{p.outline:g},{p.shadow:g},{align},60,60,{margin_v},1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 """
 
 
-def _line(chunk: Chunk, active: int, keywords: set[str], pop: bool) -> str:
-    s = settings
+def _colour(c: str) -> str:
+    """ASS override for a &HAABBGGRR colour: alpha first (\\c ignores it, and overrides carry to later words)."""
+    return rf"\1a&H{c[2:4]}&\c{c}&"
+
+
+def _line(chunk: Chunk, active: int, keywords: set[str], pop: bool, preset: CaptionPreset) -> str:
+    p = preset
     parts = []
     for i, w in enumerate(chunk):
         is_active = i == active
         if is_active:
-            color = s.highlight_color
+            color = p.active
         elif norm(w.word) in keywords:
-            color = s.keyword_color
+            color = p.keyword
         else:
-            color = s.caption_color
-        scale = settings.highlight_scale if is_active else 100
-        tag = rf"\c{color}&"
-        if pop:  # line pops in: every word scales 80% -> target over 90 ms
+            color = p.text
+        scale = p.active_scale if is_active else 100
+        tag = (rf"\blur{p.blur:g}" if i == 0 and p.blur else "") + _colour(color)
+        if pop and p.pop:  # line pops in: every word scales 80% -> target over 90 ms
             tag += rf"\fscx80\fscy80\t(0,90,\fscx{scale}\fscy{scale})"
         else:
             tag += rf"\fscx{scale}\fscy{scale}"
-        parts.append("{" + tag + "}" + _text(w))
+        parts.append("{" + tag + "}" + _text(w, p))
     return " ".join(parts)
 
 
-def build_ass(words: list[Word], keywords: list[str], n: int | None = None, middle: bool = False) -> str:
+def build_ass(words: list[Word], keywords: list[str], n: int | None = None, middle: bool = False,
+              preset: CaptionPreset | None = None, position: str | None = None, animate: bool = True) -> str:
+    """Karaoke captions (animate=True: one event per word, active word + keywords coloured) or, animate=False,
+    one plain line per chunk in the preset's look (the "simple" caption style)."""
+    p = preset or get_preset()
     ks = keyword_set(keywords, words)
-    chunks = chunk_words(words, n)
+    chunks = chunk_words(words, n or p.words)
     events: list[list] = []  # [start, end, text]
     for c in chunks:
+        if not animate:
+            text = " ".join(t for t in (_text(w, p) for w in c) if t)
+            plain = "&H00" + p.text[4:]  # simple: one opaque colour for the whole line
+            if text and c[-1].end > c[0].start:
+                events.append([c[0].start, c[-1].end, "{" + (rf"\blur{p.blur:g}" if p.blur else "")
+                               + _colour(plain) + "}" + text])
+            continue
         for i, w in enumerate(c):
             start = c[0].start if i == 0 else w.start
             end = c[i + 1].start if i + 1 < len(c) else c[-1].end
             if end > start:
-                events.append([start, end, _line(c, i, ks, pop=(i == 0))])
+                events.append([start, end, _line(c, i, ks, pop=(i == 0), preset=p)])
     for cur, nxt in zip(events, events[1:], strict=False):
         if 0 < nxt[0] - cur[1] < 0.6:
             cur[1] = nxt[0]
     body = "\n".join(f"Dialogue: 0,{ts_ass(s)},{ts_ass(e)},Default,,0,0,0,,{t}" for s, e, t in events)
-    return _ass_header(middle) + body + "\n"
+    return _ass_header(p, position, middle) + body + "\n"
 
 
 # ---------------------------------------------------------------- hook title (first seconds)
@@ -134,7 +154,7 @@ def hook_text(hook: str) -> str:
 SEAM_HOOK_MARGIN_V = 1040  # card's bottom edge just above seam captions (centred at y=960)
 
 
-def build_hook_ass(hook: str, duration: float, seam: bool = False) -> str:
+def build_hook_ass(hook: str, duration: float, seam: bool = False, font: str | None = None) -> str:
     """Big title card for the first `hook_seconds` of the short (own file, so it works with either caption style).
 
     Top of the frame (captions live at the bottom), boxed text that pops in and fades out. Empty hook -> "".
@@ -159,7 +179,7 @@ ScaledBorderAndShadow: yes
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, \
 Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, \
 Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Hook,{s.caption_font},{s.hook_size},{s.hook_color},{s.hook_color},{s.hook_box_color},&H00000000,\
+Style: Hook,{font or s.caption_font},{s.hook_size},{s.hook_color},{s.hook_color},{s.hook_box_color},&H00000000,\
 -1,0,0,0,100,100,0,0,3,18,0,{align},110,110,{margin_v},1
 
 [Events]

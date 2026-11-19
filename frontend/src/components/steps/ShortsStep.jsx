@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react'
 import { api } from '../../api.js'
 import { fmt } from '../../util.js'
 
@@ -16,11 +17,43 @@ function Seg({ label, value, options, onChange, disabled }) {
   )
 }
 
-function ShortCard({ job, clip, busy, act }) {
+// ASS &HAABBGGRR (BGR, AA 00 = opaque) -> CSS rgba
+function assColor(c) {
+  const h = (c || '&H00FFFFFF').replace('&H', '').padStart(8, '0')
+  const [a, b, g, r] = [0, 2, 4, 6].map((i) => parseInt(h.slice(i, i + 2), 16))
+  return `rgba(${r},${g},${b},${((255 - a) / 255).toFixed(2)})`
+}
+
+function LookChip({ p, on, disabled, onPick }) {
+  const tx = (w) => (p.uppercase ? w.toUpperCase() : w)
+  const ol = assColor(p.outline_color)
+  const w = Math.max(1, Math.min(2, p.outline / 4))
+  const sample = {
+    fontFamily: `"${p.font}", sans-serif`,
+    fontWeight: p.bold ? 700 : 400,
+    color: assColor(p.text),
+    ...(p.box
+      ? { background: ol }
+      : { textShadow: `${w}px ${w}px 0 ${ol}, -${w}px ${w}px 0 ${ol}, ${w}px -${w}px 0 ${ol}, -${w}px -${w}px 0 ${ol}`
+          + (p.blur ? `, 0 0 ${p.blur * 2}px ${ol}` : '') }),
+  }
+  return (
+    <button className={`look ${on ? 'on' : ''}`} disabled={disabled} onClick={onPick} title={`${p.description} · ${p.font}`}>
+      <span className="sample" style={sample}>
+        {tx('Make')} <span style={{ color: assColor(p.active) }}>{tx('it')}</span>{' '}
+        <span style={{ color: assColor(p.keyword) }}>{tx('pop')}</span>
+      </span>
+      <small>{p.label}</small>
+    </button>
+  )
+}
+
+function ShortCard({ job, clip, busy, act, presets }) {
   const o = clip.options || {}
   const setOpt = (k, v) => act(() => api.editClip(job.id, clip.index, { options: { ...o, [k]: v } })).catch(() => {})
   const src = clip.file && api.fileUrl(job.id, clip.file, clip.version)
   const poster = clip.file && api.fileUrl(job.id, clip.file.replace('.mp4', '.jpg'), clip.version)
+  const noCaptions = (o.caption_style ?? presets?.style) === 'none'
 
   return (
     <div className={`short ${clip.stale ? 'is-stale' : ''}`}>
@@ -51,8 +84,25 @@ function ShortCard({ job, clip, busy, act }) {
              onChange={(v) => setOpt('reframe', v)} />
         <Seg label="Hook title" value={o.hook ?? true} disabled={busy || !clip.hook}
              options={[[true, 'On'], [false, 'Off']]} onChange={(v) => setOpt('hook', v)} />
-        <Seg label="Captions" value={o.caption_style ?? 'karaoke'} disabled={busy}
+        <Seg label="Captions" value={o.caption_style ?? presets?.style ?? 'karaoke'} disabled={busy}
              options={[['karaoke', 'Animated'], ['simple', 'Simple'], ['none', 'Off']]} onChange={(v) => setOpt('caption_style', v)} />
+        {presets && (
+          <>
+            <div className="opt-col">
+              <span className="muted">Caption look</span>
+              <div className="looks">
+                {presets.presets.map((p) => (
+                  <LookChip key={p.id} p={p} on={(o.caption_preset ?? presets.default) === p.id}
+                            disabled={busy || noCaptions} onPick={() => setOpt('caption_preset', p.id)} />
+                ))}
+              </div>
+            </div>
+            <Seg label={clip.reframe === 'split' ? 'Position (2-up: on the seam)' : 'Position'}
+                 value={o.caption_position ?? presets.position} disabled={busy || noCaptions || clip.reframe === 'split'}
+                 options={[['bottom', 'Bottom'], ['middle', 'Middle']]}
+                 onChange={(v) => setOpt('caption_position', v)} />
+          </>
+        )}
 
         {clip.render_error && <p className="err">Render failed: {clip.render_error}</p>}
         <div className="actions">
@@ -78,20 +128,24 @@ function ShortCard({ job, clip, busy, act }) {
 export default function ShortsStep({ job, busy, act, go }) {
   const clips = job.clips.filter((c) => c.approved)
   const stale = clips.filter((c) => c.stale).length
+  const [presets, setPresets] = useState(null)
+  useEffect(() => {
+    api.captionPresets().then(setPresets).catch(() => setPresets(null))
+  }, [])
   return (
     <div>
       <div className="step-head">
         <div>
           <h2>Shorts</h2>
           <p className="muted">
-            Watch each short. Toggle jump cuts, framing or caption style, then re-render just that one. To change
+            Watch each short. Toggle jump cuts, framing or the caption look, then re-render just that one. To change
             timing or titles, go back to <a onClick={() => go('pick')}>Pick clips</a>.
           </p>
         </div>
       </div>
       <div className="shorts-grid">
         {clips.map((c) => (
-          <ShortCard key={c.index} job={job} clip={c} busy={busy} act={act} />
+          <ShortCard key={c.index} job={job} clip={c} busy={busy} act={act} presets={presets} />
         ))}
       </div>
       <div className="footer-bar">

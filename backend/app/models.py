@@ -61,6 +61,8 @@ class RenderOptions(BaseModel):
     jumpcut: bool | None = None
     reframe: str | None = None  # auto | face | split | speaker | center
     caption_style: str | None = None  # karaoke | simple | none
+    caption_preset: str | None = None  # classic | punch | clean | boxed | neon | custom (presets.py)
+    caption_position: str | None = None  # bottom | middle
     zoom: bool | None = None  # punch-in on alternate jump-cut segments
     hook: bool | None = None  # show clip.hook as a title card for the first seconds
 

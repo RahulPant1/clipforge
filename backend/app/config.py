@@ -92,7 +92,10 @@ class Settings(BaseSettings):
     scene_cut_threshold: float = 0.5  # histogram correlation below this = camera cut (snap, no pan)
 
     # Captions
-    caption_style: str = "karaoke"  # karaoke (animated ASS) | simple (plain SRT burn-in) | none
+    caption_style: str = "karaoke"  # karaoke (word-by-word highlight) | simple (whole line, no animation) | none
+    caption_preset: str = "classic"  # look: classic (the CAPTION_* settings below) | punch | clean | boxed | neon
+    #   | your own in data/caption_presets.json (see pipeline/presets.py)
+    caption_position: str = "bottom"  # bottom | middle (two-speaker stack always uses the seam)
     caption_words: int = 3
     caption_font: str = "Arial"
     caption_size: int = 78  # ASS units on a 1080x1920 canvas

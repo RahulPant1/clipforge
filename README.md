@@ -1,5 +1,7 @@
 # ✂ ClipForge — Local AI Shorts Generator
 
+[![CI](https://github.com/RahulPant1/clipforge/actions/workflows/ci.yml/badge.svg)](https://github.com/RahulPant1/clipforge/actions/workflows/ci.yml)
+
 Turn long videos into captioned 9:16 YouTube Shorts — **fully offline** on a gaming laptop.
 No API keys, no per-minute fees, your videos never leave your machine.
 

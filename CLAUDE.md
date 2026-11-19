@@ -54,6 +54,7 @@ scripts/setup_wsl.sh    one-time setup;  scripts/dev.sh  runs API + UI
 - Lint: `cd backend && ruff check app tests` (`--fix` to autofix)
 - CLI: `cd backend && python -m app.cli "<url>" --clips 3`
 - Frontend build check: `cd frontend && npm run build`
+- CI: `.github/workflows/ci.yml` runs ruff + pytest (with ffmpeg/fontconfig, no GPU/Ollama) and the frontend build on push/PR
 
 ## Job lifecycle (review mode = default)
 ```

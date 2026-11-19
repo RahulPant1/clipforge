@@ -1,0 +1,33 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "API: FastAPI (debug)",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "uvicorn",
+      "args": ["app.main:app", "--port", "8000"],
+      "cwd": "${workspaceFolder}/backend",
+      "envFile": "${workspaceFolder}/backend/.env",
+      "jinja": true,
+      "justMyCode": true
+    },
+    {
+      "name": "CLI: run pipeline on a URL/file",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "app.cli",
+      "args": ["${input:source}", "--clips", "3"],
+      "cwd": "${workspaceFolder}/backend",
+      "envFile": "${workspaceFolder}/backend/.env",
+      "console": "integratedTerminal"
+    }
+  ],
+  "inputs": [
+    {
+      "id": "source",
+      "type": "promptString",
+      "description": "YouTube URL or local video path"
+    }
+  ]
+}

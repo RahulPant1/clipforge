@@ -1,0 +1,25 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "dev: API + UI",
+      "type": "shell",
+      "command": "bash scripts/dev.sh",
+      "isBackground": true,
+      "problemMatcher": []
+    },
+    {
+      "label": "test: backend",
+      "type": "shell",
+      "command": "cd backend && python -m pytest -q",
+      "group": "test",
+      "problemMatcher": []
+    },
+    {
+      "label": "lint: backend",
+      "type": "shell",
+      "command": "cd backend && ruff check app tests",
+      "problemMatcher": []
+    }
+  ]
+}

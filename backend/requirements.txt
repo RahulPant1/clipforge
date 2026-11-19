@@ -1,0 +1,11 @@
+fastapi>=0.115
+uvicorn[standard]>=0.30
+pydantic>=2.7
+pydantic-settings>=2.3
+python-multipart>=0.0.9
+requests>=2.32
+yt-dlp[default]>=2025.11.12  # [default] pulls yt-dlp-ejs: YouTube JS challenge solver (needs deno)
+faster-whisper>=1.1
+opencv-python-headless>=4.8
+numpy>=1.24
+pillow>=10.1

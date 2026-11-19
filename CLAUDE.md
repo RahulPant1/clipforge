@@ -1,0 +1,162 @@
+# CLAUDE.md — ClipForge
+
+Context for Claude Code. Read this before making changes.
+
+## What this is
+Local AI "long video → YouTube Shorts" generator. Everything runs on one laptop
+(HP Omen, RTX GPU, 16 GB RAM, WSL2 Ubuntu). No cloud APIs.
+
+Pipeline: **yt-dlp** (download) → **faster-whisper** (GPU transcript, word timestamps)
+→ **Gemma via Ollama** (picks best moments, JSON-schema output) → **Gemma** again (Content Studio:
+platform-native posts for YouTube / Instagram / X / LinkedIn) → **FFmpeg** (jump cuts, face-tracked 9:16, captions).
+
+## Layout
+```
+backend/                FastAPI + pipeline (Python 3.11, conda env "clipforge")
+  app/config.py         All settings (pydantic-settings, overridable via backend/.env)
+  app/models.py         Pydantic models: Segment, Word, Clip, Job, JobStatus, Stage
+  app/jobs.py           File-backed JobStore (data/jobs/<id>/job.json, update_clip for atomic edits)
+                        + single Worker thread with task kinds: run | produce | render
+  app/main.py           API routes under /api; create_app(pipeline=...) for tests
+  app/cli.py            `python -m app.cli <url|file> --clips N`
+  app/pipeline/
+    download.py         yt-dlp, cookies support, progress hook
+    transcribe.py       faster-whisper, caches transcript.json, frees VRAM after; preloads cuBLAS from the pip wheel
+    llm.py              OllamaClient (chat_json with schema, unload, health) + LLM Protocol
+    highlights.py       windows → prompt → snap → fit_duration → dedupe  (prompt + keywords live here)
+    jumpcut.py          silence/filler removal: plan_cuts() → keep intervals + words remapped to output time
+    captions.py         karaoke ASS (active word yellow, keywords green, pop-in) + SRT export
+    fonts.py            makes CAPTION_FONT real for libass: system font, else copied once from Windows fonts
+                        into data/fonts (passed as fontsdir=); warns instead of silently substituting
+    reframe.py          face tracking: sample faces (YuNet, Haar fallback) → smooth (deadzone, snap on cuts)
+                        → per-frame crop x → ffmpeg sendcmd file driving `crop@track`
+    content.py          Content Studio: ANGLES (creative styles per platform), RULES, SCHEMAS, PROMPT,
+                        assemblers enforcing platform limits, generate_post/generate_all, posts.md writer
+    history.py          variety engine: least-recently-used angle rotation + recent openers to avoid
+                        (persisted in data/content_history.json across jobs)
+    carousel.py         Instagram carousel PNGs (1080x1350, Pillow)
+    export.py           export pack zip (shorts, srt, posts, carousels, titles.csv)
+    render.py           plan_cuts + plan_reframe → captions → ffmpeg
+                        (fps → sendcmd+crop@track → select/aselect → scale/pad → ass) + thumbnail
+    orchestrator.py     prepare() → [review in UI] → produce(); render_one(); run_pipeline() = auto mode.
+                        `Steps` dataclass makes phases injectable (tests use fakes)
+  tests/                pytest; FakeLLM in conftest; real-ffmpeg render test
+frontend/               React 18 + Vite (JSX, no TS). /api proxied to :8000
+  src/components/Workspace.jsx   6-step stepper: Source → Transcript → Pick clips → Shorts → Posts → Publish
+  src/components/steps/*.jsx     one file per step; PostEditor.jsx = per-platform editor (used by Posts)
+  src/util.js                    stepStates()/defaultStep() decide which steps unlock and where a job opens
+scripts/setup_wsl.sh    one-time setup;  scripts/dev.sh  runs API + UI
+```
+
+## Commands
+- Run both: `bash scripts/dev.sh` → UI http://localhost:5173, API docs http://localhost:8000/docs
+- Tests: `cd backend && python -m pytest -q`
+- Lint: `cd backend && ruff check app tests` (`--fix` to autofix)
+- CLI: `cd backend && python -m app.cli "<url>" --clips 3`
+- Frontend build check: `cd frontend && npm run build`
+
+## Job lifecycle (review mode = default)
+```
+queued → running(prepare: download, transcribe, select 2×N candidates) → review
+review: PATCH clips (trim/title/keywords/approve), POST clips (custom from transcript)
+POST /produce → running(writing posts for approved clips w/o posts, rendering missing/stale) → done
+done: PATCH clip options → stale → POST /clips/{i}/render ; PATCH/POST posts ; status draft→approved→posted
+```
+- Edits are refused (409) while queued/running — the worker writes clips at the end and would overwrite.
+- Never save a job snapshot taken before slow work (Gemma calls): write through `store.update_clip()` on the
+  job as it is now. "New angle" saves while still holding `GPU_LOCK`, and the worker reads the job only
+  after acquiring `GPU_LOCK`, so neither can overwrite the other. Deleting a busy job → 409.
+- produce() never overwrites existing posts (hand edits survive); only renders clips with no file or `stale`.
+- A failed produce/render restores the previous status (review/done) with `error` — never loses edits.
+- Server restart mid-produce → job returns to `review` (clips kept); mid-prepare → `failed`.
+- `failed` → POST /retry → queued: same folder, so a finished download/transcript is reused (uploads re-run
+  from their saved source.mp4; 409 if it's gone).
+- UI cache-busting: rendered files are requested with `?v=<clip.version>`.
+
+## Rules / conventions
+- **One GPU job at a time.** Worker is single-threaded on purpose; don't add parallel workers.
+  Whisper is deleted after transcription and Gemma is unloaded (`keep_alive: 0`) after selection.
+- **Clips must be ≤ 59 s** (`max_clip_seconds`). Shorts 1–3 min with any Content ID claim are blocked globally.
+- Heavy imports (`faster_whisper`, `yt_dlp`) stay lazy inside functions so tests/API start without GPU.
+- Every pipeline step takes an `on_progress(p: float 0..1, msg: str)` callback.
+- LLM calls go through the `LLM` protocol so tests use `FakeLLM` — never call Ollama in tests.
+- One bad Gemma window must not fail the job (log + skip). Validate every model field.
+- Job artifacts live in `backend/data/jobs/<id>/` : source.mp4, transcript.json, short_N.{mp4,srt,jpg}, job.json.
+- File serving only allows names matching `^[\w.\-]+$` (path traversal guard) — keep it.
+- Add/adjust tests with every pipeline change; keep `pytest` and `ruff` green.
+- **Timelines:** clip.start/end are SOURCE seconds. After jump cuts, captions use OUTPUT time —
+  always go through `CutPlan.remap()`; never time captions from source words directly.
+- Jump cuts use ffmpeg `select`/`aselect` + `setpts=N/FPS/TB` / `asetpts=N/SR/TB` after `fps=` normalisation.
+  Keep video and audio expressions identical or A/V drifts (test_jumpcut_shortens_output_and_keeps_av_in_sync).
+- **Reframe runs BEFORE jump-cut select** in the filter chain, so its keyframes are source-relative
+  (clip.start = 0). If you move it after select, keyframes must be remapped with CutPlan.remap().
+- YuNet model downloads once to data/models from media.githubusercontent.com (github.com/raw gives an
+  LFS pointer). Any failure → Haar cascade → if <30% of samples have faces → centre crop. Never crash a job.
+- **Content Studio:** stage order is selecting → writing → (unload Gemma) → rendering, so Gemma loads once.
+  `GPU_LOCK` (jobs.py) serialises jobs and the "new angle" endpoint (409 if busy). Each platform is
+  independent: one failing must not drop the others. Never let prompts invent facts — keep the guardrail line.
+- To add a creative angle: add one entry to `ANGLES[platform]` (label, instruction). To add a platform:
+  ANGLES + RULES + SCHEMAS + an `assemble_<platform>` + NAMES + UI tab in PostsPanel.jsx.
+- Whisper drops "um/uh" unless prompted; `whisper_initial_prompt` contains fillers on purpose.
+- ASS colours are `&HAABBGGRR` (BGR order!). Canvas is PlayRes 1080x1920.
+
+## Environment notes
+- Ollama may run in WSL or on Windows. If on Windows, WSL reaches it at `localhost` only with
+  mirrored networking (`.wslconfig: networkingMode=mirrored`); otherwise set `OLLAMA_URL=http://<windows-ip>:11434`
+  and start Ollama with `OLLAMA_HOST=0.0.0.0`.
+- faster-whisper GPU needs cuBLAS (+ cuDNN 9, currently unused by ctranslate2 4.9) — pip wheels. `dev.sh` sets
+  LD_LIBRARY_PATH; `transcribe.preload_cuda_wheels()` loads cuBLAS by path so VS Code / CLI work without it.
+- Caption fonts: WSL's fontconfig doesn't see Windows fonts. Scanning /mnt/c/Windows/Fonts per render costs
+  ~10 s, so fonts.py indexes it once (cache: data/fonts/windows_fonts.tsv) and copies just the needed family.
+- yt-dlp needs Deno (JS runtime) + `yt-dlp-ejs` (challenge solver, comes with `yt-dlp[default]` in requirements)
+  and is updated often: `pip install -U "yt-dlp[default]"` first when downloads break.
+  Bot check → export cookies.txt from browser, set `YTDLP_COOKIES` in backend/.env.
+- NVENC: `ENCODER=h264_nvenc` only if `ffmpeg -encoders | grep nvenc` shows it.
+- Thinking models (gemma4): `think` is per phase — `CONTENT_THINK=false` (~2.5x faster posts, no quality loss
+  measured), `SELECT_THINK` unset (gemma4 without reasoning ignores the 20-59 s rule). Only sent when set;
+  Ollama returns 400 "does not support thinking" if `true` is sent to e.g. gemma3.
+- Highlights context budget: one 10-min window ≈ 6.6k prompt tokens (timestamps tokenise at ~2.6 chars/token),
+  and thinking needs ~1.2-1.8k more, so `windows()` also caps chunks at half of `num_ctx`
+  (`transcript_char_budget()`). Asked-per-window scales with the request (`clips_per_window()`) so review
+  mode really gets 2×N candidates. `done_reason=length` from Ollama → clear "ran out of context" error.
+
+## Done
+- [x] v0.1 pipeline, API, UI, CLI
+- [x] v0.2 jump cuts (silence + filler removal) and animated karaoke captions with Gemma keywords
+- [x] v0.3 face-tracking reframe (virtual cameraman: deadzone, smooth pan, snap on scene cuts)
+- [x] v0.4 Content Studio: per-platform posts with rotating creative angles, IG carousels, "new angle",
+      export pack
+- [x] v0.5 Review pipeline UI: 6-step workspace, approve/trim/add clips, per-clip render options +
+      single re-render, inline post editing, draft/approved/posted publish checklist
+- [x] v0.6 First real end-to-end run (gemma4 + Whisper on RTX 4060) and hardening:
+      - Jobs: DELETE of a busy job → 409; worker thread survives any task error; "new angle" no longer
+        overwrites concurrent edits or gets overwritten by a queued produce; failed jobs → POST /retry
+        (reuses download/transcript) + Retry button
+      - Gemma: candidates scale with the request (real 2×N in review mode); transcript windows capped to half
+        of num_ctx so thinking fits; "ran out of context" error; per-phase think (CONTENT_THINK/SELECT_THINK);
+        Ollama error text surfaced
+      - Content: X hashtags no longer duplicated when the model already wrote them
+      - Setup/dev: dev.sh fixed (nvm under `set -u`, no-LTS Node, CUDA lib path from namespace wheels,
+        `--timeout-graceful-shutdown` so reload can't hang on stalled video streams); cuBLAS preloaded in-app
+        (VS Code / CLI); `yt-dlp[default]` for the YouTube challenge solver; caption fonts from Windows on WSL
+      - UI: delete disabled while busy, long errors wrap/clamp, failed stage marked ✕, Publish fits phone width
+
+## Roadmap (pick up here)
+0. [ ] Jump-cut polish: 10 ms audio crossfades at cut points (avoid clicks); optional subtle zoom (105%)
+       on alternate segments so jump cuts feel intentional.
+1. [ ] **Two-speaker layouts** — when 2 faces persist (podcast), stack them top/bottom (two crops + vstack),
+       or follow the ACTIVE speaker (mouth movement / audio energy per face side).
+1b.[ ] Reframe "lead room": offset crop slightly in the direction the speaker faces / moves.
+2. [ ] **Hook overlay** — show `clip.hook` as big title text for first 3 s (ASS subtitle with own style).
+3. [ ] **No-speech mode** — when words_per_minute < 30: librosa RMS peaks + PySceneDetect cuts,
+       keyframes to a vision-capable Gemma for scoring. Orchestrator currently raises for this case.
+4. [ ] Caption presets in UI (font/colours/position) + emoji per line (needs colour-emoji capable renderer —
+       libass draws monochrome; overlay PNG emoji via ffmpeg overlay instead).
+5. [x] **Re-render / edit** — UI to nudge start/end ±seconds and re-render a single clip (shipped in v0.5).
+6. [ ] **SSE progress** instead of polling (`/api/jobs/{id}/events`).
+6b.[ ] Pick step: drag handles on a waveform/timeline instead of nudge buttons; keyboard shortcuts (A=approve, J/K nudge).
+7. [ ] **Prompt eval** — save candidates + scores; small script to compare prompts/models on same transcript.
+8. [ ] Content: brand-voice profile (paste 5 of your best posts → few-shot examples in PROMPT).
+9. [ ] Content: weekly posting calendar view (spread shorts + posts across days/platforms, .ics export).
+10. [ ] Content: Hinglish mode tuned prompt + language detection from transcript.
+11. [ ] Auto-publish to own channels (YouTube Data API upload + scheduled publish).

@@ -1,0 +1,122 @@
+# ✂ ClipForge — Local AI Shorts Generator
+
+Turn long videos into captioned 9:16 YouTube Shorts — **fully offline** on a gaming laptop.
+No API keys, no per-minute fees, your videos never leave your machine.
+
+```
+YouTube URL / file
+      │
+      ▼
+ yt-dlp ──► faster-whisper (GPU) ──► Gemma via Ollama ──► FFmpeg
+ download    transcript + word        picks best 20–59s     9:16 crop +
+             timestamps               moments (JSON schema)  bold captions
+```
+
+## How you work with it (6 steps)
+| Step | What you do |
+|---|---|
+| **1 Source** | Paste a YouTube link or upload. Pick *Review each step* (default) or *Fully automatic*. If it fails: fix the cause, then **↻ Retry** |
+| **2 Transcript** | Read/search the transcript, click timestamps to play, mark start/end to **add your own clip** |
+| **3 Pick clips** | Gemma gives 2× the clips you asked for. Watch each, **trim with ±1s/±0.2s**, fix title/hook/keywords, **approve** → *Create shorts & posts* |
+| **4 Shorts** | Watch the vertical shorts. Toggle jump cuts / face-follow / caption style per short → **re-render just that one** |
+| **5 Posts** | Per-platform tabs. Edit copy inline (X threads post-by-post with 280 counters), 🎲 **New angle**, mark **Approved** |
+| **6 Publish** | Checklist of every short × platform: copy, post, click to mark **posted**. Download the full pack |
+
+## Features
+- Paste a YouTube link **or** upload a video
+- Whisper transcription with word-level timing, cached per job
+- Gemma ranks moments by hook strength / self-containedness, writes title + hook + virality score
+- Cuts snapped to sentence boundaries, overlaps removed, clips capped at 59 s (Content ID safe zone)
+- **Face tracking:** crop follows the speaker like a camera operator — steady when they're still,
+  smooth pans when they move, instant snap on camera cuts; centre crop fallback
+- **Jump cuts:** pauses > 0.4 s and filler words ("um", "uh") removed automatically using word timestamps
+- **Animated captions:** active word pops in yellow, Gemma-picked keywords and numbers in green
+- Vertical 1080×1920 render + thumbnails + `.srt` export for YouTube upload
+- **Content Studio:** for every short, Gemma writes platform-native posts —
+  YouTube (title, description, tags, pinned comment), Instagram (caption + **carousel images**),
+  X (single post or thread, 280-char safe), LinkedIn (hook-driven post)
+- **Variety engine:** 5–6 creative angles per platform (hot take, thread, POV, myth vs fact, framework, …)
+  rotated so consecutive posts never feel templated; recent openers are banned; **🎲 New angle** button
+- **Export pack:** one zip with shorts, captions, post copy, carousels and a `titles.csv`
+- Web UI with live progress, preview, download — plus a CLI
+- One-GPU-friendly: models load sequentially and are freed between stages
+- **Retry failed jobs:** picks up where it stopped — a finished download or transcript is reused
+- Safe while you edit: busy jobs can't be deleted, and edits made while Gemma writes a new angle are kept
+
+## Requirements
+- WSL2 Ubuntu (or Linux) with an NVIDIA GPU (CPU works, slowly)
+- Miniconda, Node 18+ (via NVM), FFmpeg
+- [Ollama](https://ollama.com) with a Gemma model (`gemma3:4b` default). Thinking models like `gemma4` work too —
+  set `CONTENT_THINK=false` for ~2.5× faster post writing
+
+## Quick start
+```bash
+git clone <your-repo> clipforge && cd clipforge
+bash scripts/setup_wsl.sh      # ffmpeg, deno, conda env, pip/npm deps, pulls Gemma
+bash scripts/dev.sh            # API :8000 + UI :5173
+```
+Open http://localhost:5173 (works from the Windows browser too).
+
+CLI only:
+```bash
+cd backend && conda activate clipforge
+python -m app.cli "https://www.youtube.com/watch?v=VIDEO" --clips 5
+```
+
+## Configuration
+Copy `backend/.env.example` → `backend/.env`. Key options:
+
+| Variable | Default | Notes |
+|---|---|---|
+| `GEMMA_MODEL` | `gemma3:4b` | Any Gemma tag in `ollama list` |
+| `OLLAMA_URL` | `http://localhost:11434` | See below if Ollama runs on Windows |
+| `CONTENT_THINK` | unset | `false` = posts skip reasoning on thinking models (gemma4, qwen3): ~2.5× faster. `true` fails on gemma3 |
+| `SELECT_THINK` | unset | Same for clip picking — leave unset: without reasoning gemma4 picks clips that are too short |
+| `WHISPER_MODEL` | `small` | `medium` is better for Hindi/Hinglish |
+| `WHISPER_DEVICE` | `cuda` | `cpu` + `WHISPER_COMPUTE_TYPE=int8` without GPU |
+| `ENCODER` | `libx264` | `h264_nvenc` for fast GPU encoding |
+| `MAX_CLIP_SECONDS` | `59` | Keep < 60 to avoid Content ID blocking |
+| `JUMPCUT_ENABLED` | `true` | Remove silences + filler words |
+| `MAX_PAUSE` | `0.4` | Pauses longer than this (s) are cut |
+| `REFRAME_MODE` | `face` | `face` (track speaker) or `center` |
+| `FACE_SMOOTHING` | `0.35` | Higher = faster camera pans |
+| `FACE_DEADZONE` | `0.05` | Ignore small head moves (fraction of width) |
+| `CONTENT_PLATFORMS` | all four | JSON list, e.g. `["x","linkedin"]` |
+| `CONTENT_LANGUAGE` | `English` | e.g. `Hinglish`, `Hindi` |
+| `CONTENT_VOICE` | friendly creator | Describe your tone |
+| `BRAND_HANDLE` | – | e.g. `@rahul.builds` (CTAs + carousel footer) |
+| `CREDIT_SOURCE` | `false` | Add "Clip from …" line (needed for CC-BY videos) |
+| `CAPTION_STYLE` | `karaoke` | `karaoke` (animated) or `simple` |
+| `CAPTION_FONT` | `Arial` | Any installed font, e.g. `Montserrat ExtraBold`. On WSL, Windows fonts are picked up automatically (copied once into `data/fonts`) |
+| `YTDLP_COOKIES` | – | cookies.txt path if YouTube asks for bot check |
+
+### Ollama on Windows, app in WSL
+Either enable mirrored networking (`%UserProfile%\.wslconfig` → `[wsl2]` `networkingMode=mirrored`, then `wsl --shutdown`),
+or run Ollama with `OLLAMA_HOST=0.0.0.0` and set `OLLAMA_URL=http://<windows-ip>:11434`.
+
+## Troubleshooting
+- **"n challenge solving failed" / missing formats** → `pip install -U "yt-dlp[default]"` (brings `yt-dlp-ejs`) and make sure `deno --version` works.
+- **"Sign in to confirm you're not a bot"** → `pip install -U "yt-dlp[default]"`, then export browser cookies to `cookies.txt` and set `YTDLP_COOKIES`.
+- **`libcudnn` / `libcublas` not found** → reinstall the wheels (`pip install nvidia-cublas-cu12 "nvidia-cudnn-cu12==9.*"`),
+  start via `scripts/dev.sh`, or use `WHISPER_DEVICE=cpu`.
+- **Transcribing fails with `401 … Repository Not Found` for `Systran/faster-whisper-*`** → your saved Hugging Face
+  token is expired: `hf auth logout` (or log in again). Only happens when a Whisper model is downloaded for the first time.
+- **Gemma returns no clips** → try a bigger model (`gemma3:12b`), or tune the prompt in `backend/app/pipeline/highlights.py`.
+  With a thinking model, keep `SELECT_THINK` unset — without reasoning it picks clips that are too short.
+- **"Gemma ran out of context"** → raise `OLLAMA_NUM_CTX` (needs more VRAM) or lower `WINDOW_SECONDS`.
+- **Log says "caption font … is not installed"** → install the font, drop its `.ttf` into `backend/data/fonts/`,
+  or set `CAPTION_FONT` to one you have.
+- **CUDA out of memory** → `WHISPER_MODEL=small`, smaller Gemma, close other GPU apps.
+
+## Development
+```bash
+cd backend && python -m pytest -q && ruff check app tests
+cd frontend && npm run build
+```
+VS Code: open the folder via **Remote - WSL**; launch configs for API and CLI debugging are included (GPU Whisper
+works there too — the app loads cuBLAS from the pip wheel itself).
+See `CLAUDE.md` for architecture, conventions and the roadmap.
+
+## Responsible use
+Only process videos you own or have rights to (e.g. your own channel, client content, Creative Commons).
+Downloading from YouTube may be restricted by its Terms of Service.

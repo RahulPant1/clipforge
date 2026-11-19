@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+.venv/
+
+# Env / secrets
+backend/.env
+cookies.txt
+*.cookies.txt
+
+# Data (videos, transcripts, renders)
+backend/data/
+data/
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+
+# OS / editor
+.DS_Store
+Thumbs.db

@@ -8,6 +8,7 @@ from pathlib import Path
 
 from ..config import settings
 from ..models import Segment, Word
+from .vocabulary import hotwords
 
 ProgressFn = Callable[[float, str], None]
 log = logging.getLogger(__name__)
@@ -77,6 +78,7 @@ def transcribe(video: Path, job_dir: Path, on_progress: ProgressFn | None = None
         vad_filter=True,
         language=settings.whisper_language,
         initial_prompt=settings.whisper_initial_prompt or None,
+        hotwords=hotwords(),  # your names/terms (data/vocabulary.json) — spelled right from the start
     )
     total = info.duration or 1.0
     segs: list[Segment] = []

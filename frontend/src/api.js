@@ -34,6 +34,11 @@ export const api = {
   retry: (id) => req(`/jobs/${id}/retry`, { method: 'POST' }),
   transcript: (id) => req(`/jobs/${id}/transcript`),
   waveform: (id) => req(`/jobs/${id}/waveform`),
+  words: (id, start, end) => req(`/jobs/${id}/words?start=${start}&end=${end}`),
+  editWord: (id, edit) => req(`/jobs/${id}/words`, json('PATCH', edit)),
+  replaceWords: (id, body) => req(`/jobs/${id}/transcript/replace`, json('POST', body)),
+  vocabulary: () => req('/vocabulary'),
+  saveVocabulary: (terms) => req('/vocabulary', json('PUT', { terms })),
 
   // review & editing
   editClip: (id, index, changes) => req(`/jobs/${id}/clips/${index}`, json('PATCH', changes)),

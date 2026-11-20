@@ -24,10 +24,13 @@ from .models import (
     Post,
     PostEdit,
     RenderOptions,
+    ReplaceWords,
     Segment,
     Stage,
+    Vocabulary,
+    WordEdit,
 )
-from .pipeline import voice, waveform
+from .pipeline import transcript_edit, vocabulary, voice, waveform
 from .pipeline.content import ANGLES, NAMES, ContentContext, clip_text, generate_post, load_meta, write_posts_md
 from .pipeline.export import build_pack
 from .pipeline.history import get_history
@@ -195,6 +198,64 @@ def create_app(pipeline=None, start_worker: bool = True, llm_factory=OllamaClien
         if not p.exists():
             return []
         return [{"start": s["start"], "end": s["end"], "text": s["text"]} for s in json.loads(p.read_text())]
+
+    # ---------------------------------------------------------------- caption fixes + vocabulary
+
+    def mark_stale(job_id: str, spans: list[tuple[float, float]]) -> Job:
+        """Rendered shorts whose range covers a changed word have outdated captions burned in."""
+        job = store.get(job_id)
+        for c in job.clips:
+            if c.file and not c.stale and any(s < c.end and e > c.start for s, e in spans):
+                job = store.update_clip(job_id, c.index, lambda x: setattr(x, "stale", True))
+        return job
+
+    @app.get("/api/jobs/{job_id}/words")
+    def get_words(job_id: str, start: float = 0.0, end: float = 1e9) -> list[dict]:
+        """Transcript words in [start, end] with their address (seg, i) — for the caption editor."""
+        if not store.get(job_id):
+            raise HTTPException(404, "job not found")
+        return transcript_edit.words_in(transcript_edit.load(store.dir(job_id)), start, end)
+
+    @app.patch("/api/jobs/{job_id}/words", response_model=Job)
+    def edit_word(job_id: str, body: WordEdit) -> Job:
+        """Fix one misheard word (captions, .srt and post writing all use it)."""
+        editable(job_id)
+        try:
+            span = transcript_edit.set_word(store.dir(job_id), body.seg, body.i, body.word)
+        except KeyError:
+            raise HTTPException(404, "word not found — reload the transcript") from None
+        except ValueError as e:
+            raise HTTPException(400, str(e)) from None
+        return mark_stale(job_id, [span])
+
+    @app.post("/api/jobs/{job_id}/transcript/replace")
+    def replace_words(job_id: str, body: ReplaceWords) -> dict:
+        """Replace a word or phrase everywhere in the transcript (dry_run: just count). remember=True also
+        adds the replacement to the vocabulary, so future transcripts spell it right."""
+        if body.dry_run:
+            if not store.get(job_id):
+                raise HTTPException(404, "job not found")
+        else:
+            editable(job_id)
+        try:
+            spans = transcript_edit.replace_all(store.dir(job_id), body.find, body.replace, dry_run=body.dry_run)
+        except ValueError as e:
+            raise HTTPException(400, str(e)) from None
+        job = store.get(job_id)
+        if spans and not body.dry_run:
+            job = mark_stale(job_id, spans)
+            if body.remember:
+                vocabulary.add(body.replace)
+        return {"matches": len(spans), "job": None if body.dry_run else job.model_dump(mode="json")}
+
+    @app.get("/api/vocabulary", response_model=Vocabulary)
+    def get_vocabulary() -> Vocabulary:
+        """Names and terms Whisper should know (used for new transcripts)."""
+        return Vocabulary(terms=vocabulary.load())
+
+    @app.put("/api/vocabulary", response_model=Vocabulary)
+    def put_vocabulary(body: Vocabulary) -> Vocabulary:
+        return Vocabulary(terms=vocabulary.save(body.terms))
 
     @app.get("/api/jobs/{job_id}/waveform")
     def get_waveform(job_id: str) -> dict:

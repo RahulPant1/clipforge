@@ -54,7 +54,8 @@ export default function Workspace({ job, onChanged }) {
   }
 
   const go = (k) => states[k] !== 'locked' && setStep(k)
-  const props = { job, busy, act, go, transcript, onChanged }
+  const reloadTranscript = () => setTranscript(null) // after a caption fix (the effect above refetches)
+  const props = { job, busy, act, go, transcript, onChanged, reloadTranscript }
 
   return (
     <div className="workspace">

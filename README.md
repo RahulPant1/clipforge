@@ -53,6 +53,9 @@ YouTube URL / file
   published) and Gemma writes in *your* voice — tone, casing, emoji and hashtag habits — while the facts still
   come only from the clip
 - **Export pack:** one zip with shorts, captions, post copy, carousels and a `titles.csv`
+- **Fix captions:** click any word Whisper misheard to correct it, or replace a word or phrase everywhere
+  ("open ai" → "OpenAI"); captions, `.srt` and posts all use the fix. **Names & terms** on the New job form
+  (remembered for all jobs) help Whisper spell your name, brands and jargon right from the start
 - **Pick step timeline:** trim each clip on its audio waveform — drag the edges (they snap to sentence
   boundaries), drag the whole clip, click to seek; keyboard: `A` approve, `[`/`]` pick edge, `J`/`K` nudge
   (Shift = 1 s), `I`/`O` set start/end at the playhead, `Space` play

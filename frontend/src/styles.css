@@ -317,3 +317,15 @@ input:focus, textarea:focus { outline: none; border-color: #4a5164; }
 .voice-sugs { display: flex; flex-direction: column; gap: 8px; }
 .voice-sug { display: flex; gap: 10px; align-items: flex-start; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 10px; }
 .voice-sug p { flex: 1; min-width: 0; font-size: 13px; color: var(--muted); white-space: pre-wrap; max-height: 7.5em; overflow: hidden; overflow-wrap: anywhere; }
+
+/* Caption editor (Pick step) */
+.fixcap { align-self: flex-start; }
+.capedit { display: flex; flex-direction: column; gap: 8px; background: var(--bg); border: 1px solid var(--line); border-radius: 10px; padding: 10px; }
+.capwords { display: flex; flex-wrap: wrap; gap: 2px 4px; font-size: 14px; line-height: 1.7; max-height: 12em; overflow-y: auto; }
+.capword { padding: 0 3px; border-radius: 4px; cursor: text; }
+.capword:hover { background: var(--line); }
+.capword.now { background: #ff4d6d33; }
+.capword-in { font: inherit; padding: 0 4px; border: 1px solid var(--accent); border-radius: 4px; background: var(--panel); color: var(--text); width: auto; }
+.capreplace { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.capreplace input:not([type]) { flex: 1 1 120px; min-width: 0; padding: 6px 8px; font-size: 13px; }
+.remember { display: flex; align-items: center; gap: 4px; }

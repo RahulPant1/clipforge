@@ -28,6 +28,9 @@ backend/                FastAPI + pipeline (Python 3.11, conda env "clipforge")
   app/pipeline/
     download.py         yt-dlp, cookies support, progress hook
     transcribe.py       faster-whisper, caches transcript.json, frees VRAM after; preloads cuBLAS from the pip wheel
+    transcript_edit.py  caption fixes: set_word(seg, i), replace_all(find, replace) (phrases merge into one word,
+                        each occurrence keeps its own trailing punctuation), rebuild seg.text; transcript.json atomic
+    vocabulary.py       names/terms (data/vocabulary.json, all jobs) → faster-whisper `hotwords` for new transcripts
     llm.py              OllamaClient (chat_json with schema, unload, health) + LLM Protocol
     highlights.py       windows → prompt → snap → fit_duration → dedupe  (prompt + keywords live here)
     nospeech.py         < 30 wpm: analyse() (one ffmpeg pass of 64x36 grey frames → motion + scene cuts, mono PCM →
@@ -154,6 +157,9 @@ done: PATCH clip options → stale → POST /clips/{i}/render ; PATCH/POST posts
   override carries to later words in the line, so `_colour()` emits `\1a&HAA&\c…&` for EVERY word.
 - Anything burned in (hook card, captions, carousel PNGs) goes through `fonts.strip_emoji()`: libass/Pillow draw
   colour emoji as empty boxes. Titles and post copy keep emoji.
+- transcript.json is the one source for captions, .srt, posts and the UI: caption fixes edit it (never words copied
+  elsewhere). Word edits mark rendered shorts covering the change `stale` (main.mark_stale). Words keep Whisper's
+  leading space. Edits need the job editable (409 while busy).
 - Instagram allows 5 hashtags per caption (since Dec 2025): `assemble_instagram` caps at `IG_MAX_HASHTAGS`, counting
   any the model wrote inline.
 - candidates.json outcomes: kept | overlap (lost to a higher-scored clip on the same moment) | ranked_out (fine, but
@@ -231,3 +237,22 @@ done: PATCH clip options → stale → POST /clips/{i}/render ; PATCH/POST posts
 9. [ ] Content: weekly posting calendar view (spread shorts + posts across days/platforms, .ics export).
 10. [ ] Content: Hinglish mode tuned prompt + language detection from transcript.
 11. [ ] Auto-publish to own channels (YouTube Data API upload + scheduled publish).
+
+From the review against OpusClip / Vizard / Submagic / Descript / CapCut (Nov 2026). Suggested order: A → C → B → E → K.
+Keep it local: no cloud stock/B-roll/TTS APIs.
+12. [x] A. Caption editor + custom vocabulary: fix mis-heard words (flows into captions + .srt, marks shorts stale),
+        replace-all across the transcript, names/terms passed to Whisper (`hotwords`) for future jobs.
+13. [ ] C. Prompt-based clipping: optional "topic" on a new job ("salary negotiation") steers the selection prompt.
+14. [ ] B. Text-based cutting (Descript-style): strike words in the transcript to remove them — extra removed
+        ranges into `plan_cuts` (same keep-interval engine as jump cuts).
+15. [ ] E. Sound design: whoosh on cuts, pop on keywords, background music auto-ducked under speech
+        (ffmpeg sidechaincompress) from a local sound folder.
+16. [ ] K. Reel/Shorts cover image: `cover_text` (already generated) on the best frame (Pillow).
+17. [ ] D. Reframe override: pick which face to follow, or crop keyframes dragged on the Pick timeline.
+18. [ ] F. Colour emoji as PNG overlays (libass is monochrome) + optional auto-emoji per caption line (= roadmap 4).
+19. [ ] G. B-roll from your own folder, matched to the clip by Gemma keywords.
+20. [ ] H. Brand kit: logo watermark, end card with CTA.
+21. [ ] I. Multi-aspect export: 1:1 and 4:5 alongside 9:16.
+22. [ ] L. Several title/hook variants to choose from.
+23. [ ] N. Batch: a playlist or a watched folder as a queue of jobs.
+(M = Hinglish/bilingual captions → item 10; O = calendar + auto-publish → items 9 and 11.)

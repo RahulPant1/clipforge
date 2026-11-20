@@ -143,3 +143,20 @@ class BrandVoice(BaseModel):
     enabled: bool = True
     notes: str = ""  # free-form voice notes ("lowercase, no emojis, Hinglish ok"); replaces CONTENT_VOICE
     examples: dict[str, list[str]] = {}  # platform -> your best posts on that platform
+
+
+class WordEdit(BaseModel):
+    seg: int
+    i: int
+    word: str
+
+
+class ReplaceWords(BaseModel):
+    find: str
+    replace: str
+    dry_run: bool = False
+    remember: bool = False  # also add the replacement to the vocabulary for future transcripts
+
+
+class Vocabulary(BaseModel):
+    terms: list[str] = []

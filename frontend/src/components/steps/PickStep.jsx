@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { api } from '../../api.js'
 import { MAX_SHORT, clipText, fmtPrecise, moveEdge, timelineWindow } from '../../util.js'
+import CaptionEditor from '../CaptionEditor.jsx'
 import Timeline from '../Timeline.jsx'
 
 const KEY_SAVE_MS = 600 // keyboard / button nudges are saved once you pause
@@ -17,7 +18,8 @@ function Edge({ label, value, on, onPick, onNudge, disabled }) {
   )
 }
 
-function Candidate({ job, clip, others, transcript, wave, total, busy, act }) {
+function Candidate({ job, clip, others, transcript, wave, total, busy, act, reloadTranscript }) {
+  const [fixing, setFixing] = useState(false)
   const [title, setTitle] = useState(clip.title)
   const [hook, setHook] = useState(clip.hook)
   const [kw, setKw] = useState(clip.keywords.join(', '))
@@ -152,15 +154,23 @@ function Candidate({ job, clip, others, transcript, wave, total, busy, act }) {
         </p>
         {clip.visual ? (
           <p className="excerpt" title="No speech: what Gemma saw in the keyframes">🎞 {clip.visual}</p>
+        ) : fixing ? (
+          <CaptionEditor job={job} start={clip.start} end={clip.end} playhead={playhead} onSeek={seek} busy={busy}
+                         act={act} onFixed={reloadTranscript} />
         ) : (
           <p className="excerpt">“{clipText(transcript, clip) || '…'}”</p>
+        )}
+        {!clip.visual && (
+          <button className="btn sm ghost fixcap" onClick={() => setFixing(!fixing)}>
+            {fixing ? 'Done fixing' : '✎ Fix captions'}
+          </button>
         )}
       </div>
     </div>
   )
 }
 
-export default function PickStep({ job, busy, act, go, transcript }) {
+export default function PickStep({ job, busy, act, go, transcript, reloadTranscript }) {
   const [filter, setFilter] = useState('all')
   const [wave, setWave] = useState(null)
   useEffect(() => {
@@ -196,7 +206,7 @@ export default function PickStep({ job, busy, act, go, transcript }) {
         {shown.map((c) => (
           <Candidate key={c.index} job={job} clip={c} transcript={transcript} wave={wave} total={total}
                      others={job.clips.filter((o) => o.index !== c.index).map((o) => [o.start, o.end])}
-                     busy={busy} act={act} />
+                     busy={busy} act={act} reloadTranscript={reloadTranscript} />
         ))}
       </div>
 

@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { api } from '../api.js'
 
 const FLOW = ['Source', 'Transcript', 'Pick clips', 'Shorts', 'Posts', 'Publish']
@@ -11,6 +11,16 @@ export default function NewJob({ onCreated }) {
   const [mode, setMode] = useState('review')
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
+  const [vocab, setVocab] = useState('') // names & terms for Whisper, remembered for all jobs
+  const [vocabSaved, setVocabSaved] = useState('')
+
+  useEffect(() => {
+    api.vocabulary().then((v) => {
+      const text = v.terms.join(', ')
+      setVocab(text)
+      setVocabSaved(text)
+    }).catch(() => {})
+  }, [])
 
   const ready = kind === 'url' ? url.trim().startsWith('http') : !!file
 
@@ -19,6 +29,7 @@ export default function NewJob({ onCreated }) {
     setBusy(true)
     setErr('')
     try {
+      if (vocab !== vocabSaved) await api.saveVocabulary(vocab.split(',').map((t) => t.trim()).filter(Boolean))
       const job =
         kind === 'url' ? await api.createJob(url.trim(), numClips, mode) : await api.uploadJob(file, numClips, mode)
       onCreated(job)
@@ -66,6 +77,14 @@ export default function NewJob({ onCreated }) {
         <label className="row">
           Shorts you want
           <input type="number" min="1" max="20" value={numClips} onChange={(e) => setNumClips(Number(e.target.value))} />
+        </label>
+
+        <label className="fl">
+          <span>
+            Names & terms <span className="muted">· spelled right in captions (your name, brands, jargon), comma
+            separated, remembered for all jobs</span>
+          </span>
+          <input value={vocab} placeholder="e.g. Rahul Pant, ClipForge, Power BI" onChange={(e) => setVocab(e.target.value)} />
         </label>
 
         <div className="modes">

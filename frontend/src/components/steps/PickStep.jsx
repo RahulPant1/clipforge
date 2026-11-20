@@ -18,6 +18,48 @@ function Edge({ label, value, on, onPick, onNudge, disabled }) {
   )
 }
 
+// L: several title + hook pairs in different styles from Gemma; click one to use it
+const STYLE = { question: 'Question', bold_claim: 'Bold claim', number: 'Number', curiosity: 'Curiosity',
+  pov: 'POV', contrarian: 'Contrarian', mistake: 'Mistake', other: 'Other' }
+
+function HookVariants({ job, clip, busy, act, onUse }) {
+  const [asking, setAsking] = useState(false)
+  const ask = async () => {
+    setAsking(true)
+    try {
+      await act(() => api.hookVariants(job.id, clip.index))
+    } catch {
+      /* shown by act() */
+    } finally {
+      setAsking(false)
+    }
+  }
+  const variants = clip.variants || []
+  return (
+    <div className="variants">
+      <button className="btn sm ghost" disabled={busy || asking} onClick={ask}>
+        {asking ? '✨ Gemma is writing hooks…' : variants.length ? '✨ New hooks' : '✨ More hooks'}
+      </button>
+      {variants.length > 0 && (
+        <ul>
+          {variants.map((v) => {
+            const on = v.hook === clip.hook && v.title === clip.title
+            return (
+              <li key={v.hook}>
+                <button className={on ? 'on' : ''} disabled={busy || on} onClick={() => onUse(v)}
+                        title="Use this title and hook">
+                  <span className="tag">{STYLE[v.style] || v.style}</span> <b>{v.hook}</b>
+                  <span className="muted"> · {v.title}</span>
+                </button>
+              </li>
+            )
+          })}
+        </ul>
+      )}
+    </div>
+  )
+}
+
 function Candidate({ job, clip, others, transcript, wave, total, busy, act, reloadTranscript }) {
   const [fixing, setFixing] = useState(false)
   const [title, setTitle] = useState(clip.title)
@@ -135,6 +177,11 @@ function Candidate({ job, clip, others, transcript, wave, total, busy, act, relo
           <input value={hook} disabled={busy} onChange={(e) => setHook(e.target.value)}
                  onBlur={() => hook !== clip.hook && save({ hook })} />
         </label>
+        <HookVariants job={job} clip={clip} busy={busy} act={act} onUse={(v) => {
+          setTitle(v.title)
+          setHook(v.hook)
+          save({ title: v.title, hook: v.hook })
+        }} />
         <label className="fl">
           <span>Keywords <span className="muted">· highlighted green in captions, comma separated</span></span>
           <input value={kw} disabled={busy} onChange={(e) => setKw(e.target.value)}

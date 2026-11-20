@@ -1,9 +1,11 @@
 """FastAPI app. Run: uvicorn app.main:app --reload --port 8000 (from backend/)."""
+import base64
 import json
 import logging
 import re
 import shutil
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
@@ -17,6 +19,7 @@ from .models import (
     Clip,
     ClipAdd,
     ClipEdit,
+    CoverEdit,
     Job,
     JobCreate,
     JobMode,
@@ -31,13 +34,15 @@ from .models import (
     Vocabulary,
     WordEdit,
 )
-from .pipeline import transcript_edit, vocabulary, voice, waveform
+from .pipeline import cover, transcript_edit, vocabulary, voice, waveform
 from .pipeline.content import ANGLES, NAMES, ContentContext, clip_text, generate_post, load_meta, write_posts_md
 from .pipeline.export import build_pack
 from .pipeline.history import get_history
+from .pipeline.hooks import write_variants
 from .pipeline.jumpcut import clean_removed
 from .pipeline.llm import OllamaClient
-from .pipeline.presets import POSITIONS, all_presets
+from .pipeline.presets import POSITIONS, all_presets, get_preset
+from .pipeline.reframe import people
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 
@@ -399,6 +404,90 @@ def create_app(pipeline=None, start_worker: bool = True, llm_factory=OllamaClien
 
         write_posts_md(next(c for c in job.clips if c.index == index), d)
         return post
+
+    def clip_of(job_id: str, index: int) -> tuple[Job, Clip]:
+        job = store.get(job_id)
+        if not job:
+            raise HTTPException(404, "job not found")
+        clip = next((c for c in job.clips if c.index == index), None)
+        if not clip:
+            raise HTTPException(404, "clip not found")
+        return job, clip
+
+    def source_of(job_id: str) -> Path:
+        video = store.dir(job_id) / "source.mp4"
+        if not video.is_file():
+            raise HTTPException(409, "the source video isn't there yet")
+        return video
+
+    def data_url(jpeg: bytes) -> str:
+        return "data:image/jpeg;base64," + base64.b64encode(jpeg).decode() if jpeg else ""
+
+    @app.post("/api/jobs/{job_id}/clips/{index}/hooks", response_model=Job)
+    def hook_variants(job_id: str, index: int) -> Job:
+        """Gemma writes several title + hook pairs in different styles (question, bold claim, number…) to pick from."""
+        editable(job_id)
+        _, clip = clip_of(job_id, index)
+        if not GPU_LOCK.acquire(timeout=2):
+            raise HTTPException(409, "GPU is busy with a job — try again when it finishes")
+        d = store.dir(job_id)
+        try:
+            try:
+                segs = [Segment(**x) for x in json.loads((d / "transcript.json").read_text())]
+                variants = write_variants(clip, clip_text(segs, clip), llm_factory(), load_meta(d).get("title", ""))
+            except Exception as e:
+                if store.get(job_id) is None:
+                    raise HTTPException(404, "job was deleted meanwhile") from e
+                raise HTTPException(502, f"Gemma failed: {e}") from e
+            try:  # onto the job as it is now (see regenerate_post), still holding GPU_LOCK
+                return store.update_clip(job_id, index, lambda c: setattr(c, "variants", variants))
+            except KeyError:
+                raise HTTPException(404, "clip not found") from None
+        finally:
+            GPU_LOCK.release()
+
+    @app.get("/api/jobs/{job_id}/clips/{index}/people")
+    def clip_people(job_id: str, index: int) -> list[dict]:
+        """Faces seen in the clip, left to right, with a thumbnail — choose who the crop follows (options.follow)."""
+        _, clip = clip_of(job_id, index)
+        found = people(source_of(job_id), clip.start, clip.end)
+        return [{**{k: v for k, v in p.items() if k != "jpeg"}, "img": data_url(p["jpeg"])} for p in found]
+
+    @app.get("/api/jobs/{job_id}/clips/{index}/cover/frames")
+    def cover_frames(job_id: str, index: int) -> list[dict]:
+        """The best few cover frames (source time + small preview), best first."""
+        _, clip = clip_of(job_id, index)
+        video = source_of(job_id)
+        return [{**c, "img": data_url(cover.preview(video, c["t"], c["x"]))} for c in cover.candidates(video, clip)]
+
+    @app.post("/api/jobs/{job_id}/clips/{index}/cover", response_model=Job)
+    def edit_cover(job_id: str, index: int, body: CoverEdit) -> Job:
+        """(Re)make the cover image: new text and/or frame (`t`), or `auto` for the best frame again."""
+        editable(job_id)
+        _, clip = clip_of(job_id, index)
+        video = source_of(job_id)
+        work = clip.model_copy(deep=True)
+        if body.text is not None:
+            work.cover_text = " ".join(body.text.split())
+        if body.auto:
+            work.cover_t = None
+        elif body.t is not None:
+            if not work.start <= body.t <= work.end:
+                raise HTTPException(400, "the cover frame must be inside the clip")
+            work.cover_t = round(body.t, 2)
+        try:
+            cover.make_cover(video, work, store.dir(job_id), get_preset(work.options.caption_preset).font)
+        except Exception as e:
+            raise HTTPException(500, f"cover failed: {e}") from e
+
+        def apply(c: Clip) -> None:
+            c.cover, c.cover_text, c.cover_t = work.cover, work.cover_text, work.cover_t
+            c.cover_version = max(c.cover_version, work.cover_version)
+
+        try:
+            return store.update_clip(job_id, index, apply)
+        except KeyError:
+            raise HTTPException(404, "clip not found") from None
 
     @app.get("/api/jobs/{job_id}/export.zip")
     def export_pack(job_id: str) -> FileResponse:

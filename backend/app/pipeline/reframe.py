@@ -139,10 +139,22 @@ def head_turn(eye_a_x: float, eye_b_x: float, nose_x: float) -> float:
     return float(max(-1.0, min(1.0, (nose_x - (eye_a_x + eye_b_x) / 2) / dist)))
 
 
-def pick_face(faces: list[tuple[float, float, float]], prev: float | None) -> float | None:
-    """Biggest confident face, but stick with the previous person unless someone is much bigger."""
+FOLLOW_RADIUS = 0.12  # a chosen person's face must be within this much of the frame width of where they were
+
+
+def pick_face(faces: list[tuple[float, float, float]], prev: float | None,
+              follow: float | None = None) -> float | None:
+    """Biggest confident face, but stick with the previous person unless someone is much bigger.
+
+    `follow` (x 0..1, chosen in the UI): only ever that person — the face nearest to where they were last seen
+    (or to `follow` after a cut); None when they're not in frame, so the crop holds instead of jumping to someone else.
+    """
     if not faces:
         return None
+    if follow is not None:
+        target = follow if prev is None else prev
+        near = [f for f in faces if abs(f[0] - target) <= FOLLOW_RADIUS]
+        return min(near, key=lambda f: abs(f[0] - target))[0] if near else None
     best = max(faces, key=lambda f: f[1] * f[2])
     if prev is None:
         return best[0]
@@ -150,8 +162,8 @@ def pick_face(faces: list[tuple[float, float, float]], prev: float | None) -> fl
     return near[0] if near[1] * near[2] >= 0.6 * best[1] * best[2] else best[0]
 
 
-def sample_faces(video: Path, start: float, end: float,
-                 detector: FaceDetector) -> tuple[list[Sample], int, int]:
+def sample_faces(video: Path, start: float, end: float, detector: FaceDetector,
+                 follow: float | None = None) -> tuple[list[Sample], int, int]:
     import cv2
 
     cap = cv2.VideoCapture(str(video))
@@ -182,7 +194,7 @@ def sample_faces(video: Path, start: float, end: float,
                 cv2.compareHist(prev_hist, hist, cv2.HISTCMP_CORREL) < settings.scene_cut_threshold
             prev_hist = hist
             faces = detector.detect(small)
-            cx = pick_face(faces, None if cut else prev_cx)
+            cx = pick_face(faces, None if cut else prev_cx, follow)
             prev_cx = cx if cx is not None else prev_cx
             gray = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
             look = next((float(f[5]) for f in faces if f[0] == cx and len(f) > 5), None)
@@ -549,7 +561,9 @@ def get_detector() -> FaceDetector:
 
 
 def plan_reframe(video: Path, start: float, end: float, detector: FaceDetector | None = None,
-                 mode: str | None = None) -> ReframePlan:
+                 mode: str | None = None, follow: float | None = None) -> ReframePlan:
+    """`follow` (x 0..1 of a face picked with people()) tracks that one person in "face" mode, whatever `mode`
+    says — except "center", which stays a plain centre crop."""
     try:
         import cv2
     except ImportError:
@@ -563,11 +577,13 @@ def plan_reframe(video: Path, start: float, end: float, detector: FaceDetector |
     if not src_w or crop_w >= src_w:
         return ReframePlan("none", src_w, src_h, src_w)
     mode = mode or settings.reframe_mode
+    if follow is not None and mode != "center":
+        mode = "face"
     if mode not in ("face", "auto", "split", "speaker"):
         return ReframePlan("center", src_w, src_h, crop_w)
 
     try:
-        samples, _, _ = sample_faces(video, start, end, detector or get_detector())
+        samples, _, _ = sample_faces(video, start, end, detector or get_detector(), follow)
     except Exception as e:
         log.warning("face sampling failed (%s); using centre crop", e)
         return ReframePlan("center", src_w, src_h, crop_w)
@@ -585,7 +601,61 @@ def plan_reframe(video: Path, start: float, end: float, detector: FaceDetector |
 
     found = sum(s.cx is not None for s in samples)
     if not samples or found / len(samples) < settings.face_min_coverage:
+        if follow is not None:  # you chose this person: keep the crop on them rather than the centre
+            return ReframePlan("face", src_w, src_h, crop_w,
+                               to_keyframes([Sample(0.0, follow)], src_w, crop_w, end - start))
         return ReframePlan("center", src_w, src_h, crop_w)
 
     keys = to_keyframes(smooth(samples, lead=settings.reframe_lead * crop_w / src_w), src_w, crop_w, end - start)
     return ReframePlan("face", src_w, src_h, crop_w, keys)
+
+
+# ------------------------------------------------------------------ who's in the clip (choose who to follow)
+
+PEOPLE_FRAMES = 8
+PERSON_GAP = 0.1  # faces further apart than this (fraction of width) are different people
+
+
+def people(video: Path, start: float, end: float, detector: FaceDetector | None = None,
+           frames: int = PEOPLE_FRAMES) -> list[dict]:
+    """Distinct faces across a few frames of the clip, left to right: x (0..1, what `follow` takes), share of frames
+    they're in, size, and a small JPEG of the face (bytes) so the UI can show who is who."""
+    import cv2
+
+    detector = detector or get_detector()
+    cap = cv2.VideoCapture(str(video))
+    seen: list[tuple[float, float, int, object]] = []  # (cx, area, frame no, crop jpeg bytes)
+    n = 0
+    for k in range(frames):
+        cap.set(cv2.CAP_PROP_POS_MSEC, (start + (k + 0.5) * (end - start) / frames) * 1000)
+        ok, frame = cap.read()
+        if not ok:
+            continue
+        n += 1
+        h, w = frame.shape[:2]
+        scale = DETECT_WIDTH / w
+        for f in detector.detect(cv2.resize(frame, (DETECT_WIDTH, int(h * scale)))):
+            cy, fh = (f[3], f[4]) if len(f) > 4 else (0.4, 0.25)
+            side = int(min(fh * h * 1.7, h, w))
+            x0 = int(min(max(f[0] * w - side / 2, 0), w - side))
+            y0 = int(min(max(cy * h - side / 2, 0), h - side))
+            thumb = cv2.resize(frame[y0:y0 + side, x0:x0 + side], (160, 160))
+            ok, jpg = cv2.imencode(".jpg", thumb, [cv2.IMWRITE_JPEG_QUALITY, 80])
+            seen.append((float(f[0]), float(f[1]), k, jpg.tobytes() if ok else b""))
+    cap.release()
+    groups: list[list] = []
+    for face in sorted(seen, key=lambda x: x[0]):
+        if groups and face[0] - groups[-1][-1][0] <= PERSON_GAP:
+            groups[-1].append(face)
+        else:
+            groups.append([face])
+    out = []
+    for g in groups:
+        frames_in = len({x[2] for x in g})
+        if frames_in < max(1, n // 4):  # a face in one frame out of eight: a poster, a passer-by, a false hit
+            continue
+        xs = sorted(x[0] for x in g)
+        best = max(g, key=lambda x: x[1])
+        out.append({"x": round(xs[len(xs) // 2], 3), "share": round(frames_in / max(n, 1), 2),
+                    "size": round(best[1], 4), "jpeg": best[3]})
+    return out

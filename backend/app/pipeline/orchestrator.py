@@ -17,11 +17,13 @@ from pathlib import Path
 from ..config import settings
 from ..models import Clip, Segment, Stage
 from .content import ContentContext, clip_text, generate_all, load_meta, write_posts_md
+from .cover import make_cover
 from .download import download
 from .highlights import select_highlights
 from .history import get_history
 from .llm import LLM, OllamaClient
 from .nospeech import select_no_speech
+from .presets import get_preset
 from .render import render_clip
 from .transcribe import transcribe, words_per_minute
 
@@ -119,12 +121,26 @@ def produce(job_dir: Path, clips: list[Clip], report: Reporter, llm: LLM | None 
         except Exception as e:  # one bad render shouldn't lose the others
             log.exception("render failed for clip %s", clip.index)
             clip.render_error = str(e)[:300]
+            continue
+        cover_for(video, clip, job_dir)
+    for clip in todo:  # rendered before covers existed
+        if clip.file and not clip.cover:
+            cover_for(video, clip, job_dir)
     report(Stage.done, 1.0, f"{sum(1 for c in todo if c.file)} shorts ready")
     return clips
 
 
+def cover_for(video: Path, clip: Clip, job_dir: Path) -> None:
+    """Reel cover next to the short; a failure is logged, never fails the render."""
+    try:
+        make_cover(video, clip, job_dir, get_preset(clip.options.caption_preset).font)
+    except Exception:
+        log.exception("cover failed for clip %s", clip.index)
+
+
 def render_one(job_dir: Path, clip: Clip) -> Clip:
     clip.file = render_clip(job_dir / "source.mp4", clip, load_segments(job_dir), job_dir)
+    cover_for(job_dir / "source.mp4", clip, job_dir)
     return clip
 
 

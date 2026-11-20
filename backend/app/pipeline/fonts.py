@@ -118,3 +118,25 @@ def fontsdir_option(family: str) -> str:
         return ""
     path = str(d).replace("\\", "/").replace("'", r"'\''").replace(":", r"\:")
     return f":fontsdir='{path}'"
+
+
+BOLD = re.compile(r"(bold|black|heavy|bd\.|bd$|-b\.)", re.I)
+
+
+def font_file(family: str) -> str | None:
+    """A font FILE for `family` (Pillow needs a path, not a family name), bold face preferred; None if not found.
+
+    Same places as for libass: data/fonts, then fontconfig, then the Windows fonts (copied into data/fonts once).
+    """
+    files = _has(_families_in(fonts_dir()), family)
+    if not files:
+        caption_fonts_dir(family)  # copies it from Windows into data/fonts when that's where it lives
+        files = _has(_families_in(fonts_dir()), family)
+    if not files:
+        matched = _fc("match", "-f", "%{family}\t%{file}", f"{family}:weight=bold")
+        fams, _, file = matched.partition("\t")
+        if family.casefold() in (f.strip().casefold() for f in fams.split(",")) and file:
+            files = [file]
+    if not files:
+        return None
+    return next((f for f in files if BOLD.search(Path(f).name)), files[0])

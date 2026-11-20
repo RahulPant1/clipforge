@@ -52,6 +52,8 @@ backend/                FastAPI + pipeline (Python 3.11, conda env "clipforge")
                         two_speakers() → split_panels(): static 9:8 crop per speaker, split+vstack ("split" mode)
                         or speaker_activity() (aligned mouth-minus-eye thumbnail change) → active_speaker_path()
                         (offline turns, cut at turn start) → same sendcmd crop ("speaker" mode)
+                        options.follow (x of a face from people()) → pick_face tracks only that person (FOLLOW_RADIUS,
+                        holds when they're out of frame) in "face" mode, whatever the framing says except "center"
     content.py          Content Studio: ANGLES (creative styles per platform), RULES, SCHEMAS, PROMPT,
                         assemblers enforcing platform limits, generate_post/generate_all, posts.md writer
     voice.py            brand voice: your posts per platform (data/brand_voice.json, all jobs) → voice_block()
@@ -59,6 +61,9 @@ backend/                FastAPI + pipeline (Python 3.11, conda env "clipforge")
     history.py          variety engine: least-recently-used angle rotation + recent openers to avoid
                         (persisted in data/content_history.json across jobs)
     carousel.py         Instagram carousel PNGs (1080x1350, Pillow)
+    hooks.py            title/hook variants on demand (STYLES: question, bold_claim, number, …) → clip.variants
+    cover.py            reel cover short_N.cover.jpg: candidates() scores sampled frames (sharpness × face size ×
+                        frontal, never in struck words) → crop 9:16 on the face → text in the IG grid band (240-1680)
     waveform.py         Pick timeline: loudness 0-100 at 20/s from one chunked ffmpeg PCM pass → waveform.json
     export.py           export pack zip (shorts, srt, posts, carousels, titles.csv)
     render.py           plan_cuts + plan_reframe → captions → ffmpeg
@@ -167,6 +172,11 @@ done: PATCH clip options → stale → POST /clips/{i}/render ; PATCH/POST posts
   are ignored). A word is struck when its MIDDLE is inside a range (`is_struck`, same rule in CaptionEditor.jsx).
   `_struck_gaps` widens each range over the pause up to the neighbouring kept words (± pause_padding), so a strike
   joins like a jump cut. Struck words are dropped from captions/.srt and from `clip_text()` (posts). Burned in → stale.
+- Hook variants (`POST /clips/{i}/hooks`) take GPU_LOCK like "new angle" (409 if busy) and save onto the job as it
+  is now; first call after Gemma unloaded waits for the model load (~2 min measured cold, ~3 s warm).
+- Covers are made after every render (`orchestrator.cover_for`, never fails a render) and on `POST /clips/{i}/cover`
+  {text, t, auto}; text = clip.cover_text → Instagram cover_text → hook. `?v=<clip.cover_version>` busts the cache.
+- Tests never download YuNet: conftest stubs `FaceDetector._ensure_model` (Haar) and resets `reframe._detector`.
 - Instagram allows 5 hashtags per caption (since Dec 2025): `assemble_instagram` caps at `IG_MAX_HASHTAGS`, counting
   any the model wrote inline.
 - candidates.json outcomes: kept | overlap (lost to a higher-scored clip on the same moment) | ranked_out (fine, but
@@ -257,12 +267,12 @@ Keep it local: no cloud stock/B-roll/TTS APIs.
         ranges into `plan_cuts` (same keep-interval engine as jump cuts).
 15. [ ] E. Sound design: whoosh on cuts, pop on keywords, background music auto-ducked under speech
         (ffmpeg sidechaincompress) from a local sound folder.
-16. [ ] K. Reel/Shorts cover image: `cover_text` (already generated) on the best frame (Pillow).
-17. [ ] D. Reframe override: pick which face to follow, or crop keyframes dragged on the Pick timeline.
+16. [x] K. Reel/Shorts cover image: `cover_text` (already generated) on the best frame (Pillow).
+17. [x] D. Reframe override: pick which face to follow (Shorts step). [ ] still open: crop keyframes dragged by hand.
 18. [ ] F. Colour emoji as PNG overlays (libass is monochrome) + optional auto-emoji per caption line (= roadmap 4).
 19. [ ] G. B-roll from your own folder, matched to the clip by Gemma keywords.
 20. [ ] H. Brand kit: logo watermark, end card with CTA.
 21. [ ] I. Multi-aspect export: 1:1 and 4:5 alongside 9:16.
-22. [ ] L. Several title/hook variants to choose from.
+22. [x] L. Several title/hook variants to choose from.
 23. [ ] N. Batch: a playlist or a watched folder as a queue of jobs.
 (M = Hinglish/bilingual captions → item 10; O = calendar + auto-publish → items 9 and 11.)

@@ -48,6 +48,88 @@ function LookChip({ p, on, disabled, onPick }) {
   )
 }
 
+// D: who the crop follows — faces found in the clip, click one (Auto = the biggest / both in 2-up and Talker)
+function FollowPicker({ job, clip, busy, act, o }) {
+  const [people, setPeople] = useState(null) // null = not loaded, 'loading', [] = none found
+  const load = () => {
+    setPeople('loading')
+    api.people(job.id, clip.index).then(setPeople).catch(() => setPeople([]))
+  }
+  const choose = (x) =>
+    act(() => api.editClip(job.id, clip.index, {
+      options: { ...o, follow: x, reframe: x == null ? (o.reframe === 'face' ? null : o.reframe) : 'face' },
+    })).catch(() => {})
+  return (
+    <div className="opt-col">
+      <span className="muted">
+        Follow {o.follow != null ? <b>· the person you chose</b> : '· automatic'}
+      </span>
+      {people === null && (
+        <button className="btn sm ghost" disabled={busy} onClick={load}>👤 Choose who to follow</button>
+      )}
+      {people === 'loading' && <span className="muted small">Finding faces…</span>}
+      {Array.isArray(people) && (
+        <div className="people">
+          <button className={`person auto ${o.follow == null ? 'on' : ''}`} disabled={busy} onClick={() => choose(null)}>
+            Auto
+          </button>
+          {people.map((p) => (
+            <button key={p.x} disabled={busy} onClick={() => choose(p.x)}
+                    className={`person ${o.follow != null && Math.abs(o.follow - p.x) < 0.06 ? 'on' : ''}`}
+                    title={`In ${Math.round(p.share * 100)}% of the clip`}>
+              <img src={p.img} alt={`face at ${Math.round(p.x * 100)}% from the left`} />
+            </button>
+          ))}
+          {!people.length && <span className="muted small">No faces found in this clip.</span>}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// K: reel / Shorts cover — text + frame, made after every render, editable here
+function CoverPanel({ job, clip, busy, act, defaultText }) {
+  const [text, setText] = useState(clip.cover_text)
+  const [frames, setFrames] = useState(null)
+  useEffect(() => setText(clip.cover_text), [clip.cover_text])
+  const edit = (body) => act(() => api.editCover(job.id, clip.index, body)).catch(() => {})
+  const url = clip.cover && api.fileUrl(job.id, clip.cover, clip.cover_version)
+  return (
+    <div className="opt-col cover">
+      <span className="muted">Cover <span className="small">· reel / Shorts thumbnail, text stays inside Instagram's grid crop</span></span>
+      <div className="cover-row">
+        {url ? <a href={url} target="_blank" rel="noreferrer"><img src={url} alt="cover" /></a>
+             : <div className="cover-empty muted small">Made after rendering</div>}
+        <div className="cover-ctl">
+          <input value={text} maxLength={80} disabled={busy} placeholder={defaultText || 'Cover text'}
+                 onChange={(e) => setText(e.target.value)}
+                 onBlur={() => text !== clip.cover_text && edit({ text })} />
+          <div className="row-btns">
+            <button className="btn sm ghost" disabled={busy}
+                    onClick={() => { setFrames('loading'); api.coverFrames(job.id, clip.index).then(setFrames).catch(() => setFrames(null)) }}>
+              🖼 Other frame
+            </button>
+            {clip.cover_t != null && <button className="btn sm ghost" disabled={busy} onClick={() => edit({ auto: true })}>Best frame</button>}
+            {url && <a className="btn sm ghost" href={url} download={`short_${clip.index}_cover.jpg`}>Download</a>}
+          </div>
+        </div>
+      </div>
+      {frames === 'loading' && <span className="muted small">Finding the best frames…</span>}
+      {Array.isArray(frames) && (
+        <div className="frames">
+          {frames.map((f) => (
+            <button key={f.t} disabled={busy} title={`at ${fmt(f.t)}`}
+                    className={clip.cover_t != null && Math.abs(clip.cover_t - f.t) < 0.05 ? 'on' : ''}
+                    onClick={() => { edit({ t: f.t }); setFrames(null) }}>
+              <img src={f.img} alt={`frame at ${fmt(f.t)}`} />
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
 function ShortCard({ job, clip, busy, act, presets }) {
   const o = clip.options || {}
   const setOpt = (k, v) => act(() => api.editClip(job.id, clip.index, { options: { ...o, [k]: v } })).catch(() => {})
@@ -88,6 +170,7 @@ function ShortCard({ job, clip, busy, act, presets }) {
         <Seg label="Framing" value={o.reframe ?? 'auto'} disabled={busy}
              options={[['auto', 'Auto'], ['face', 'Face'], ['split', '2-up'], ['speaker', 'Talker'], ['center', 'Centre']]}
              onChange={(v) => setOpt('reframe', v)} />
+        <FollowPicker job={job} clip={clip} busy={busy} act={act} o={o} />
         <Seg label="Hook title" value={o.hook ?? true} disabled={busy || !clip.hook}
              options={[[true, 'On'], [false, 'Off']]} onChange={(v) => setOpt('hook', v)} />
         <Seg label="Captions" value={o.caption_style ?? presets?.style ?? 'karaoke'} disabled={busy}
@@ -109,6 +192,9 @@ function ShortCard({ job, clip, busy, act, presets }) {
                  onChange={(v) => setOpt('caption_position', v)} />
           </>
         )}
+
+        <CoverPanel job={job} clip={clip} busy={busy} act={act}
+                    defaultText={clip.content?.instagram?.extra?.cover_text || clip.hook} />
 
         {clip.render_error && <p className="err">Render failed: {clip.render_error}</p>}
         <div className="actions">

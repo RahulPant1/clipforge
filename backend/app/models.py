@@ -65,6 +65,13 @@ class RenderOptions(BaseModel):
     caption_position: str | None = None  # bottom | middle
     zoom: bool | None = None  # punch-in on alternate jump-cut segments
     hook: bool | None = None  # show clip.hook as a title card for the first seconds
+    follow: float | None = None  # follow THIS person: face centre x (0..1 of source width) picked in the UI
+
+
+class HookVariant(BaseModel):
+    style: str  # hooks.STYLES key (question, bold_claim, …) or "other"
+    title: str
+    hook: str
 
 
 class Clip(BaseModel):
@@ -84,6 +91,11 @@ class Clip(BaseModel):
     approved: bool = True  # chosen for rendering (review step)
     custom: bool = False  # added by you from the transcript
     removed: list[tuple[float, float]] = []  # words you struck in the transcript (SOURCE seconds) → cut out
+    variants: list[HookVariant] = []  # alternative title + hook pairs to choose from (Pick step)
+    cover: str | None = None  # short_N.cover.jpg once made (reel cover / thumbnail)
+    cover_text: str = ""  # text printed on the cover ("" = Instagram cover_text, else the hook)
+    cover_t: float | None = None  # SOURCE second of the cover frame (None = best frame, picked automatically)
+    cover_version: int = 0  # bumps on every cover render (cache-busting)
     visual: str = ""  # no-speech clips: what the vision model saw on screen (feeds the posts instead of speech)
     options: RenderOptions = RenderOptions()
     stale: bool = False  # edited after rendering -> needs re-render
@@ -115,6 +127,12 @@ class ClipEdit(BaseModel):
     approved: bool | None = None
     removed: list[tuple[float, float]] | None = None  # struck word ranges, replaces the list ([] restores all)
     options: RenderOptions | None = None
+
+
+class CoverEdit(BaseModel):
+    text: str | None = Field(default=None, max_length=80)  # None = keep
+    t: float | None = None  # source second of the frame; None = keep
+    auto: bool = False  # forget the chosen frame and pick the best one again
 
 
 class ClipAdd(BaseModel):

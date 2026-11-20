@@ -25,6 +25,11 @@ def _offline_defaults(monkeypatch, tmp_path):
     from app.pipeline import fonts
 
     monkeypatch.setattr(fonts, "WINDOWS_FONTS", tmp_path / "no-windows-fonts")  # never scan /mnt/c in tests
+    from app.pipeline import reframe
+
+    # covers / face pickers call the detector directly: never download YuNet in tests (Haar is built in)
+    monkeypatch.setattr(reframe.FaceDetector, "_ensure_model", staticmethod(lambda model_dir: None))
+    monkeypatch.setattr(reframe, "_detector", None)
 
 
 @pytest.fixture

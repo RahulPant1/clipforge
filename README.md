@@ -59,6 +59,12 @@ YouTube URL / file
 - **Cut by text:** in the same word view, switch to ✂ Cut words and click words (⇧-click for a run) to cut them
   from the short — the pause around them goes too, captions and posts skip them, the preview jumps over them.
   Works with jump cuts off as well
+- **Hook variants:** ✨ More hooks on a Pick card — Gemma writes 5 title + hook pairs in different styles
+  (question, bold claim, curiosity gap, POV, mistake…) from what's actually said; click one to use it
+- **Choose who to follow:** on a Shorts card, pick a face found in the clip — the crop tracks only that person
+  (podcasts where Auto follows the wrong one)
+- **Reel cover:** every short gets a 1080x1920 cover — the sharpest frame of the speaker facing the camera with the
+  cover text, kept inside Instagram's grid crop. Change the text or pick another frame; included in the export pack
 - **Fix captions:** click any word Whisper misheard to correct it, or replace a word or phrase everywhere
   ("open ai" → "OpenAI"); captions, `.srt` and posts all use the fix. **Names & terms** on the New job form
   (remembered for all jobs) help Whisper spell your name, brands and jargon right from the start

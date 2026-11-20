@@ -38,7 +38,7 @@ def render_clip(video: Path, clip: Clip, segs: list[Segment], job_dir: Path) -> 
     (job_dir / f"{name}.srt").write_text(build_srt(plan.words), encoding="utf-8")  # for YouTube upload
 
     # Speaker-following crop (runs before jump-cut select, so it works in source-relative time)
-    rf = plan_reframe(video, clip.start, clip.end, mode=reframe_mode)
+    rf = plan_reframe(video, clip.start, clip.end, mode=reframe_mode, follow=o.follow)
     clip.reframe = rf.mode
     cmd_file = None
     if rf.mode in ("face", "speaker"):

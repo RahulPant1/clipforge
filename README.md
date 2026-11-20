@@ -56,6 +56,9 @@ YouTube URL / file
   published) and Gemma writes in *your* voice — tone, casing, emoji and hashtag habits — while the facts still
   come only from the clip
 - **Export pack:** one zip with shorts, captions, post copy, carousels and a `titles.csv`
+- **Cut by text:** in the same word view, switch to ✂ Cut words and click words (⇧-click for a run) to cut them
+  from the short — the pause around them goes too, captions and posts skip them, the preview jumps over them.
+  Works with jump cuts off as well
 - **Fix captions:** click any word Whisper misheard to correct it, or replace a word or phrase everywhere
   ("open ai" → "OpenAI"); captions, `.srt` and posts all use the fix. **Names & terms** on the New job form
   (remembered for all jobs) help Whisper spell your name, brands and jargon right from the start

@@ -1,4 +1,5 @@
-"""Silence + filler-word removal using Whisper word timestamps, cross-checked against the audio.
+"""Silence + filler-word removal using Whisper word timestamps, cross-checked against the audio,
+plus words you struck in the transcript (text-based cutting, `clip.removed`).
 
 Produces "keep" intervals (relative to the clip start) and remaps word timings onto the
 shortened output timeline so captions stay in sync after the cuts.
@@ -54,6 +55,47 @@ def clip_words(segs: list[Segment], start: float, end: float) -> list[Word]:
     return [w for s in segs for w in s.words if w.start >= start - 0.05 and w.end <= end + 0.05]
 
 
+MAX_REMOVED = 200  # struck ranges per clip
+
+
+def clean_removed(ranges, start: float | None = None, end: float | None = None) -> list[tuple[float, float]]:
+    """Struck ranges (source seconds): valid, sorted, overlaps merged; clipped to [start, end] when given."""
+    out: list[list[float]] = []
+    for r in sorted((float(a), float(b)) for a, b in ranges or []):
+        a, b = r
+        if start is not None:
+            a = max(a, start)
+        if end is not None:
+            b = min(b, end)
+        if b - a < 0.01:
+            continue
+        if out and a <= out[-1][1] + 1e-6:
+            out[-1][1] = max(out[-1][1], b)
+        else:
+            out.append([a, b])
+    return [(round(a, 3), round(b, 3)) for a, b in out[:MAX_REMOVED]]
+
+
+def is_struck(w: Word, removed: list[tuple[float, float]]) -> bool:
+    """A word is cut when its middle lies in a struck range (same rule in the UI)."""
+    mid = (w.start + w.end) / 2
+    return any(a <= mid < b for a, b in removed)
+
+
+def _struck_gaps(removed: list[tuple[float, float]], kept: list[Word], total: float,
+                 pad: float) -> list[tuple[float, float]]:
+    """Clip-relative ranges to cut for struck words, widened over the pause on each side up to the neighbouring
+    kept words (+ pad of air), so "I [um, basically,] think" joins up like a normal jump cut."""
+    gaps = []
+    for a, b in removed:
+        before = [w.end for w in kept if w.end <= a + 1e-6]
+        after = [w.start for w in kept if w.start >= b - 1e-6]
+        lo = min(a, max(before) + pad) if before else 0.0
+        hi = max(b, min(after) - pad) if after else total
+        gaps.append((max(lo, 0.0), min(hi, total)))
+    return gaps
+
+
 SILENCE_FRAME = 0.02  # s per loudness frame
 SILENCE_RATE = 16000
 
@@ -104,21 +146,33 @@ def _subtract(keeps: list[list[float]], gaps: list[tuple[float, float]]) -> list
 
 
 def plan_cuts(segs: list[Segment], start: float, end: float, enabled: bool | None = None,
-              silences: list[tuple[float, float]] | None = None) -> CutPlan:
+              silences: list[tuple[float, float]] | None = None,
+              removed: list[tuple[float, float]] | None = None) -> CutPlan:
     """Keep intervals from the word timings; `silences` (clip-relative, from audio_silences) also removes pauses
-    that Whisper's timings ran over — each keeps pause_padding of air at both edges."""
+    that Whisper's timings ran over — each keeps pause_padding of air at both edges.
+
+    `removed` (SOURCE seconds, clip.removed) are words you struck: always cut — also with jump cuts off — together
+    with the pause around them, and never captioned.
+    """
     enabled = settings.jumpcut_enabled if enabled is None else enabled
     total = end - start
     words = clip_words(segs, start, end)
     rel = [Word(start=max(w.start - start, 0), end=min(w.end - start, total), word=w.word) for w in words]
+    pad, max_pause = settings.pause_padding, settings.max_pause
+    struck = [(a - start, b - start) for a, b in clean_removed(removed, start, end)]
+    if struck:
+        rel = [w for w in rel if not is_struck(w, struck)]
 
     spoken = [w for w in rel if not is_filler(w.word)] if enabled else rel
     if not enabled or not spoken:
-        plan = CutPlan(keeps=[(0.0, round(total, 3))], words=[], source_duration=total)
+        keeps = [(0.0, round(total, 3))]
+        if struck:
+            keeps = snap_to_frames(_subtract([[0.0, total]], _struck_gaps(struck, rel, total, pad)),
+                                   settings.output_fps, total) or keeps
+        plan = CutPlan(keeps=keeps, words=[], source_duration=total)
         plan.words = _remap_words(plan, spoken)
         return plan
 
-    pad, max_pause = settings.pause_padding, settings.max_pause
     keeps: list[list[float]] = []
     for w in spoken:
         s, e = max(w.start - pad, 0.0), min(w.end + pad, total)
@@ -127,7 +181,7 @@ def plan_cuts(segs: list[Segment], start: float, end: float, enabled: bool | Non
         else:
             keeps.append([s, e])
     gaps = [(s + pad, e - pad) for s, e in silences or [] if e - s - 2 * pad >= max_pause]
-    keeps = _subtract(keeps, gaps)
+    keeps = _subtract(keeps, gaps + _struck_gaps(struck, rel, total, pad))
     merged = snap_to_frames([(s, e) for s, e in keeps if e - s > 0.05], settings.output_fps, total)
 
     plan = CutPlan(keeps=merged, words=[], source_duration=total)

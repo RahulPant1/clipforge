@@ -327,6 +327,10 @@ input:focus, textarea:focus { outline: none; border-color: #4a5164; }
 .capword:hover { background: var(--line); }
 .capword.now { background: #ff4d6d33; }
 .capword-in { font: inherit; padding: 0 4px; border: 1px solid var(--accent); border-radius: 4px; background: var(--panel); color: var(--text); width: auto; }
+.capmodes { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.capmodes .small { display: inline-flex; align-items: center; gap: 6px; }
+.capwords.cutting .capword { cursor: pointer; }
+.capword.struck { text-decoration: line-through; text-decoration-color: var(--accent); opacity: .45; }
 .capreplace { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .capreplace input:not([type]) { flex: 1 1 120px; min-width: 0; padding: 6px 8px; font-size: 13px; }
 .remember { display: flex; align-items: center; gap: 4px; }

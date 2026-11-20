@@ -83,6 +83,7 @@ class Clip(BaseModel):
     content: dict[str, Post] = {}  # platform -> generated post
     approved: bool = True  # chosen for rendering (review step)
     custom: bool = False  # added by you from the transcript
+    removed: list[tuple[float, float]] = []  # words you struck in the transcript (SOURCE seconds) → cut out
     visual: str = ""  # no-speech clips: what the vision model saw on screen (feeds the posts instead of speech)
     options: RenderOptions = RenderOptions()
     stale: bool = False  # edited after rendering -> needs re-render
@@ -112,6 +113,7 @@ class ClipEdit(BaseModel):
     hook: str | None = None
     keywords: list[str] | None = None
     approved: bool | None = None
+    removed: list[tuple[float, float]] | None = None  # struck word ranges, replaces the list ([] restores all)
     options: RenderOptions | None = None
 
 

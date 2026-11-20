@@ -96,7 +96,13 @@ function Candidate({ job, clip, others, transcript, wave, total, busy, act, relo
   return (
     <div className={`cand-card ${clip.approved ? 'is-approved' : ''}`} tabIndex={0} onKeyDown={onKey}>
       <video key={src} ref={video} src={src} controls preload="metadata"
-             onTimeUpdate={(e) => setPlayhead(e.currentTarget.currentTime)}
+             onTimeUpdate={(e) => {
+               const v = e.currentTarget
+               // preview the cut: jump over struck words while playing (timeupdate is ~4/s, so roughly)
+               const skip = !v.paused && (clip.removed || []).find(([a, b]) => v.currentTime >= a && v.currentTime < b)
+               if (skip) v.currentTime = skip[1]
+               setPlayhead(v.currentTime)
+             }}
              onSeeked={(e) => setPlayhead(e.currentTarget.currentTime)} />
       <div className="cand-body">
         <div className="cand-head">
@@ -107,6 +113,7 @@ function Candidate({ job, clip, others, transcript, wave, total, busy, act, relo
             </span>
           )}
           {clip.custom && <span className="chip">your clip</span>}
+          {clip.removed?.length > 0 && <span className="chip" title="Struck in the transcript">✂ words cut</span>}
           {clip.stale && <span className="chip warnchip">changed — re-render needed</span>}
           {clip.file && !clip.stale && <span className="chip">rendered</span>}
           <button
@@ -160,14 +167,14 @@ function Candidate({ job, clip, others, transcript, wave, total, busy, act, relo
         {clip.visual ? (
           <p className="excerpt" title="No speech: what Gemma saw in the keyframes">🎞 {clip.visual}</p>
         ) : fixing ? (
-          <CaptionEditor job={job} start={clip.start} end={clip.end} playhead={playhead} onSeek={seek} busy={busy}
+          <CaptionEditor job={job} clip={clip} start={clip.start} end={clip.end} playhead={playhead} onSeek={seek} busy={busy}
                          act={act} onFixed={reloadTranscript} />
         ) : (
           <p className="excerpt">“{clipText(transcript, clip) || '…'}”</p>
         )}
         {!clip.visual && (
           <button className="btn sm ghost fixcap" onClick={() => setFixing(!fixing)}>
-            {fixing ? 'Done fixing' : '✎ Fix captions'}
+            {fixing ? 'Done editing words' : '✎ Fix / ✂ cut words'}
           </button>
         )}
       </div>

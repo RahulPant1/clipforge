@@ -38,7 +38,8 @@ backend/                FastAPI + pipeline (Python 3.11, conda env "clipforge")
     nospeech.py         < 30 wpm: analyse() (one ffmpeg pass of 64x36 grey frames → motion + scene cuts, mono PCM →
                         loudness; cached signals.json) → excitement() → peak_windows() (payoff 65% in, snap to
                         cuts) → keyframes → vision Gemma (score/title/hook/description, mostly_text → capped)
-    jumpcut.py          silence/filler removal: plan_cuts() → keep intervals + words remapped to output time
+    jumpcut.py          silence/filler removal: plan_cuts() → keep intervals + words remapped to output time;
+                        `removed=` (clip.removed, struck words) is cut too, even with jump cuts off
     captions.py         karaoke ASS (per-word colours from a preset, pop-in) or one plain line per chunk (simple)
                         + SRT export (still written for YouTube upload; no longer used for burn-in)
     presets.py          CaptionPreset looks: font fallback list (first one fonts.font_available() finds),
@@ -162,6 +163,10 @@ done: PATCH clip options → stale → POST /clips/{i}/render ; PATCH/POST posts
 - transcript.json is the one source for captions, .srt, posts and the UI: caption fixes edit it (never words copied
   elsewhere). Word edits mark rendered shorts covering the change `stale` (main.mark_stale). Words keep Whisper's
   leading space. Edits need the job editable (409 while busy).
+- Text-based cutting: `clip.removed` = struck word ranges in SOURCE seconds (survive trims; ranges outside the clip
+  are ignored). A word is struck when its MIDDLE is inside a range (`is_struck`, same rule in CaptionEditor.jsx).
+  `_struck_gaps` widens each range over the pause up to the neighbouring kept words (± pause_padding), so a strike
+  joins like a jump cut. Struck words are dropped from captions/.srt and from `clip_text()` (posts). Burned in → stale.
 - Instagram allows 5 hashtags per caption (since Dec 2025): `assemble_instagram` caps at `IG_MAX_HASHTAGS`, counting
   any the model wrote inline.
 - candidates.json outcomes: kept | overlap (lost to a higher-scored clip on the same moment) | ranked_out (fine, but
@@ -248,7 +253,7 @@ Keep it local: no cloud stock/B-roll/TTS APIs.
 12. [x] A. Caption editor + custom vocabulary: fix mis-heard words (flows into captions + .srt, marks shorts stale),
         replace-all across the transcript, names/terms passed to Whisper (`hotwords`) for future jobs.
 13. [x] C. Prompt-based clipping: optional "topic" on a new job ("salary negotiation") steers the selection prompt.
-14. [ ] B. Text-based cutting (Descript-style): strike words in the transcript to remove them — extra removed
+14. [x] B. Text-based cutting (Descript-style): strike words in the transcript to remove them — extra removed
         ranges into `plan_cuts` (same keep-interval engine as jump cuts).
 15. [ ] E. Sound design: whoosh on cuts, pop on keywords, background music auto-ducked under speech
         (ffmpeg sidechaincompress) from a local sound folder.

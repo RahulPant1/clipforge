@@ -1,11 +1,23 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { api } from '../api.js'
 
+// A word is cut when its middle lies in a struck range — same rule as jumpcut.is_struck on the server
+const struckBy = (w, ranges) => {
+  const mid = (w.start + w.end) / 2
+  return ranges.some(([a, b]) => a <= mid && mid < b)
+}
+
 /**
- * Fix what Whisper misheard in one clip: click a word to edit it (Enter saves, Tab saves + next, Esc cancels),
- * or replace a word / phrase everywhere in the transcript. Rendered shorts covering a fix become "re-render needed".
+ * Edit one clip's words.
+ * Fix: click a word to edit it (Enter saves, Tab saves + next, Esc cancels), or replace a word / phrase everywhere
+ * in the transcript. Rendered shorts covering a fix become "re-render needed".
+ * Cut (text-based editing): click words to strike them out of this short, ⇧-click strikes a run. Saved as
+ * clip.removed (source-time ranges); the render cuts them with the pause around them, captions skip them.
  */
-export default function CaptionEditor({ job, start, end, playhead, onSeek, busy, act, onFixed }) {
+export default function CaptionEditor({ job, clip, start, end, playhead, onSeek, busy, act, onFixed }) {
+  const [mode, setMode] = useState('fix') // fix | cut
+  const [struck, setStruck] = useState(null) // Set of word indexes (optimistic while saving) | null = from clip
+  const anchor = useRef(null) // last word clicked in cut mode, for ⇧-click runs
   const [words, setWords] = useState(null)
   const [edit, setEdit] = useState(null) // { k: index in words, text }
   const [find, setFind] = useState('')
@@ -32,6 +44,37 @@ export default function CaptionEditor({ job, start, end, playhead, onSeek, busy,
     }, 300)
     return () => clearTimeout(t)
   }, [job.id, find, repl, words])
+
+  const removed = clip.removed || []
+  useEffect(() => setStruck(null), [clip.removed])
+  const cut = useMemo(
+    () => struck || new Set((words || []).flatMap((w, k) => (struckBy(w, removed) ? [k] : []))),
+    [struck, words, removed],
+  )
+
+  // Struck words → ranges: one per run of neighbouring words; ranges over words outside this view are kept
+  const saveCut = (next) => {
+    setStruck(next)
+    const ks = [...next].sort((a, b) => a - b)
+    const runs = []
+    for (const k of ks) {
+      const last = runs[runs.length - 1]
+      if (last && last[1] === k - 1) last[1] = k
+      else runs.push([k, k])
+    }
+    const outside = removed.filter(([a, b]) => !words.some((w) => struckBy(w, [[a, b]])))
+    const ranges = [...outside, ...runs.map(([a, b]) => [words[a].start, words[b].end])]
+    act(() => api.editClip(job.id, clip.index, { removed: ranges })).catch(() => setStruck(null))
+  }
+  const toggleCut = (k, shift) => {
+    const next = new Set(cut)
+    const on = !cut.has(k)
+    const [a, b] = shift && anchor.current != null ? [Math.min(anchor.current, k), Math.max(anchor.current, k)] : [k, k]
+    for (let i = a; i <= b; i++) on ? next.add(i) : next.delete(i)
+    anchor.current = k
+    saveCut(next)
+  }
+  const cutSeconds = (words || []).reduce((t, w, k) => t + (cut.has(k) ? w.end - w.start : 0), 0)
 
   const after = async () => {
     await load()
@@ -92,8 +135,24 @@ export default function CaptionEditor({ job, start, end, playhead, onSeek, busy,
 
   return (
     <div className="capedit">
-      <p className="hint">Click a word to fix it — Enter saves, Tab saves and moves on, Esc cancels.</p>
-      <div className="capwords">
+      <div className="capmodes">
+        <div className="seg">
+          <button className={mode === 'fix' ? 'on' : ''} onClick={() => setMode('fix')}>✎ Fix spelling</button>
+          <button className={mode === 'cut' ? 'on' : ''} onClick={() => setMode('cut')}>✂ Cut words</button>
+        </div>
+        {cut.size > 0 && (
+          <span className="muted small">
+            ✂ {cut.size} word{cut.size > 1 ? 's' : ''} cut · −{cutSeconds.toFixed(1)} s + the pauses around them
+            <button className="btn sm ghost" disabled={busy} onClick={() => saveCut(new Set())}>Restore all</button>
+          </span>
+        )}
+      </div>
+      <p className="hint">
+        {mode === 'fix'
+          ? 'Click a word to fix it — Enter saves, Tab saves and moves on, Esc cancels.'
+          : 'Click words to cut them from this short (again to restore), ⇧-click to cut a run. Captions and posts skip them; the preview jumps over them.'}
+      </p>
+      <div className={`capwords ${mode === 'cut' ? 'cutting' : ''}`}>
         {words.map((w, k) =>
           edit?.k === k ? (
             <input
@@ -110,9 +169,12 @@ export default function CaptionEditor({ job, start, end, playhead, onSeek, busy,
           ) : (
             <span
               key={k}
-              className={`capword ${playhead != null && playhead >= w.start && playhead < w.end ? 'now' : ''}`}
-              onClick={() => {
+              className={`capword ${playhead != null && playhead >= w.start && playhead < w.end ? 'now' : ''} ${
+                cut.has(k) ? 'struck' : ''}`}
+              title={mode === 'cut' ? (cut.has(k) ? 'Click to restore' : 'Click to cut') : undefined}
+              onClick={(e) => {
                 if (busy) return
+                if (mode === 'cut') return toggleCut(k, e.shiftKey)
                 onSeek(w.start)
                 startEdit(k)
               }}
@@ -122,7 +184,7 @@ export default function CaptionEditor({ job, start, end, playhead, onSeek, busy,
           ),
         )}
       </div>
-      <div className="capreplace">
+      {mode === 'fix' && <div className="capreplace">
         <input value={find} placeholder="Find (word or phrase)" disabled={busy} onChange={(e) => setFind(e.target.value)}
                onKeyDown={(e) => e.stopPropagation()} />
         <span className="muted">→</span>
@@ -135,7 +197,7 @@ export default function CaptionEditor({ job, start, end, playhead, onSeek, busy,
           <input type="checkbox" checked={remember} onChange={(e) => setRemember(e.target.checked)} />
           remember for future transcripts
         </label>
-      </div>
+      </div>}
       {note && <p className="hint">{note}</p>}
     </div>
   )

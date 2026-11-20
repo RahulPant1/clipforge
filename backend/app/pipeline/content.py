@@ -14,6 +14,7 @@ from pathlib import Path
 from ..config import settings
 from ..models import BrandVoice, Clip, Post, Segment
 from .history import ContentHistory
+from .jumpcut import clean_removed, clip_words, is_struck
 from .llm import LLM
 from .voice import load as load_voice
 from .voice import voice_block
@@ -138,6 +139,10 @@ def clip_text(segs: list[Segment], clip: Clip, limit: int = 2500) -> str:
     """What's said in the clip; for no-speech clips, what the vision model saw on screen instead."""
     if clip.visual and clip.options.caption_style == "none":
         return f"(No speech in this clip. What happens on screen: {clip.visual})"[:limit]
+    if clip.removed:  # struck words aren't in the short, so they mustn't be in its posts
+        removed = clean_removed(clip.removed)
+        words = [w for w in clip_words(segs, clip.start, clip.end) if not is_struck(w, removed)]
+        return "".join(w.word for w in words).strip()[:limit]
     return " ".join(s.text for s in segs if s.end > clip.start and s.start < clip.end)[:limit]
 
 

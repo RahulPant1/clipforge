@@ -31,7 +31,7 @@ def render_clip(video: Path, clip: Clip, segs: list[Segment], job_dir: Path) -> 
     hook = settings.hook_overlay if o.hook is None else o.hook
 
     silences = audio_silences(video, clip.start, clip.end) if jumpcut and settings.jumpcut_audio else None
-    plan = plan_cuts(segs, clip.start, clip.end, enabled=jumpcut, silences=silences)
+    plan = plan_cuts(segs, clip.start, clip.end, enabled=jumpcut, silences=silences, removed=clip.removed)
     clip.cut_seconds = round(plan.removed, 2)
     clip.out_duration = round(plan.duration, 2)
 

@@ -35,6 +35,7 @@ from .pipeline import transcript_edit, vocabulary, voice, waveform
 from .pipeline.content import ANGLES, NAMES, ContentContext, clip_text, generate_post, load_meta, write_posts_md
 from .pipeline.export import build_pack
 from .pipeline.history import get_history
+from .pipeline.jumpcut import clean_removed
 from .pipeline.llm import OllamaClient
 from .pipeline.presets import POSITIONS, all_presets
 
@@ -279,9 +280,11 @@ def create_app(pipeline=None, start_worker: bool = True, llm_factory=OllamaClien
 
         def apply(c: Clip) -> None:
             def burned_in(c: Clip) -> tuple:  # everything the rendered mp4 depends on
-                return c.start, c.end, c.options.model_dump(), c.hook, c.keywords
+                return c.start, c.end, c.options.model_dump(), c.hook, c.keywords, c.removed
 
             before = burned_in(c)
+            if "removed" in changes:
+                changes["removed"] = clean_removed(changes["removed"])
             for k, v in changes.items():
                 setattr(c, k, type(c.options)(**v) if k == "options" else v)
             if c.end - c.start < 3 or c.end - c.start > 180:

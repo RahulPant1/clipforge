@@ -83,7 +83,7 @@ def test_topic_with_nothing_found_explains_itself(tmp_path, segs, monkeypatch):
     src = tmp_path / "talk.mp4"
     src.write_bytes(b"x")
     monkeypatch.setattr(orchestrator, "transcribe", lambda video, job_dir, cb: segs)
-    monkeypatch.setattr(orchestrator, "words_per_minute", lambda s: 150)
+    monkeypatch.setattr(orchestrator, "words_per_minute", lambda s, d=0: 150)
     with pytest.raises(RuntimeError, match="No moments about “cats” found"):
         orchestrator.prepare(str(src), tmp_path / "job", 1, lambda *a: None,
                              llm=FakeLLM([_pick(0, 39.5, 9, relevance=1)]), topic="cats")

@@ -149,17 +149,55 @@ def build_prompt(win: list[Segment], n: int, template: str = PROMPT, topic: str 
                            transcript=lines, focus=focus_block(topic))
 
 
+SNAP_REACH = 8.0  # s: how far a clip edge may move to land on a sentence boundary
+_SENTENCE_END = (".", "?", "!", "…")
+
+
+def _ends_sentence(word: str) -> bool:
+    return word.strip().rstrip("\"'”’)]").endswith(_SENTENCE_END)
+
+
+def sentence_bounds(segs: list[Segment]) -> tuple[list[float], list[float]]:
+    """(sentence start times, sentence end times) from the words' punctuation.
+
+    Whisper segments are NOT sentences: on real footage a third of the clips snapped to segment edges ended
+    mid-sentence ("Now, I'm not saying that"). Without punctuation (some languages) this is just the first/last word.
+    """
+    words = [w for s in segs for w in s.words]
+    starts, ends = [], []
+    for prev, w in zip([None, *words], words, strict=False):
+        if prev is None or _ends_sentence(prev.word):
+            starts.append(w.start)
+            if prev is not None:
+                ends.append(prev.end)
+    if words:
+        ends.append(words[-1].end)
+    return starts, ends
+
+
+def _nearest(times: list[float], t: float, reach: float = SNAP_REACH) -> float | None:
+    near = [x for x in times if abs(x - t) <= reach]
+    return min(near, key=lambda x: abs(x - t)) if near else None
+
+
 def snap(start: float, end: float, segs: list[Segment]) -> tuple[float, float]:
-    """Align to real sentence boundaries so cuts never chop a word."""
-    s = min((x.start for x in segs), key=lambda t: abs(t - start))
-    e = min((x.end for x in segs), key=lambda t: abs(t - end))
+    """Align to sentence boundaries (within SNAP_REACH), else to Whisper segment edges — cuts never chop a word."""
+    starts, ends = sentence_bounds(segs)
+    s = _nearest(starts, start)
+    e = _nearest([x for x in ends if s is None or x > s], end)
+    if s is None:
+        s = min((x.start for x in segs), key=lambda t: abs(t - start))
+    if e is None or e <= s:
+        e = min((x.end for x in segs), key=lambda t: abs(t - end))
     return s, e
 
 
 def fit_duration(start: float, end: float, segs: list[Segment]) -> tuple[float, float] | None:
-    """Trim trailing segments if too long; reject if too short."""
+    """Trim if too long (to the last sentence end that fits, else the last segment end); reject if too short."""
+    lo, hi = start + settings.min_clip_seconds, start + settings.max_clip_seconds
     if end - start > settings.max_clip_seconds:
-        ends = [x.end for x in segs if start < x.end <= start + settings.max_clip_seconds]
+        ends = [x for x in sentence_bounds(segs)[1] if lo <= x <= hi] or [
+            x.end for x in segs if start < x.end <= hi]
         if not ends:
             return None
         end = max(ends)

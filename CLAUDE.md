@@ -33,9 +33,11 @@ backend/                FastAPI + pipeline (Python 3.11, conda env "clipforge")
     vocabulary.py       names/terms (data/vocabulary.json, all jobs) → faster-whisper `hotwords` for new transcripts
     llm.py              OllamaClient (chat_json with schema, unload, health) + LLM Protocol
     highlights.py       windows → prompt → snap → fit_duration → dedupe  (prompt + keywords live here)
+                        snap/fit_duration prefer sentence ends from word punctuation (sentence_bounds, ±SNAP_REACH);
+                        Whisper segment edges are only the fallback — they end mid-sentence on real footage
                         optional job.topic → FOCUS block + TOPIC_SCHEMA (relevance 1-10): < MIN_RELEVANCE dropped
                         (off_topic), rest ranked by score + relevance (`rank()`, also used by nospeech + Pick sort)
-    nospeech.py         < 30 wpm: analyse() (one ffmpeg pass of 64x36 grey frames → motion + scene cuts, mono PCM →
+    nospeech.py         < 30 wpm over the whole video (words_per_minute(segs, duration)): analyse() (one ffmpeg pass of 64x36 grey frames → motion + scene cuts, mono PCM →
                         loudness; cached signals.json) → excitement() → peak_windows() (payoff 65% in, snap to
                         cuts) → keyframes → vision Gemma (score/title/hook/description, mostly_text → capped)
     jumpcut.py          silence/filler removal: plan_cuts() → keep intervals + words remapped to output time;
@@ -55,6 +57,7 @@ backend/                FastAPI + pipeline (Python 3.11, conda env "clipforge")
                         options.follow (x of a face from people()) → pick_face tracks only that person (FOLLOW_RADIUS,
                         holds when they're out of frame) in "face" mode, whatever the framing says except "center"
     content.py          Content Studio: ANGLES (creative styles per platform), RULES, SCHEMAS, PROMPT,
+                        plain() strips markdown/LaTeX Gemma writes (**bold**, $\rightarrow$) from every field,
                         assemblers enforcing platform limits, generate_post/generate_all, posts.md writer
     voice.py            brand voice: your posts per platform (data/brand_voice.json, all jobs) → voice_block()
                         few-shot examples in PROMPT (≤5 per platform, borrows 2 from others if none); notes → Voice:

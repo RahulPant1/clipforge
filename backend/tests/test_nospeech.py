@@ -227,3 +227,14 @@ def test_custom_clip_in_no_speech_job_has_no_captions(tmp_path, monkeypatch):
         r = c.post(f"/api/jobs/{job.id}/clips", json={"start": 10, "end": 40, "title": "Mine"})
         opts = r.json()["clips"][0]["options"]
         assert opts["caption_style"] == "none" and opts["jumpcut"] is False
+
+
+def test_one_hallucinated_word_on_a_long_video_is_no_speech():
+    """Real parkour/music video: Whisper heard one word ("Invincible.", 1.2 s) in 309 s. Measured over the speech
+    span that was 51 wpm and the job went to the speech path (and failed with 0 candidates)."""
+    from app.models import Segment, Word
+    from app.pipeline.transcribe import words_per_minute
+
+    segs = [Segment(start=1.68, end=2.86, text="Invincible.", words=[Word(start=1.68, end=2.86, word=" Invincible.")])]
+    assert words_per_minute(segs) > orchestrator.MIN_WPM  # the old measure
+    assert words_per_minute(segs, 309.0) < 1

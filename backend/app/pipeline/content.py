@@ -122,6 +122,7 @@ Creative angle for THIS post: {angle_label} — {angle_desc}
 Hard rules:
 - Never invent facts, numbers, names or quotes that are not in the transcript.
 - Write natively for {platform_name}; it must not read like a generic caption.
+- Plain text only: no markdown (**bold**, # headings) and no LaTeX ($\\rightarrow$) — the platform shows them raw.
 {rules}
 {cta_block}"""
 
@@ -214,6 +215,31 @@ def _wrap_words(text: str, limit: int) -> list[str]:
     return out + ([cur] if cur else [])
 
 
+_LATEX = {"rightarrow": "→", "to": "→", "longrightarrow": "→", "leftarrow": "←", "Rightarrow": "⇒",
+          "leftrightarrow": "↔", "times": "×", "approx": "≈", "geq": "≥", "ge": "≥", "leq": "≤", "le": "≤",
+          "neq": "≠", "cdot": "·", "uparrow": "↑", "downarrow": "↓"}
+
+
+def plain(text: str) -> str:
+    """No platform renders markdown or LaTeX, yet Gemma writes both ("**Urgency**", "Prep $\\rightarrow$ Emotion"
+    in a third of real LinkedIn posts): bold/heading markers go, LaTeX symbols become the Unicode character."""
+    sym = lambda m: _LATEX.get(m[1], m[0])  # noqa: E731
+    text = re.sub(r"\$\s*\\([A-Za-z]+)\s*\$", sym, text)
+    text = re.sub(r"\\(" + "|".join(sorted(_LATEX, key=len, reverse=True)) + r")\b", sym, text)
+    text = re.sub(r"\*\*(\S(?:[^*\n]*?\S)?)\*\*", r"\1", text)
+    return re.sub(r"(?m)^#{1,6}\s+", "", text)
+
+
+def _plain_all(v):
+    if isinstance(v, str):
+        return plain(v)
+    if isinstance(v, list):
+        return [_plain_all(x) for x in v]
+    if isinstance(v, dict):
+        return {k: _plain_all(x) for k, x in v.items()}
+    return v
+
+
 def _s(raw: dict, key: str) -> str:
     v = raw.get(key, "")
     return str(v).strip() if v is not None else ""
@@ -293,7 +319,7 @@ def generate_post(platform: str, ctx: ContentContext, llm: LLM, history: Content
     prompt = build_prompt(platform, angle, ctx, history.recent_openers(platform), load_voice())
     raw = llm.chat_json(prompt, SCHEMAS[platform], temperature=settings.content_temperature,
                         think=settings.content_think)
-    post = ASSEMBLERS[platform](raw, angle, ctx)
+    post = ASSEMBLERS[platform](_plain_all(raw), angle, ctx)
     post.angle_label = ANGLES[platform][angle][0]
     if not post.text.strip() and not post.title:
         raise ValueError(f"{platform}: model returned empty content")

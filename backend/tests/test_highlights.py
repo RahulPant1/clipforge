@@ -131,3 +131,31 @@ def test_prompt_leaves_half_the_context_for_thinking(monkeypatch):
              for i in range(250)]  # ~10 min of fast speech in short segments, like the real transcript
     for w in windows(dense, settings.window_seconds, transcript_char_budget()):
         assert len(build_prompt(w, 4)) / CHARS_PER_TOKEN <= 8192 * 0.5 + 50
+
+
+def _sentences():
+    """Whisper-style: segment edges fall mid-sentence; punctuation marks the real sentence ends."""
+    from app.models import Segment, Word
+
+    text = ("So here is the thing. Hiring managers want solutions, not potential, and that is what you sell. "
+            "Now, I'm not saying that potential is useless. It just doesn't get you hired.")
+    words = [Word(start=i * 1.0, end=i * 1.0 + 0.8, word=" " + t) for i, t in enumerate(text.split())]
+    return [Segment(start=words[a].start, end=words[b - 1].end, text="", words=words[a:b])
+            for a, b in [(0, 7), (7, 14), (14, 22), (22, len(words))]]
+
+
+def test_snap_prefers_sentence_bounds_over_whisper_segments():
+    segs = _sentences()
+    # model asked for 4.2..19.0; segment snap gives 7.0 .. 21.8 = "want solutions ... Now, I'm not saying that"
+    assert snap(4.2, 19.0, segs) == (5.0, 16.8)  # "Hiring managers ... that is what you sell."
+    assert snap(4.2, 29.5, segs)[1] == 30.8  # "...It just doesn't get you hired."
+
+
+def test_snap_without_punctuation_falls_back_to_segments(segs):
+    assert snap(9.3, 41.0, segs)[0] == 8.0
+
+
+def test_fit_duration_trims_to_a_sentence_end(monkeypatch):
+    monkeypatch.setattr(settings, "max_clip_seconds", 22)
+    monkeypatch.setattr(settings, "min_clip_seconds", 5)
+    assert fit_duration(5.0, 30.8, _sentences()) == (5.0, 24.8)  # "...potential is useless.", not 21.8 "...saying that"

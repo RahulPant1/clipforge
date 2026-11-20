@@ -112,8 +112,10 @@ def load_audio(video: Path, sr: int = 16000):
     return np.frombuffer(res.stdout, dtype=np.float32)
 
 
-def words_per_minute(segs: list[Segment]) -> float:
+def words_per_minute(segs: list[Segment], duration: float = 0.0) -> float:
+    """Speech rate over the whole video (`duration`, s). Without it, over the span that has speech — which makes
+    one hallucinated word on a music video look like fast talking, so pass the video length when you have it."""
     if not segs:
         return 0.0
-    span = max(segs[-1].end - segs[0].start, 1.0)
+    span = max(duration or segs[-1].end - segs[0].start, 1.0)
     return sum(len(s.text.split()) for s in segs) / (span / 60)

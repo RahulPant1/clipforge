@@ -22,7 +22,7 @@ from .download import download
 from .highlights import select_highlights
 from .history import get_history
 from .llm import LLM, OllamaClient
-from .nospeech import select_no_speech
+from .nospeech import probe_duration, select_no_speech
 from .presets import get_preset
 from .render import render_clip
 from .transcribe import transcribe, words_per_minute
@@ -59,7 +59,7 @@ def prepare(source: str, job_dir: Path, num_clips: int, report: Reporter,
 
     report(Stage.transcribing, 0, "Loading Whisper")
     segs = transcribe(video, job_dir, lambda p, m: report(Stage.transcribing, p, m))
-    no_speech = not segs or words_per_minute(segs) < MIN_WPM
+    no_speech = not segs or words_per_minute(segs, probe_duration(video)) < MIN_WPM
     if no_speech and not settings.no_speech_mode:
         raise RuntimeError("Not enough speech found (and NO_SPEECH_MODE is off).")
 

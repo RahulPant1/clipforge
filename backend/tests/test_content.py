@@ -157,3 +157,31 @@ def test_posts_md_and_export_pack(tmp_path):
 def test_every_angle_builds_a_prompt(platform):
     for angle in ANGLES[platform]:
         assert ANGLES[platform][angle][0] in build_prompt(platform, angle, _ctx(), [])
+
+
+def test_plain_strips_markdown_and_latex_gemma_wrote_in_real_posts():
+    from app.pipeline.content import plain
+
+    assert plain("It starts with **Preparation**. Prep $\\rightarrow$ Emotion $\\to$ Urgency") == \
+        "It starts with Preparation. Prep → Emotion → Urgency"
+    assert plain("## Mistake 1\n**Fix:** 2 \\times faster") == "Mistake 1\nFix: 2 × faster"
+    keep = "Save $20 * 3 = $60 #Shorts #SalesTips snake_case __init__ 5**2"
+    assert plain(keep) == keep  # money, hashtags, code-ish text untouched
+
+
+def test_generate_post_cleans_every_field_before_assembling(tmp_path):
+    from app.models import Clip
+    from app.pipeline import content
+    from app.pipeline.history import ContentHistory
+
+    class LLM:
+        def chat_json(self, prompt, schema, **kw):
+            self.prompt = prompt
+            return {"posts": ["**Hot take:** sell like this $\\rightarrow$ prep"], "hashtags": ["Sales"]}
+
+    llm = LLM()
+    clip = Clip(index=1, start=0, end=30, title="t", hook="h", score=7)
+    ctx = content.ContentContext(clip=clip, text="prep, emotion, urgency", video_title="v")
+    post = content.generate_post("x", ctx, llm, ContentHistory(tmp_path / "h.json"), tmp_path)
+    assert "**" not in post.text and "$" not in post.text and "Hot take: sell like this → prep" in post.text
+    assert "Plain text only" in llm.prompt

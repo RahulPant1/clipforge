@@ -66,7 +66,7 @@ def test_prepare_saves_candidates_json(tmp_path, segs, monkeypatch):
     src = tmp_path / "talk.mp4"
     src.write_bytes(b"x")
     monkeypatch.setattr(orchestrator, "transcribe", lambda video, job_dir, cb: segs)
-    monkeypatch.setattr(orchestrator, "words_per_minute", lambda s: 150)
+    monkeypatch.setattr(orchestrator, "words_per_minute", lambda s, d=0: 150)
     job_dir = tmp_path / "job"
     orchestrator.prepare(str(src), job_dir, 1, lambda *a: None, llm=FakeLLM(PICKS), candidates=2)
     saved = json.loads((job_dir / "candidates.json").read_text())

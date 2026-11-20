@@ -2,6 +2,7 @@
 import hashlib
 import logging
 import math
+import re
 import time
 from collections.abc import Callable, Iterator
 
@@ -34,6 +35,16 @@ CLIP_SCHEMA = {
     "required": ["clips"],
 }
 
+
+def _with_relevance(schema: dict) -> dict:
+    item = schema["properties"]["clips"]["items"]
+    return {**schema, "properties": {"clips": {**schema["properties"]["clips"], "items": {
+        **item, "properties": {**item["properties"], "relevance": {"type": "integer"}},
+        "required": [*item["required"], "relevance"]}}}}
+
+
+TOPIC_SCHEMA = _with_relevance(CLIP_SCHEMA)  # with a topic, every pick also says how on-topic it is
+
 PROMPT = """You are an expert short-form video editor.
 From the transcript below, pick the {n} best self-contained moments for a YouTube Short.
 
@@ -51,9 +62,30 @@ Rules:
 - score: 1-10 for how likely the clip is to go viral.
 - keywords: 2-4 single words spoken in the clip that carry its meaning (numbers, key nouns,
   strong verbs). They will be highlighted in the captions, so copy them exactly as spoken.
-
+{focus}
 Transcript:
 {transcript}"""
+
+
+# Prompt-based clipping: "find me the moments about salary negotiation". Only added when the job has a topic.
+FOCUS = """
+Topic: the viewer only wants moments about "{topic}".
+- Pick only moments that are clearly about this topic (directly, or a closely related point or example).
+- If this part of the transcript has nothing on it, return fewer clips or an empty list.
+  Never stretch an unrelated moment to fit the topic.
+- relevance: 1-10, how much of the clip is about the topic (10 = all of it, 5 = touches on it, 1 = unrelated).
+"""
+MAX_TOPIC = 120
+MIN_RELEVANCE = 5  # below this a pick is dropped as off_topic (the model was told 5 = "touches on it")
+
+
+def clean_topic(topic: str | None) -> str:
+    """One line, no quotes (it sits inside quotes in the prompt), at most MAX_TOPIC characters."""
+    return re.sub(r"\s+", " ", re.sub(r"[\"“”]", "", topic or "")).strip()[:MAX_TOPIC].strip()
+
+
+def focus_block(topic: str) -> str:
+    return FOCUS.format(topic=topic) if topic else ""
 
 
 def clean_keywords(raw) -> list[str]:
@@ -91,8 +123,8 @@ CHARS_PER_TOKEN = 2.5
 PROMPT_CTX_SHARE = 0.5
 
 
-def transcript_char_budget(template: str = PROMPT) -> int:
-    return int(settings.ollama_num_ctx * PROMPT_CTX_SHARE * CHARS_PER_TOKEN) - len(template)
+def transcript_char_budget(template: str = PROMPT, topic: str = "") -> int:
+    return int(settings.ollama_num_ctx * PROMPT_CTX_SHARE * CHARS_PER_TOKEN) - len(template) - len(focus_block(topic))
 
 
 PROMPT_FIELDS = ("{n}", "{min_s", "{max_s", "{transcript}")
@@ -109,10 +141,12 @@ def prompt_id(template: str) -> str:
     return hashlib.sha256(template.encode()).hexdigest()[:10]
 
 
-def build_prompt(win: list[Segment], n: int, template: str = PROMPT) -> str:
+def build_prompt(win: list[Segment], n: int, template: str = PROMPT, topic: str = "") -> str:
     lines = "\n".join(_line(s) for s in win)
-    return template.format(n=n, min_s=settings.min_clip_seconds,
-                           max_s=settings.max_clip_seconds, transcript=lines)
+    if "{focus}" not in template:  # custom eval prompts needn't know about topics: it goes before the transcript
+        template = template.replace("{transcript}", "{focus}{transcript}", 1)
+    return template.format(n=n, min_s=settings.min_clip_seconds, max_s=settings.max_clip_seconds,
+                           transcript=lines, focus=focus_block(topic))
 
 
 def snap(start: float, end: float, segs: list[Segment]) -> tuple[float, float]:
@@ -134,9 +168,14 @@ def fit_duration(start: float, end: float, segs: list[Segment]) -> tuple[float, 
     return start, end
 
 
+def rank(c: Clip) -> int:
+    """Best first: virality, plus how on-topic it is when the job has a topic."""
+    return c.score + (c.relevance or 0)
+
+
 def dedupe(clips: list[Clip], n: int) -> list[Clip]:
     kept: list[Clip] = []
-    for c in sorted(clips, key=lambda c: -c.score):
+    for c in sorted(clips, key=lambda c: -rank(c)):
         if all(c.end <= k.start or c.start >= k.end for k in kept):
             kept.append(c)
         if len(kept) == n:
@@ -167,14 +206,20 @@ _SETTING = object()  # "use settings.select_think" (None itself means "don't sen
 
 def select_highlights(segs: list[Segment], n: int, llm: LLM,
                       on_progress: ProgressFn | None = None, keep: int | None = None, *,
-                      prompt: str = PROMPT, think=_SETTING, trace: dict | None = None) -> list[Clip]:
+                      prompt: str = PROMPT, think=_SETTING, trace: dict | None = None,
+                      topic: str = "") -> list[Clip]:
     """Returns up to `keep` (default n) non-overlapping candidates; the best `n` are pre-approved.
+
+    `topic` (optional) steers the prompt to moments about it; picks it rates below MIN_RELEVANCE are dropped
+    (outcome off_topic) and the rest are ranked by score + relevance.
 
     `trace` (optional dict) is filled with everything the model returned and what happened to each pick —
     saved as candidates.json per job and compared across models/prompts by `python -m app.eval`.
     """
     think = settings.select_think if think is _SETTING else think
-    wins = list(windows(segs, settings.window_seconds, transcript_char_budget(prompt)))
+    topic = clean_topic(topic)
+    schema = TOPIC_SCHEMA if topic else CLIP_SCHEMA
+    wins = list(windows(segs, settings.window_seconds, transcript_char_budget(prompt, topic)))
     want = max(keep or n, n)
     per_window = clips_per_window(want, len(wins))
     candidates: list[Clip] = []
@@ -188,7 +233,7 @@ def select_highlights(segs: list[Segment], n: int, llm: LLM,
         entry = {"window": i, "start": win[0].start, "end": win[-1].end, "asked": per_window}
         win_log.append(entry)
         try:
-            raw = llm.chat_json(build_prompt(win, per_window, prompt), CLIP_SCHEMA, think=think)
+            raw = llm.chat_json(build_prompt(win, per_window, prompt, topic), schema, think=think)
         except Exception as e:  # one bad window shouldn't kill the job
             log.warning("window %d skipped: %s", i, e)
             failures.append(str(e))
@@ -212,13 +257,18 @@ def select_highlights(segs: list[Segment], n: int, llm: LLM,
                     score=max(1, min(10, int(item["score"]))),
                     keywords=clean_keywords(item.get("keywords")),
                 )
+                if topic:
+                    clip.relevance = max(1, min(10, int(item["relevance"])))
+                    if clip.relevance < MIN_RELEVANCE:
+                        rec["outcome"] = "off_topic"
+                        continue
                 candidates.append(clip)
                 rec["clip"] = clip
             except (KeyError, ValueError, TypeError) as e:
                 log.warning("bad clip from model: %s (%s)", item, e)
                 rec["outcome"] = "invalid"
     if trace is not None:  # filled before a possible raise, so failed runs still show what went wrong
-        trace.update(model=getattr(llm, "model", None), think=think, prompt_id=prompt_id(prompt),
+        trace.update(model=getattr(llm, "model", None), think=think, prompt_id=prompt_id(prompt), topic=topic,
                      num_ctx=settings.ollama_num_ctx, min_s=settings.min_clip_seconds,
                      max_s=settings.max_clip_seconds, asked_total=want, windows=win_log, items=items, clips=[])
     if wins and len(failures) == len(wins):
@@ -227,7 +277,7 @@ def select_highlights(segs: list[Segment], n: int, llm: LLM,
     if on_progress:
         on_progress(1.0, f"{len(candidates)} candidate clips found")
     clips = dedupe(candidates, want)
-    best = {id(c) for c in sorted(clips, key=lambda c: -c.score)[:n]}
+    best = {id(c) for c in sorted(clips, key=lambda c: -rank(c))[:n]}
     for c in clips:
         c.approved = id(c) in best
     if trace is not None:
@@ -241,7 +291,8 @@ def select_highlights(segs: list[Segment], n: int, llm: LLM,
                     rec["outcome"] = "overlap"  # lost to a higher-scored clip covering the same moment
                 else:
                     rec["outcome"] = "ranked_out"  # fine, but more candidates than asked for and others scored higher
-                rec.update(start=clip.start, end=clip.end, score=clip.score)
-        trace["clips"] = [c.model_dump(include={"start", "end", "title", "hook", "score", "keywords", "approved"})
+                rec.update(start=clip.start, end=clip.end, score=clip.score, relevance=clip.relevance)
+        trace["clips"] = [c.model_dump(include={"start", "end", "title", "hook", "score", "relevance", "keywords",
+                                                "approved"})
                           for c in clips]
     return clips

@@ -25,6 +25,7 @@ from .models import (
     PostEdit,
     RenderOptions,
     ReplaceWords,
+    Retry,
     Segment,
     Stage,
     Vocabulary,
@@ -109,13 +110,14 @@ def create_app(pipeline=None, start_worker: bool = True, llm_factory=OllamaClien
     def create_job(body: JobCreate) -> Job:
         if not body.url.startswith(("http://", "https://")):
             raise HTTPException(400, "url must start with http(s)://")
-        job = store.create(body.url, body.num_clips, body.mode)
+        job = store.create(body.url, body.num_clips, body.mode, body.topic)
         worker.submit(job.id, body.url)
         return job
 
     @app.post("/api/jobs/upload", response_model=Job, status_code=201)
-    def upload_job(file: UploadFile = File(...), num_clips: int = Form(5), mode: JobMode = Form(JobMode.review)) -> Job:
-        job = store.create(file.filename or "upload.mp4", num_clips, mode)
+    def upload_job(file: UploadFile = File(...), num_clips: int = Form(5), mode: JobMode = Form(JobMode.review),
+                   topic: str = Form("", max_length=200)) -> Job:
+        job = store.create(file.filename or "upload.mp4", num_clips, mode, topic)
         d = store.dir(job.id)
         d.mkdir(parents=True, exist_ok=True)
         dest = d / "source.mp4"
@@ -125,8 +127,13 @@ def create_app(pipeline=None, start_worker: bool = True, llm_factory=OllamaClien
         return job
 
     @app.post("/api/jobs/{job_id}/retry", response_model=Job)
-    def retry_job(job_id: str) -> Job:
-        """Run a failed job again in its own folder: a finished download / transcript is reused, not redone."""
+    def retry_job(job_id: str, body: Retry | None = None) -> Job:
+        """Run a failed job again in its own folder: a finished download / transcript is reused, not redone.
+
+        Optional body {"topic": "..."} changes the topic first ("" = none), e.g. after "No moments about X found".
+        """
+        from .pipeline.highlights import clean_topic
+
         job = store.get(job_id)
         if not job:
             raise HTTPException(404, "job not found")
@@ -139,8 +146,9 @@ def create_app(pipeline=None, start_worker: bool = True, llm_factory=OllamaClien
             if not upload.is_file():
                 raise HTTPException(409, "the uploaded video is gone — upload it again as a new job")
             source = str(upload)
+        changes = {} if body is None or body.topic is None else {"topic": clean_topic(body.topic)}
         job = store.update(job_id, status=JobStatus.queued, stage=Stage.queued, progress=0.0, error=None,
-                           message="Queued: retry")
+                           message="Queued: retry", **changes)
         worker.submit(job_id, source)
         return job
 

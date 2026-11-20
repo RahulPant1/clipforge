@@ -20,6 +20,7 @@ import numpy as np
 
 from ..config import settings
 from ..models import Clip, RenderOptions
+from .highlights import clean_topic, rank
 from .llm import LLM
 
 log = logging.getLogger(__name__)
@@ -203,7 +204,11 @@ reveal, a funny or beautiful moment. 9-10 = rare, unmissable. Text/credits/black
 - title: max 8 words, catchy, about what is visible
 - hook: max 6 words for a title card at the start
 - description: one sentence of what happens on screen, as the action itself (not "the frames show...")
-Describe only what you can see. Never guess names, places or numbers that are not visible."""
+Describe only what you can see. Never guess names, places or numbers that are not visible.{focus}"""
+
+VISION_FOCUS = """
+The viewer wants moments about "{topic}".
+- relevance: 1-10, how clearly these frames show that (10 = it is the whole point, 1 = unrelated)."""
 
 VISION_SCHEMA = {
     "type": "object",
@@ -211,6 +216,8 @@ VISION_SCHEMA = {
                    "hook": {"type": "string"}, "description": {"type": "string"}},
     "required": ["mostly_text", "score", "title", "hook", "description"],
 }
+VISION_TOPIC_SCHEMA = {**VISION_SCHEMA, "properties": {**VISION_SCHEMA["properties"], "relevance": {"type": "integer"}},
+                       "required": [*VISION_SCHEMA["required"], "relevance"]}
 TEXT_SCORE = 2  # cap for credits / title cards / black, whatever score the model gave
 
 
@@ -242,8 +249,13 @@ def _mmss(t: float) -> str:
 
 def select_no_speech(video: Path, n: int, llm: LLM, on_progress: ProgressFn | None = None,
                      keep: int | None = None, *, title: str = "", cache: Path | None = None,
-                     trace: dict | None = None) -> list[Clip]:
-    """Up to `keep` (default n) non-overlapping candidates from audio/visual peaks; the best `n` are pre-approved."""
+                     trace: dict | None = None, topic: str = "") -> list[Clip]:
+    """Up to `keep` (default n) non-overlapping candidates from audio/visual peaks; the best `n` are pre-approved.
+
+    With a `topic`, vision also rates relevance and candidates rank by score + relevance. Nothing is dropped:
+    the pool comes from sound/picture peaks, not from searching for the topic.
+    """
+    topic = clean_topic(topic)
     want = max(keep or n, n)
 
     def prog(p: float, m: str) -> None:
@@ -266,9 +278,14 @@ def select_no_speech(video: Path, n: int, llm: LLM, on_progress: ProgressFn | No
         if vision:
             try:
                 frames = keyframes(video, s, end)
-                raw = llm.chat_json(VISION_PROMPT.format(k=len(frames), dur=end - s, title=title or "untitled"),
-                                    VISION_SCHEMA, think=settings.vision_think, images=frames)
+                focus = VISION_FOCUS.format(topic=topic) if topic else ""
+                raw = llm.chat_json(VISION_PROMPT.format(k=len(frames), dur=end - s, title=title or "untitled",
+                                                         focus=focus),
+                                    VISION_TOPIC_SCHEMA if topic else VISION_SCHEMA,
+                                    think=settings.vision_think, images=frames)
                 clip.score = max(1, min(10, int(raw["score"])))
+                if topic:
+                    clip.relevance = max(1, min(10, int(raw["relevance"])))
                 if raw.get("mostly_text") is True:
                     clip.score = min(clip.score, TEXT_SCORE)
                 clip.title = str(raw["title"]).strip()[:80] or clip.title
@@ -279,16 +296,18 @@ def select_no_speech(video: Path, n: int, llm: LLM, on_progress: ProgressFn | No
                 log.warning("vision scoring skipped for %.0f-%.0f s: %s", s, end, e)
                 rec["error"] = str(e)[:300]
         clips.append((clip, sig_score))
-    # vision score first, signal strength breaks ties
-    ranked = [c for c, _ in sorted(clips, key=lambda x: (-x[0].score, -x[1]))][:want]
+    # vision score (+ relevance to the topic) first, signal strength breaks ties
+    ranked = [c for c, _ in sorted(clips, key=lambda x: (-rank(x[0]), -x[1]))][:want]
     best = {id(c) for c in ranked[:n]}
     for c in ranked:
         c.approved = id(c) in best
     prog(1.0, f"{len(ranked)} candidate clips found")
     if trace is not None:
-        trace.update(mode="no_speech", model=getattr(llm, "model", None), vision=vision, duration=sig.duration,
+        trace.update(mode="no_speech", model=getattr(llm, "model", None), vision=vision, topic=topic,
+                     duration=sig.duration,
                      scene_cuts=len(sig.cuts), items=items,
-                     clips=[c.model_dump(include={"start", "end", "title", "hook", "score", "visual", "approved"})
+                     clips=[c.model_dump(include={"start", "end", "title", "hook", "score", "relevance", "visual",
+                                                    "approved"})
                             for c in ranked])
     ranked.sort(key=lambda c: c.start)
     for i, c in enumerate(ranked, 1):  # same numbering as highlights.dedupe (short_<index>.mp4)

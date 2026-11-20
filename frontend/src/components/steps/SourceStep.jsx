@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react'
 import { api } from '../../api.js'
 import { STAGES } from '../../util.js'
 
@@ -8,6 +9,8 @@ const PREP = [
 ]
 
 export default function SourceStep({ job, go, act, busy }) {
+  const [topic, setTopic] = useState(job.topic || '') // a topic job can be retried with a broader one
+  useEffect(() => setTopic(job.topic || ''), [job.id, job.topic])
   const at = STAGES.indexOf(job.stage)
   const prepared = job.clips.length > 0
   const isUrl = job.source.startsWith('http')
@@ -25,6 +28,7 @@ export default function SourceStep({ job, go, act, busy }) {
         </p>
         <p className="muted">
           Mode: <b>{job.mode === 'review' ? 'Review each step' : 'Fully automatic'}</b> · wants {job.num_clips} shorts ·
+          {job.topic && <> topic <b>“{job.topic}”</b> ·</>}
           started {new Date(job.created_at).toLocaleString()}
         </p>
         {prepared && <video className="srcvid" src={api.fileUrl(job.id, 'source.mp4')} controls preload="metadata" />}
@@ -50,7 +54,14 @@ export default function SourceStep({ job, go, act, busy }) {
         {job.status === 'failed' && (
           <>
             <p className="err">{job.error}</p>
-            <button className="primary" disabled={busy} onClick={() => act(() => api.retry(job.id)).catch(() => {})}>
+            {job.topic && (
+              <label className="fl">
+                <span>Topic <span className="muted">· make it broader, or clear it for the best moments on any subject</span></span>
+                <input value={topic} maxLength={120} disabled={busy} onChange={(e) => setTopic(e.target.value)} />
+              </label>
+            )}
+            <button className="primary" disabled={busy}
+                    onClick={() => act(() => api.retry(job.id, job.topic ? topic.trim() : null)).catch(() => {})}>
               ↻ Retry
             </button>
             <p className="hint">Picks up where it stopped: a finished download or transcript is reused.</p>

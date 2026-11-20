@@ -29,6 +29,9 @@ YouTube URL / file
 - Whisper transcription with word-level timing, cached per job
 - Gemma ranks moments by hook strength / self-containedness, writes title + hook + virality score
 - Cuts snapped to sentence boundaries, overlaps removed, clips capped at 59 s (Content ID safe zone)
+- **Topic (optional):** "salary negotiation" → Gemma only picks moments about it, rates each 1–10 for how
+  on-topic it is (shown on the Pick cards) and drops the unrelated ones. Nothing found → retry with a
+  broader topic; the download and transcript are reused
 - **No-speech videos** (music, gameplay, sport, nature): when hardly anything is said, clips come from the
   loudest, busiest moments (loudness, motion, scene cuts), and Gemma *looks* at keyframes to score and title
   them; credits and title screens are marked down. Those shorts render without captions or jump cuts
@@ -84,6 +87,7 @@ CLI only:
 ```bash
 cd backend && conda activate clipforge
 python -m app.cli "https://www.youtube.com/watch?v=VIDEO" --clips 5
+python -m app.cli "https://www.youtube.com/watch?v=VIDEO" --clips 3 --topic "salary negotiation"
 ```
 
 ## Configuration
@@ -169,6 +173,7 @@ cd backend
 python -m app.eval --print-prompt > my_prompt.txt          # edit it; keep {n} {min_s} {max_s} {transcript}
 python -m app.eval <job_id> --prompt default --prompt my_prompt.txt
 python -m app.eval <job_id> --model gemma4:e4b-it-q4_K_M --model qwen3.5:4b --think on --think off --repeat 2
+python -m app.eval <job_id> --topic "salary negotiation"   # default: the job's topic; --topic "" for none
 ```
 Every combination runs and `data/evals/<timestamp>/report.md` gets a table: time, usable picks, too-short /
 invalid counts, median length, average score, how many of **your approved clips** each variant found, and

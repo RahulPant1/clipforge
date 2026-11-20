@@ -33,6 +33,8 @@ backend/                FastAPI + pipeline (Python 3.11, conda env "clipforge")
     vocabulary.py       names/terms (data/vocabulary.json, all jobs) → faster-whisper `hotwords` for new transcripts
     llm.py              OllamaClient (chat_json with schema, unload, health) + LLM Protocol
     highlights.py       windows → prompt → snap → fit_duration → dedupe  (prompt + keywords live here)
+                        optional job.topic → FOCUS block + TOPIC_SCHEMA (relevance 1-10): < MIN_RELEVANCE dropped
+                        (off_topic), rest ranked by score + relevance (`rank()`, also used by nospeech + Pick sort)
     nospeech.py         < 30 wpm: analyse() (one ffmpeg pass of 64x36 grey frames → motion + scene cuts, mono PCM →
                         loudness; cached signals.json) → excitement() → peak_windows() (payoff 65% in, snap to
                         cuts) → keyframes → vision Gemma (score/title/hook/description, mostly_text → capped)
@@ -94,7 +96,7 @@ done: PATCH clip options → stale → POST /clips/{i}/render ; PATCH/POST posts
 - A failed produce/render restores the previous status (review/done) with `error` — never loses edits.
 - Server restart mid-produce → job returns to `review` (clips kept); mid-prepare → `failed`.
 - `failed` → POST /retry → queued: same folder, so a finished download/transcript is reused (uploads re-run
-  from their saved source.mp4; 409 if it's gone).
+  from their saved source.mp4; 409 if it's gone). Body `{"topic": ...}` changes the topic first ("" = none).
 - UI cache-busting: rendered files are requested with `?v=<clip.version>`.
 - Live updates: always save through JobStore (update/update_clip/delete) — that's what wakes the SSE streams;
   a job.json written any other way never reaches the UI. With the stream open, actions don't refetch the list
@@ -163,7 +165,10 @@ done: PATCH clip options → stale → POST /clips/{i}/render ; PATCH/POST posts
 - Instagram allows 5 hashtags per caption (since Dec 2025): `assemble_instagram` caps at `IG_MAX_HASHTAGS`, counting
   any the model wrote inline.
 - candidates.json outcomes: kept | overlap (lost to a higher-scored clip on the same moment) | ranked_out (fine, but
-  more candidates than asked for) | too_short | invalid.
+  more candidates than asked for) | too_short | off_topic (topic jobs: relevance < MIN_RELEVANCE) | invalid.
+- Topics: the Worker passes `topic=` to prepare/run ONLY when the job has one, so step callables written without
+  it still work. A topic with no matches fails the job with "No moments about …" (retry with another topic).
+  No-speech jobs only rank by relevance (vision), never drop: their pool comes from signal peaks.
 - Captions have no "top" position on purpose: tracked faces sit in the upper half (tested: covered the eyes) and
   the hook card owns the top. The hook card uses the preset's font.
 
@@ -242,7 +247,7 @@ From the review against OpusClip / Vizard / Submagic / Descript / CapCut (Nov 20
 Keep it local: no cloud stock/B-roll/TTS APIs.
 12. [x] A. Caption editor + custom vocabulary: fix mis-heard words (flows into captions + .srt, marks shorts stale),
         replace-all across the transcript, names/terms passed to Whisper (`hotwords`) for future jobs.
-13. [ ] C. Prompt-based clipping: optional "topic" on a new job ("salary negotiation") steers the selection prompt.
+13. [x] C. Prompt-based clipping: optional "topic" on a new job ("salary negotiation") steers the selection prompt.
 14. [ ] B. Text-based cutting (Descript-style): strike words in the transcript to remove them — extra removed
         ranges into `plan_cuts` (same keep-interval engine as jump cuts).
 15. [ ] E. Sound design: whoosh on cuts, pop on keywords, background music auto-ducked under speech

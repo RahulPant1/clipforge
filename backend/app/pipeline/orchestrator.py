@@ -39,7 +39,7 @@ def load_segments(job_dir: Path) -> list[Segment]:
 
 
 def prepare(source: str, job_dir: Path, num_clips: int, report: Reporter,
-            llm: LLM | None = None, candidates: int | None = None) -> list[Clip]:
+            llm: LLM | None = None, candidates: int | None = None, topic: str = "") -> list[Clip]:
     job_dir.mkdir(parents=True, exist_ok=True)
     llm = llm or OllamaClient()
     llm.unload()  # in case a "new angle" request left Gemma in VRAM — Whisper needs the room
@@ -68,14 +68,19 @@ def prepare(source: str, job_dir: Path, num_clips: int, report: Reporter,
             report(Stage.selecting, 0, "Hardly any speech: finding highlights in the sound and picture")
             clips = select_no_speech(video, num_clips, llm, on_select, keep=candidates or num_clips,
                                      title=load_meta(job_dir).get("title", ""), cache=job_dir / "signals.json",
-                                     trace=trace)
+                                     trace=trace, topic=topic)
         else:
-            report(Stage.selecting, 0, "Asking Gemma for highlights")
-            clips = select_highlights(segs, num_clips, llm, on_select, keep=candidates or num_clips, trace=trace)
+            report(Stage.selecting, 0, f"Asking Gemma for moments about “{topic}”" if topic
+                   else "Asking Gemma for highlights")
+            clips = select_highlights(segs, num_clips, llm, on_select, keep=candidates or num_clips, trace=trace,
+                                      topic=topic)
     finally:
         llm.unload()
     # every pick Gemma made and why it was kept/dropped — raw data for prompt eval (python -m app.eval)
     (job_dir / "candidates.json").write_text(json.dumps(trace, indent=1, ensure_ascii=False, default=str))
+    if not clips and topic:
+        raise RuntimeError(f"No moments about “{topic}” found in this video. Retry with a broader topic "
+                           f"(or none) — the transcript is reused.")
     if not clips:
         raise RuntimeError("Gemma returned no usable clips. Try a bigger model or tweak the prompt.")
     report(Stage.selecting, 1.0, f"{len(clips)} candidates ready for review")
@@ -124,10 +129,10 @@ def render_one(job_dir: Path, clip: Clip) -> Clip:
 
 
 def run_pipeline(source: str, job_dir: Path, num_clips: int, report: Reporter,
-                 llm: LLM | None = None) -> list[Clip]:
+                 llm: LLM | None = None, topic: str = "") -> list[Clip]:
     """Auto mode: everything end to end."""
     llm = llm or OllamaClient()
-    clips = prepare(source, job_dir, num_clips, report, llm)
+    clips = prepare(source, job_dir, num_clips, report, llm, topic=topic)
     clips = produce(job_dir, clips, report, llm)
     if not any(c.file for c in clips):
         raise RuntimeError("All renders failed: " + "; ".join(c.render_error or "" for c in clips)[:300])

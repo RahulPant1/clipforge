@@ -37,6 +37,7 @@ export default function JobList({ jobs, selectedId, onSelect, onDelete }) {
                 ×
               </button>
             </div>
+            {j.topic && <div className="msg topic" title={`Only moments about: ${j.topic}`}>🎯 {j.topic}</div>}
             {isBusy(j) && (
               <>
                 <div className="bar">

@@ -101,6 +101,11 @@ function Candidate({ job, clip, others, transcript, wave, total, busy, act, relo
       <div className="cand-body">
         <div className="cand-head">
           <span className="score" title="Gemma virality score">{clip.score}/10</span>
+          {clip.relevance != null && (
+            <span className={`chip ${clip.relevance < 7 ? 'warnchip' : ''}`} title="How much of the clip is about your topic">
+              on topic {clip.relevance}/10
+            </span>
+          )}
           {clip.custom && <span className="chip">your clip</span>}
           {clip.stale && <span className="chip warnchip">changed — re-render needed</span>}
           {clip.file && !clip.stale && <span className="chip">rendered</span>}
@@ -179,7 +184,9 @@ export default function PickStep({ job, busy, act, go, transcript, reloadTranscr
   const total =
     (wave?.levels?.length ? wave.levels.length / wave.rate : 0) ||
     Math.max(0, ...(transcript || []).map((s) => s.end), ...job.clips.map((c) => c.end))
-  const clips = [...job.clips].sort((a, b) => (filter === 'score' ? b.score - a.score : a.start - b.start))
+  // "Best first" = the same order selection used: virality + how on-topic (when the job has a topic)
+  const rank = (c) => c.score + (c.relevance || 0)
+  const clips = [...job.clips].sort((a, b) => (filter === 'score' ? rank(b) - rank(a) : a.start - b.start))
   const shown = filter === 'approved' ? clips.filter((c) => c.approved) : clips
   const approved = job.clips.filter((c) => c.approved)
   const pending = approved.filter((c) => !c.file || c.stale || !Object.keys(c.content || {}).length)
@@ -190,7 +197,8 @@ export default function PickStep({ job, busy, act, go, transcript, reloadTranscr
         <div>
           <h2>Pick clips</h2>
           <p className="muted">
-            {approved.length} approved of {job.clips.length} candidates (you asked for {job.num_clips}). Trim with
+            {approved.length} approved of {job.clips.length} candidates (you asked for {job.num_clips}
+            {job.topic ? <>, about <b>“{job.topic}”</b></> : null}). Trim with
             the timeline (or the keys — click a card first), fix titles, then create. Need a moment Gemma missed? Add it from the{' '}
             <a onClick={() => go('transcript')}>Transcript</a>.
           </p>

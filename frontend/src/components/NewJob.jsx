@@ -9,6 +9,7 @@ export default function NewJob({ onCreated }) {
   const [file, setFile] = useState(null)
   const [numClips, setNumClips] = useState(5)
   const [mode, setMode] = useState('review')
+  const [topic, setTopic] = useState('') // optional: only moments about this
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
   const [vocab, setVocab] = useState('') // names & terms for Whisper, remembered for all jobs
@@ -30,8 +31,9 @@ export default function NewJob({ onCreated }) {
     setErr('')
     try {
       if (vocab !== vocabSaved) await api.saveVocabulary(vocab.split(',').map((t) => t.trim()).filter(Boolean))
+      const t = topic.trim()
       const job =
-        kind === 'url' ? await api.createJob(url.trim(), numClips, mode) : await api.uploadJob(file, numClips, mode)
+        kind === 'url' ? await api.createJob(url.trim(), numClips, mode, t) : await api.uploadJob(file, numClips, mode, t)
       onCreated(job)
     } catch (e) {
       setErr(e.message)
@@ -77,6 +79,15 @@ export default function NewJob({ onCreated }) {
         <label className="row">
           Shorts you want
           <input type="number" min="1" max="20" value={numClips} onChange={(e) => setNumClips(Number(e.target.value))} />
+        </label>
+
+        <label className="fl">
+          <span>
+            Topic <span className="muted">· optional — only moments about this. Leave empty for the best moments on any
+            subject</span>
+          </span>
+          <input value={topic} maxLength={120} placeholder="e.g. salary negotiation, the pricing story, funny moments"
+                 onChange={(e) => setTopic(e.target.value)} />
         </label>
 
         <label className="fl">

@@ -50,6 +50,7 @@ class Variant:
     prompt: str
     think: str  # key of THINK
     run: int = 1
+    topic: str = ""
     seconds: float = 0.0
     error: str = ""
     trace: dict = field(default_factory=dict)
@@ -63,7 +64,7 @@ class Variant:
 def summarize(v: Variant, picks: list[tuple[float, float]], baseline: list[tuple[float, float]] | None) -> dict:
     """Pure metrics from a variant's trace (tested without Ollama)."""
     items = v.trace.get("items", [])
-    kinds = ("kept", "overlap", "ranked_out", "too_short", "invalid")
+    kinds = ("kept", "overlap", "ranked_out", "too_short", "off_topic", "invalid")
     outcomes = {k: sum(1 for i in items if i.get("outcome") == k) for k in kinds}
     usable = outcomes["kept"] + outcomes["overlap"] + outcomes["ranked_out"]
     clips = v.trace.get("clips", [])
@@ -88,7 +89,8 @@ def summarize(v: Variant, picks: list[tuple[float, float]], baseline: list[tuple
 
 
 COLUMNS = [("label", "variant"), ("seconds", "time s"), ("candidates", "cands"), ("returned", "returned"),
-           ("usable_rate", "usable"), ("too_short", "too short"), ("invalid", "invalid"), ("overlap", "overlap"),
+           ("usable_rate", "usable"), ("too_short", "too short"), ("off_topic", "off topic"), ("invalid", "invalid"),
+           ("overlap", "overlap"),
            ("ranked_out", "ranked out"),
            ("median_s", "median s"), ("mean_score", "avg score"), ("picks_found", "your picks"),
            ("agree_baseline", "≈ baseline"), ("windows_failed", "failed chunks")]
@@ -98,7 +100,8 @@ def report_md(source: str, rows: list[dict], variants: list[Variant], n: int, ke
     cols = [(k, h) for k, h in COLUMNS if any(k in r for r in rows)]
     lines = [f"# Clip selection eval — {source}", "",
              f"{datetime.now():%Y-%m-%d %H:%M} · {n} shorts, {keep} candidates asked · num_ctx "
-             f"{settings.ollama_num_ctx} · clips {settings.min_clip_seconds:.0f}-{settings.max_clip_seconds:.0f} s",
+             f"{settings.ollama_num_ctx} · clips {settings.min_clip_seconds:.0f}-{settings.max_clip_seconds:.0f} s"
+             + (f" · topic “{variants[0].topic}”" if variants and variants[0].topic else ""),
              "", "| " + " | ".join(h for _, h in cols) + " |", "|" + "---|" * len(cols)]
     for r in rows:
         lines.append("| " + " | ".join(str(r.get(k, "")) for k, _ in cols) + " |")
@@ -114,8 +117,9 @@ def report_md(source: str, rows: list[dict], variants: list[Variant], n: int, ke
         lines.append(f"prompt `{prompt_id(v.prompt)}`\n")
         for c in sorted(v.trace.get("clips", []), key=lambda c: -c["score"]):
             mark = "✓" if c.get("approved") else " "
+            rel = f" · on topic {c['relevance']}/10" if c.get("relevance") else ""
             lines.append(f"- {mark} `{_mmss(c['start'])}–{_mmss(c['end'])}` "
-                         f"({c['end'] - c['start']:.0f} s) **{c['score']}/10** {c['title']} — _{c['hook']}_")
+                         f"({c['end'] - c['start']:.0f} s) **{c['score']}/10**{rel} {c['title']} — _{c['hook']}_")
         lines.append("")
     return "\n".join(lines)
 
@@ -124,8 +128,8 @@ def _mmss(t: float) -> str:
     return f"{int(t // 60)}:{int(t % 60):02}"
 
 
-def load_target(target: str) -> tuple[str, list[Segment], list[tuple[float, float]], int]:
-    """job id | job dir | transcript.json → (name, segments, your picks, num_clips)."""
+def load_target(target: str) -> tuple[str, list[Segment], list[tuple[float, float]], int, str]:
+    """job id | job dir | transcript.json → (name, segments, your picks, num_clips, topic)."""
     p = Path(target)
     if not p.exists():
         p = settings.data_dir / "jobs" / target
@@ -134,20 +138,22 @@ def load_target(target: str) -> tuple[str, list[Segment], list[tuple[float, floa
     if not transcript.exists():
         raise SystemExit(f"no transcript at {transcript} — pass a job id, job folder or transcript.json")
     segs = [Segment(**s) for s in json.loads(transcript.read_text())]
-    picks, n = [], 5
+    picks, n, topic = [], 5, ""
     job_file = job_dir / "job.json"
     if job_file.exists():
         job = json.loads(job_file.read_text())
         picks = [(c["start"], c["end"]) for c in job.get("clips", []) if c.get("approved") or c.get("custom")]
         n = job.get("num_clips") or n
-    return job_dir.name, segs, picks, n
+        topic = job.get("topic") or ""
+    return job_dir.name, segs, picks, n, topic
 
 
 def run_variant(v: Variant, segs: list[Segment], n: int, keep: int) -> None:
     llm = OllamaClient(model=v.model)
     t0 = time.monotonic()
     try:
-        select_highlights(segs, n, llm, keep=keep, prompt=v.prompt, think=THINK[v.think], trace=v.trace)
+        select_highlights(segs, n, llm, keep=keep, prompt=v.prompt, think=THINK[v.think], trace=v.trace,
+                          topic=v.topic)
     except Exception as e:  # one broken variant (model not pulled, think unsupported…) mustn't stop the eval
         v.error = str(e)[:300]
     v.seconds = time.monotonic() - t0
@@ -161,6 +167,7 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--think", action="append", choices=list(THINK), help="repeatable; default = SELECT_THINK")
     ap.add_argument("--clips", type=int, help="shorts wanted (default: the job's)")
     ap.add_argument("--candidates", type=int, help="candidates to keep (default 2× clips, like review mode)")
+    ap.add_argument("--topic", help="steer selection to a topic (default: the job's; '' for none)")
     ap.add_argument("--repeat", type=int, default=1, help="runs per variant, to see run-to-run noise")
     ap.add_argument("--out", type=Path, help="report folder (default data/evals/<timestamp>)")
     ap.add_argument("--print-prompt", action="store_true", help="print the built-in prompt and exit")
@@ -172,7 +179,8 @@ def main(argv: list[str] | None = None) -> None:
     if not a.target:
         ap.error("target is required")
 
-    name, segs, picks, job_n = load_target(a.target)
+    name, segs, picks, job_n, job_topic = load_target(a.target)
+    topic = job_topic if a.topic is None else a.topic
     n = a.clips or job_n
     keep = a.candidates or 2 * n
     prompts = []
@@ -184,7 +192,7 @@ def main(argv: list[str] | None = None) -> None:
             raise SystemExit(f"{spec}: {e}") from None
         prompts.append((spec if spec == "default" else Path(spec).stem, text))
     default_think = next(k for k, val in THINK.items() if val == settings.select_think)
-    variants = [Variant(model=m, prompt_name=pn, prompt=pt, think=t, run=r)
+    variants = [Variant(model=m, prompt_name=pn, prompt=pt, think=t, run=r, topic=topic)
                 for m, (pn, pt), t, r in itertools.product(a.model or [settings.gemma_model], prompts,
                                                            a.think or [default_think], range(1, a.repeat + 1))]
 
@@ -212,7 +220,7 @@ def main(argv: list[str] | None = None) -> None:
 
     (out / "report.md").write_text(report_md(name, rows, variants, n, keep), encoding="utf-8")
     (out / "results.json").write_text(json.dumps(
-        {"source": name, "clips": n, "candidates": keep, "picks": picks, "rows": rows,
+        {"source": name, "clips": n, "candidates": keep, "topic": topic, "picks": picks, "rows": rows,
          "variants": [{"label": v.label, "model": v.model, "prompt": v.prompt_name, "prompt_id": prompt_id(v.prompt),
                        "think": v.think, "run": v.run, "seconds": round(v.seconds, 1), "error": v.error,
                        "trace": v.trace} for v in variants]},

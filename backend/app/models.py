@@ -74,6 +74,7 @@ class Clip(BaseModel):
     title: str
     hook: str
     score: int = Field(ge=1, le=10)
+    relevance: int | None = None  # 1-10 how on-topic (only when the job has a topic)
     keywords: list[str] = []  # Gemma-picked words highlighted in captions
     file: str | None = None  # filename inside the job folder once rendered
     cut_seconds: float = 0.0  # silence/filler removed by jump cuts
@@ -97,6 +98,11 @@ class JobCreate(BaseModel):
     url: str
     num_clips: int = Field(default=5, ge=1, le=20)
     mode: JobMode = JobMode.review
+    topic: str = Field(default="", max_length=200)  # optional: only moments about this ("salary negotiation")
+
+
+class Retry(BaseModel):
+    topic: str | None = Field(default=None, max_length=200)  # change the topic ("" = none); None = keep it
 
 
 class ClipEdit(BaseModel):
@@ -128,6 +134,7 @@ class Job(BaseModel):
     source: str  # URL or uploaded filename
     num_clips: int = 5
     mode: JobMode = JobMode.review
+    topic: str = ""  # steers clip selection (highlights.FOCUS); "" = best moments on any subject
     status: JobStatus = JobStatus.queued
     stage: Stage = Stage.queued
     progress: float = 0.0  # 0..1 within the current stage

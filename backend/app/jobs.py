@@ -72,8 +72,10 @@ class JobStore:
         d.mkdir(parents=True, exist_ok=True)
         (d / "job.json").write_text(job.model_dump_json(indent=2))
 
-    def create(self, source: str, num_clips: int, mode: JobMode = JobMode.review) -> Job:
-        job = Job(id=uuid.uuid4().hex[:10], source=source, num_clips=num_clips, mode=mode)
+    def create(self, source: str, num_clips: int, mode: JobMode = JobMode.review, topic: str = "") -> Job:
+        from .pipeline.highlights import clean_topic
+
+        job = Job(id=uuid.uuid4().hex[:10], source=source, num_clips=num_clips, mode=mode, topic=clean_topic(topic))
         with self._lock:
             self._jobs[job.id] = job
             self._write(job)
@@ -178,14 +180,16 @@ class Worker:
                 job = self.store.get(job_id)
                 if job is None:
                     raise KeyError(job_id)  # deleted while queued → handled below like any vanished job
+                # only passed when set, so step callables written before topics (tests, scripts) keep working
+                steer = {"topic": job.topic} if job.topic else {}
                 if kind == "run" and job.mode == JobMode.auto:
-                    clips = self.steps.run(source, d, job.num_clips, report)
+                    clips = self.steps.run(source, d, job.num_clips, report, **steer)
                     self.store.update(job_id, status=JobStatus.done, stage=Stage.done, progress=1.0, clips=clips)
                 elif kind == "run":
                     from .pipeline.orchestrator import CANDIDATE_FACTOR
 
                     clips = self.steps.prepare(source, d, job.num_clips, report,
-                                               candidates=job.num_clips * CANDIDATE_FACTOR)
+                                               candidates=job.num_clips * CANDIDATE_FACTOR, **steer)
                     self.store.update(job_id, status=JobStatus.review, stage=Stage.selecting, progress=1.0,
                                       clips=clips, message="Review the clips, then create shorts")
                 elif kind == "produce":

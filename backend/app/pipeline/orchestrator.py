@@ -16,6 +16,7 @@ from pathlib import Path
 
 from ..config import settings
 from ..models import Clip, Segment, Stage
+from . import hinglish, transcript_edit
 from .content import ContentContext, clip_text, generate_all, load_meta, write_posts_md
 from .cover import make_cover
 from .download import download
@@ -41,7 +42,8 @@ def load_segments(job_dir: Path) -> list[Segment]:
 
 
 def prepare(source: str, job_dir: Path, num_clips: int, report: Reporter,
-            llm: LLM | None = None, candidates: int | None = None, topic: str = "") -> list[Clip]:
+            llm: LLM | None = None, candidates: int | None = None, topic: str = "",
+            romanize: bool = False) -> list[Clip]:
     job_dir.mkdir(parents=True, exist_ok=True)
     llm = llm or OllamaClient()
     llm.unload()  # in case a "new angle" request left Gemma in VRAM — Whisper needs the room
@@ -59,7 +61,11 @@ def prepare(source: str, job_dir: Path, num_clips: int, report: Reporter,
 
     report(Stage.transcribing, 0, "Loading Whisper")
     segs = transcribe(video, job_dir, lambda p, m: report(Stage.transcribing, p, m))
-    no_speech = not segs or words_per_minute(segs, probe_duration(video)) < MIN_WPM
+    if romanize and segs and hinglish.romanize(job_dir):  # Hindi in Devanagari → Hinglish before anything reads it
+        report(Stage.transcribing, 1.0, "Hindi → Hinglish (Latin letters)")
+        segs = transcript_edit.load(job_dir)
+    duration = probe_duration(video)
+    no_speech = not segs or words_per_minute(segs, duration) < MIN_WPM
     if no_speech and not settings.no_speech_mode:
         raise RuntimeError("Not enough speech found (and NO_SPEECH_MODE is off).")
 
@@ -78,6 +84,8 @@ def prepare(source: str, job_dir: Path, num_clips: int, report: Reporter,
                                       topic=topic)
     finally:
         llm.unload()
+    if not clips and 0 < duration <= settings.max_clip_seconds:
+        clips = [whole_video_clip(duration, trace, load_meta(job_dir).get("title", ""))]
     # every pick Gemma made and why it was kept/dropped — raw data for prompt eval (python -m app.eval)
     (job_dir / "candidates.json").write_text(json.dumps(trace, indent=1, ensure_ascii=False, default=str))
     if not clips and topic:
@@ -87,6 +95,19 @@ def prepare(source: str, job_dir: Path, num_clips: int, report: Reporter,
         raise RuntimeError("Gemma returned no usable clips. Try a bigger model or tweak the prompt.")
     report(Stage.selecting, 1.0, f"{len(clips)} candidates ready for review")
     return clips
+
+
+def whole_video_clip(duration: float, trace: dict, title: str = "") -> Clip:
+    """The source already fits in a Short (an ad, a reel): Gemma's picks inside it are all too short, so the whole
+    video is the clip — titled with the best pick's title/hook/keywords when there was one."""
+    picks = [i["raw"] for i in trace.get("items", []) if isinstance(i.get("raw"), dict)]
+    best = max(picks, key=lambda r: r.get("score") if isinstance(r.get("score"), int) else 0, default={})
+    score = best.get("score") if isinstance(best.get("score"), int) else 5
+    trace["whole_video"] = True
+    return Clip(index=1, start=0.0, end=round(duration, 2), title=str(best.get("title") or title or "Full video")[:80],
+                hook=str(best.get("hook") or "")[:60], score=max(1, min(10, score)),
+                keywords=[str(k) for k in best.get("keywords") or []][:8] if isinstance(best.get("keywords"), list)
+                else [])
 
 
 def produce(job_dir: Path, clips: list[Clip], report: Reporter, llm: LLM | None = None) -> list[Clip]:
@@ -145,10 +166,10 @@ def render_one(job_dir: Path, clip: Clip) -> Clip:
 
 
 def run_pipeline(source: str, job_dir: Path, num_clips: int, report: Reporter,
-                 llm: LLM | None = None, topic: str = "") -> list[Clip]:
+                 llm: LLM | None = None, topic: str = "", romanize: bool = False) -> list[Clip]:
     """Auto mode: everything end to end."""
     llm = llm or OllamaClient()
-    clips = prepare(source, job_dir, num_clips, report, llm, topic=topic)
+    clips = prepare(source, job_dir, num_clips, report, llm, topic=topic, romanize=romanize)
     clips = produce(job_dir, clips, report, llm)
     if not any(c.file for c in clips):
         raise RuntimeError("All renders failed: " + "; ".join(c.render_error or "" for c in clips)[:300])

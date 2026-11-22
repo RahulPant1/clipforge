@@ -22,6 +22,7 @@ def _offline_defaults(monkeypatch, tmp_path):
 
     monkeypatch.setattr(settings, "reframe_mode", "center")
     monkeypatch.setattr(settings, "data_dir", tmp_path / "data")
+    monkeypatch.setattr(settings, "hinglish_default", False)  # fake pipelines predate romanize=
     from app.pipeline import fonts
 
     monkeypatch.setattr(fonts, "WINDOWS_FONTS", tmp_path / "no-windows-fonts")  # never scan /mnt/c in tests

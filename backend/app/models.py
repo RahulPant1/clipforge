@@ -113,6 +113,11 @@ class JobCreate(BaseModel):
     num_clips: int = Field(default=5, ge=1, le=20)
     mode: JobMode = JobMode.review
     topic: str = Field(default="", max_length=200)  # optional: only moments about this ("salary negotiation")
+    hinglish: bool | None = None  # Hindi speech → Latin letters; None = settings.hinglish_default
+
+
+class ScriptChoice(BaseModel):
+    hinglish: bool  # True: transcript in Latin letters; False: back to Whisper's Devanagari
 
 
 class Retry(BaseModel):
@@ -156,6 +161,7 @@ class Job(BaseModel):
     num_clips: int = 5
     mode: JobMode = JobMode.review
     topic: str = ""  # steers clip selection (highlights.FOCUS); "" = best moments on any subject
+    hinglish: bool = False  # Hindi (Devanagari) transcript converted to Latin letters (pipeline/hinglish.py)
     status: JobStatus = JobStatus.queued
     stage: Stage = Stage.queued
     progress: float = 0.0  # 0..1 within the current stage

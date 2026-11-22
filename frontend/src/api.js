@@ -22,15 +22,19 @@ export const api = {
   voiceSuggestions: () => req('/brand-voice/suggestions'),
   listJobs: () => req('/jobs'),
   eventsUrl: () => '/api/events',
-  createJob: (url, num_clips, mode, topic = '') => req('/jobs', json('POST', { url, num_clips, mode, topic })),
-  uploadJob: (file, num_clips, mode, topic = '') => {
+  createJob: (url, num_clips, mode, topic = '', hinglish = true) =>
+    req('/jobs', json('POST', { url, num_clips, mode, topic, hinglish })),
+  uploadJob: (file, num_clips, mode, topic = '', hinglish = true) => {
     const fd = new FormData()
     fd.append('file', file)
     fd.append('num_clips', num_clips)
     fd.append('mode', mode)
     fd.append('topic', topic)
+    fd.append('hinglish', hinglish)
     return req('/jobs/upload', { method: 'POST', body: fd })
   },
+  scriptState: (id) => req(`/jobs/${id}/script`),
+  setScript: (id, hinglish) => req(`/jobs/${id}/script`, json('POST', { hinglish })),
   deleteJob: (id) => req(`/jobs/${id}`, { method: 'DELETE' }),
   retry: (id, topic) => req(`/jobs/${id}/retry`, topic == null ? { method: 'POST' } : json('POST', { topic })),
   transcript: (id) => req(`/jobs/${id}/transcript`),

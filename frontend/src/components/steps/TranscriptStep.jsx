@@ -1,8 +1,27 @@
-import { useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { api } from '../../api.js'
 import { fmt, fmtPrecise } from '../../util.js'
 
-export default function TranscriptStep({ job, busy, act, go, transcript }) {
+// Hindi transcripts: Devanagari ⇄ Hinglish (Latin letters). Captions, .srt, posts and the editor all follow.
+function ScriptSwitch({ job, busy, act, reloadTranscript }) {
+  const [state, setState] = useState(null)
+  useEffect(() => { api.scriptState(job.id).then((r) => setState(r.state)).catch(() => setState('')) }, [job.id, job.hinglish])
+  if (!state) return null
+  const toLatin = state === 'devanagari'
+  const flip = () => {
+    if (!toLatin && !window.confirm('Back to Devanagari? Word fixes you made in Hinglish will be lost.')) return
+    act(() => api.setScript(job.id, toLatin)).then(reloadTranscript).catch(() => {})
+  }
+  return (
+    <div className="scriptswitch">
+      <span>{toLatin ? <>Hindi in <b>Devanagari</b> (as Whisper wrote it)</> : <>Hindi shown in <b>Hinglish</b> (Latin letters)</>}</span>
+      <button className="btn" disabled={busy} onClick={flip}>{toLatin ? 'Switch to Hinglish' : 'Back to Devanagari'}</button>
+      {job.clips.some((c) => c.file) && <span className="muted small">rendered shorts get marked to re-render</span>}
+    </div>
+  )
+}
+
+export default function TranscriptStep({ job, busy, act, go, transcript, reloadTranscript }) {
   const player = useRef(null)
   const [q, setQ] = useState('')
   const [sel, setSel] = useState({ start: null, end: null })
@@ -68,6 +87,7 @@ export default function TranscriptStep({ job, busy, act, go, transcript }) {
       </div>
 
       <div className="card tlist">
+        <ScriptSwitch job={job} busy={busy} act={act} reloadTranscript={reloadTranscript} />
         <div className="tlist-head">
           <h3>Transcript</h3>
           <input className="search" placeholder="Search…" value={q} onChange={(e) => setQ(e.target.value)} />

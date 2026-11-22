@@ -30,12 +30,13 @@ from .models import (
     RenderOptions,
     ReplaceWords,
     Retry,
+    ScriptChoice,
     Segment,
     Stage,
     Vocabulary,
     WordEdit,
 )
-from .pipeline import cover, transcript_edit, vocabulary, voice, waveform
+from .pipeline import cover, hinglish, transcript_edit, vocabulary, voice, waveform
 from .pipeline.content import ANGLES, NAMES, ContentContext, clip_text, generate_post, load_meta, write_posts_md
 from .pipeline.export import build_pack
 from .pipeline.history import get_history
@@ -120,14 +121,16 @@ def create_app(pipeline=None, start_worker: bool = True, llm_factory=OllamaClien
     def create_job(body: JobCreate) -> Job:
         if not body.url.startswith(("http://", "https://")):
             raise HTTPException(400, "url must start with http(s)://")
-        job = store.create(body.url, body.num_clips, body.mode, body.topic)
+        hinglish = settings.hinglish_default if body.hinglish is None else body.hinglish
+        job = store.create(body.url, body.num_clips, body.mode, body.topic, hinglish=hinglish)
         worker.submit(job.id, body.url)
         return job
 
     @app.post("/api/jobs/upload", response_model=Job, status_code=201)
     def upload_job(file: UploadFile = File(...), num_clips: int = Form(5), mode: JobMode = Form(JobMode.review),
-                   topic: str = Form("", max_length=200)) -> Job:
-        job = store.create(file.filename or "upload.mp4", num_clips, mode, topic)
+                   topic: str = Form("", max_length=200), hinglish: bool | None = Form(None)) -> Job:
+        job = store.create(file.filename or "upload.mp4", num_clips, mode, topic,
+                           hinglish=settings.hinglish_default if hinglish is None else hinglish)
         d = store.dir(job.id)
         d.mkdir(parents=True, exist_ok=True)
         dest = d / "source.mp4"
@@ -226,6 +229,23 @@ def create_app(pipeline=None, start_worker: bool = True, llm_factory=OllamaClien
             if c.file and not c.stale and any(s < c.end and e > c.start for s, e in spans):
                 job = store.update_clip(job_id, c.index, lambda x: setattr(x, "stale", True))
         return job
+
+    @app.get("/api/jobs/{job_id}/script")
+    def get_script(job_id: str) -> dict:
+        """Hindi transcripts: "devanagari" (can switch to Hinglish), "hinglish" (can switch back) or "" (n/a)."""
+        if not store.get(job_id):
+            raise HTTPException(404, "job not found")
+        return {"state": hinglish.state(store.dir(job_id)), "default": settings.hinglish_default}
+
+    @app.post("/api/jobs/{job_id}/script", response_model=Job)
+    def set_script(job_id: str, body: ScriptChoice) -> Job:
+        """Hindi transcript in Latin letters (Hinglish) or back to Devanagari. Captions/.srt/posts follow; rendered
+        shorts are marked stale. Going back drops fixes made in Hinglish (the Devanagari original is restored)."""
+        editable(job_id)
+        d = store.dir(job_id)
+        spans = hinglish.romanize(d) if body.hinglish else hinglish.back_to_native(d)
+        job = store.update(job_id, hinglish=body.hinglish)
+        return mark_stale(job_id, spans) if spans else job
 
     @app.get("/api/jobs/{job_id}/words")
     def get_words(job_id: str, start: float = 0.0, end: float = 1e9) -> list[dict]:

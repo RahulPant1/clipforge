@@ -75,10 +75,12 @@ class JobStore:
         d.mkdir(parents=True, exist_ok=True)
         (d / "job.json").write_text(job.model_dump_json(indent=2))
 
-    def create(self, source: str, num_clips: int, mode: JobMode = JobMode.review, topic: str = "") -> Job:
+    def create(self, source: str, num_clips: int, mode: JobMode = JobMode.review, topic: str = "",
+               hinglish: bool = False) -> Job:
         from .pipeline.highlights import clean_topic
 
-        job = Job(id=uuid.uuid4().hex[:10], source=source, num_clips=num_clips, mode=mode, topic=clean_topic(topic))
+        job = Job(id=uuid.uuid4().hex[:10], source=source, num_clips=num_clips, mode=mode, topic=clean_topic(topic),
+                  hinglish=hinglish)
         with self._lock:
             self._jobs[job.id] = job
             self._write(job)
@@ -185,6 +187,8 @@ class Worker:
                     raise KeyError(job_id)  # deleted while queued → handled below like any vanished job
                 # only passed when set, so step callables written before topics (tests, scripts) keep working
                 steer = {"topic": job.topic} if job.topic else {}
+                if job.hinglish:
+                    steer["romanize"] = True
                 if kind == "run" and job.mode == JobMode.auto:
                     clips = self.steps.run(source, d, job.num_clips, report, **steer)
                     self.store.update(job_id, status=JobStatus.done, stage=Stage.done, progress=1.0, clips=clips)

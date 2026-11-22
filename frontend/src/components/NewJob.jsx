@@ -10,6 +10,7 @@ export default function NewJob({ onCreated }) {
   const [numClips, setNumClips] = useState(5)
   const [mode, setMode] = useState('review')
   const [topic, setTopic] = useState('') // optional: only moments about this
+  const [hinglish, setHinglish] = useState(true) // Hindi speech → captions in Latin letters
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
   const [vocab, setVocab] = useState('') // names & terms for Whisper, remembered for all jobs
@@ -33,7 +34,9 @@ export default function NewJob({ onCreated }) {
       if (vocab !== vocabSaved) await api.saveVocabulary(vocab.split(',').map((t) => t.trim()).filter(Boolean))
       const t = topic.trim()
       const job =
-        kind === 'url' ? await api.createJob(url.trim(), numClips, mode, t) : await api.uploadJob(file, numClips, mode, t)
+        kind === 'url'
+          ? await api.createJob(url.trim(), numClips, mode, t, hinglish)
+          : await api.uploadJob(file, numClips, mode, t, hinglish)
       onCreated(job)
     } catch (e) {
       setErr(e.message)
@@ -88,6 +91,14 @@ export default function NewJob({ onCreated }) {
           </span>
           <input value={topic} maxLength={120} placeholder="e.g. salary negotiation, the pricing story, funny moments"
                  onChange={(e) => setTopic(e.target.value)} />
+        </label>
+
+        <label className="checkline">
+          <input type="checkbox" checked={hinglish} onChange={(e) => setHinglish(e.target.checked)} />
+          <span>
+            Hindi speech → <b>Hinglish</b> captions <span className="muted">· Latin letters ("kya baat hai") instead of
+            Devanagari — easier to read and to fix. Switchable later on the Transcript step</span>
+          </span>
         </label>
 
         <label className="fl">

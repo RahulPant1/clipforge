@@ -13,6 +13,7 @@ class Settings(BaseSettings):
     # Default data/library; e.g. /mnt/c/Users/<you>/Videos/ClipForge to browse it in Windows (files copied there).
     library_dir: Path | None = None
     library_fetch_meta: bool = True  # look up full YouTube metadata (no download) for jobs that lack it
+    hinglish_default: bool = True  # new jobs: Hindi speech → transcript/captions in Latin letters (hinglish.py)
 
     # LLM (Gemma via Ollama)
     ollama_url: str = "http://localhost:11434"

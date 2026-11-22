@@ -36,6 +36,11 @@ backend/                FastAPI + pipeline (Python 3.11, conda env "clipforge")
     transcribe.py       faster-whisper, caches transcript.json, frees VRAM after; preloads cuBLAS from the pip wheel
     transcript_edit.py  caption fixes: set_word(seg, i), replace_all(find, replace) (phrases merge into one word,
                         each occurrence keeps its own trailing punctuation), rebuild seg.text; transcript.json atomic
+    hinglish.py         Devanagari → Hinglish (Latin) per word, timings kept: rule-based map + schwa deletion
+                        (jab, kismat, samajhna), long vowels doubled only in one-syllable words (baat, aap). Job.hinglish
+                        (NewJob checkbox, HINGLISH_DEFAULT) → prepare(romanize=True) right after transcribe, so selection,
+                        captions, .srt and posts all read Latin. Original kept in transcript.native.json;
+                        POST /jobs/{id}/script {hinglish} switches either way (marks shorts stale)
     vocabulary.py       names/terms (data/vocabulary.json, all jobs) → faster-whisper `hotwords` for new transcripts
     llm.py              OllamaClient (chat_json with schema, unload, health) + LLM Protocol
     highlights.py       windows → prompt → snap → fit_duration → dedupe  (prompt + keywords live here)
@@ -196,7 +201,9 @@ done: PATCH clip options → stale → POST /clips/{i}/render ; PATCH/POST posts
   any the model wrote inline.
 - candidates.json outcomes: kept | overlap (lost to a higher-scored clip on the same moment) | ranked_out (fine, but
   more candidates than asked for) | too_short | off_topic (topic jobs: relevance < MIN_RELEVANCE) | invalid.
-- Topics: the Worker passes `topic=` to prepare/run ONLY when the job has one, so step callables written without
+- Sources that fit in a Short (≤ max_clip_seconds, e.g. a 30 s ad): if every Gemma pick is too short, the whole video
+  is the clip (`whole_video_clip`, best pick's title/hook; candidates.json "whole_video": true).
+- Topics: the Worker passes `topic=` (and `romanize=True`) to prepare/run ONLY when set, so step callables written without
   it still work. A topic with no matches fails the job with "No moments about …" (retry with another topic).
   No-speech jobs only rank by relevance (vision), never drop: their pool comes from signal peaks.
 - Captions have no "top" position on purpose: tracked faces sit in the upper half (tested: covered the eyes) and

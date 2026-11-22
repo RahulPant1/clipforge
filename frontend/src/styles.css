@@ -363,3 +363,9 @@ input:focus, textarea:focus { outline: none; border-color: #4a5164; }
 .frames button { padding: 0; border: 2px solid var(--line); border-radius: 6px; overflow: hidden; background: none; cursor: pointer; }
 .frames button.on { border-color: var(--accent); }
 .frames img { width: 54px; display: block; }
+
+/* Hindi: Devanagari ⇄ Hinglish (Transcript step) + new-job checkbox */
+.scriptswitch { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; padding: 8px 10px; margin-bottom: 10px;
+  border: 1px solid var(--line); border-radius: 10px; font-size: 13px; }
+.checkline { display: flex; align-items: flex-start; gap: 8px; font-size: 14px; cursor: pointer; }
+.checkline input { margin-top: 3px; }

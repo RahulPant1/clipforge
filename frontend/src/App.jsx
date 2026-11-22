@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { api } from './api.js'
 import History from './components/History.jsx'
+import BrandKit from './components/BrandKit.jsx'
 import BrandVoice from './components/BrandVoice.jsx'
 import HealthBadge from './components/HealthBadge.jsx'
 import JobList from './components/JobList.jsx'
@@ -9,6 +10,7 @@ import Workspace from './components/Workspace.jsx'
 import { isBusy } from './util.js'
 
 const VOICE = 'brand-voice'
+const KIT = 'brand-kit'
 
 export default function App() {
   const [jobs, setJobs] = useState([])
@@ -98,12 +100,17 @@ export default function App() {
           <button className={`voicebtn ${selectedId === VOICE ? 'on' : ''}`} onClick={() => setSelectedId(VOICE)}>
             🎙 Brand voice
           </button>
+          <button className={`voicebtn ${selectedId === KIT ? 'on' : ''}`} onClick={() => setSelectedId(KIT)}>
+            🎨 Brand kit
+          </button>
           <History />
           <JobList jobs={jobs} selectedId={selectedId} onSelect={setSelectedId} onDelete={onDelete} />
         </aside>
         <section className="detail">
           {selectedId === VOICE ? (
             <BrandVoice />
+          ) : selectedId === KIT ? (
+            <BrandKit />
           ) : selected ? (
             <Workspace key={selected.id} job={selected} onChanged={changed} />
           ) : (

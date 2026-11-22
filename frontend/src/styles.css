@@ -449,3 +449,35 @@ aside { min-width: 0; }  /* a long History path must shrink (ellipsis), not wide
 .find-acts { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; }
 .find-acts .checkline { font-size: 12px; }
 @media (max-width: 700px) { .find-acts { flex-direction: row; align-items: center; justify-content: space-between; } }
+
+.ws-title { font-size: 15px; margin: 0 0 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.job .msg.chan { margin-top: 2px; }
+
+/* Brand kit */
+.kit h3 { margin: 10px 0 2px; font-size: 15px; }
+.kit-grid { display: grid; grid-template-columns: 1fr 240px; gap: 20px; align-items: start; }
+.kit-grid.off .kit-previews { opacity: 0.4; }
+.kit-form { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.kit-logo { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.kit-logo img { max-width: 96px; max-height: 64px; background: repeating-conic-gradient(#2a2f3a 0 25%, #1c2029 0 50%) 0 0 / 12px 12px;
+  border-radius: 6px; padding: 4px; }
+.kit-range { display: grid; grid-template-columns: 70px 1fr 48px; align-items: center; gap: 8px; font-size: 14px; }
+.kit-range span { text-align: right; font-variant-numeric: tabular-nums; }
+.kit-colour { display: flex; align-items: center; gap: 10px; }
+.kit-colour input[type='color'] { width: 44px; height: 32px; padding: 0; border: 1px solid var(--line); border-radius: 6px;
+  background: none; cursor: pointer; }
+.kit-save { display: flex; align-items: center; gap: 12px; margin-top: 8px; }
+.kit-previews { display: flex; flex-direction: column; gap: 14px; position: sticky; top: 12px; }
+.kit-phone { position: relative; width: 100%; aspect-ratio: 9 / 16; border-radius: 14px; overflow: hidden;
+  background: linear-gradient(160deg, #3b4a63, #1d2433 60%, #3a2b33); border: 1px solid var(--line); }
+.kit-phone.end { background: linear-gradient(160deg, #262d3b, #14181f); }
+.kit-phone.end img { width: 100%; height: 100%; display: block; }
+.kit-wm { position: absolute; height: auto; }
+.kit-cap { position: absolute; left: 0; right: 0; bottom: 22%; text-align: center; color: #fff; font-weight: 800;
+  font-size: 15px; text-shadow: 0 0 3px #000, 0 0 3px #000; }
+.kit-none { position: absolute; inset: 0; display: grid; place-items: center; }
+@media (max-width: 760px) {
+  .kit-grid { grid-template-columns: 1fr; }
+  .kit-previews { flex-direction: row; position: static; }
+  .kit-previews > div { flex: 1; }
+}

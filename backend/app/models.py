@@ -68,6 +68,8 @@ class RenderOptions(BaseModel):
     zoom: bool | None = None  # punch-in on alternate jump-cut segments
     hook: bool | None = None  # show clip.hook as a title card for the first seconds
     follow: float | None = None  # follow THIS person: face centre x (0..1 of source width) picked in the UI
+    watermark: bool | None = None  # brand kit logo in the corner (None = on when the kit has a logo)
+    end_card: bool | None = None  # brand kit end card after the last word (None = the kit's setting)
 
 
 class HookVariant(BaseModel):
@@ -82,6 +84,7 @@ class Clip(BaseModel):
     end: float
     title: str
     hook: str
+    brand_rev: int = -1  # BrandKit.rev it was rendered with (-1 = no kit in use)
     score: int = Field(ge=1, le=10)
     relevance: int | None = None  # 1-10 how on-topic (only when the job has a topic)
     keywords: list[str] = []  # Gemma-picked words highlighted in captions
@@ -122,10 +125,18 @@ class JobCreate(BaseModel):
     mode: JobMode = JobMode.review
     topic: str = Field(default="", max_length=200)  # optional: only moments about this ("salary negotiation")
     hinglish: bool | None = None  # Hindi speech → Latin letters; None = settings.hinglish_default
+    title: str = Field(default="", max_length=300)  # known up front (Find videos) → shown before the download
+    channel: str = Field(default="", max_length=200)
+
+
+class VideoInfo(BaseModel):
+    title: str = Field(default="", max_length=300)
+    channel: str = Field(default="", max_length=200)
 
 
 class BatchCreate(BaseModel):
     urls: list[str] = Field(min_length=1, max_length=50)  # one job each, same settings, queued in this order
+    info: dict[str, VideoInfo] = {}  # url -> title/channel already known from the list (optional)
     num_clips: int = Field(default=5, ge=1, le=20)
     mode: JobMode = JobMode.review
     topic: str = Field(default="", max_length=200)
@@ -193,6 +204,8 @@ class PostEdit(BaseModel):
 class Job(BaseModel):
     id: str
     source: str  # URL or uploaded filename
+    title: str = ""  # the video's title (from the batch/Find list, else meta.json once downloaded); "" = not known yet
+    channel: str = ""
     num_clips: int = 5
     mode: JobMode = JobMode.review
     topic: str = ""  # steers clip selection (highlights.FOCUS); "" = best moments on any subject
@@ -205,6 +218,22 @@ class Job(BaseModel):
     clips: list[Clip] = []
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+
+class BrandKit(BaseModel):
+    """Your look on every short (data/brand_kit.json, all jobs): logo watermark, end card, brand colour."""
+    enabled: bool = True
+    logo: bool = False  # data/brand/logo.png uploaded (POST /api/brand-kit/logo)
+    position: str = Field(default="top-left", pattern=r"^top-(left|right)$")  # bottom corners: platform buttons
+    size: int = Field(default=14, ge=6, le=35)  # logo width, % of the 1080 px frame
+    opacity: float = Field(default=0.85, ge=0.2, le=1.0)
+    end_card: bool = True
+    end_seconds: float = Field(default=2.0, ge=1.0, le=4.0)
+    end_text: str = Field(default="Follow for more", max_length=60)
+    handle: str = Field(default="", max_length=40)  # "" = BRAND_HANDLE from .env
+    accent: str = Field(default="", pattern=r"^(#[0-9a-fA-F]{6})?$")  # "" = CAROUSEL_ACCENT from .env
+    accent_captions: bool = False  # karaoke active word in the brand colour
+    rev: int = 0  # bumped when anything burned into a short changes (shorts made with an older rev → "re-render")
 
 
 class BrandVoice(BaseModel):

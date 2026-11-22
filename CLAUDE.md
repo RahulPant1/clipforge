@@ -92,6 +92,14 @@ backend/                FastAPI + pipeline (Python 3.11, conda env "clipforge")
     content.py          Content Studio: ANGLES (creative styles per platform), RULES, SCHEMAS, PROMPT,
                         plain() strips markdown/LaTeX Gemma writes (**bold**, $\rightarrow$) from every field,
                         assemblers enforcing platform limits, generate_post/generate_all, posts.md writer
+    brand.py            Brand kit (data/brand_kit.json + data/brand/logo.png, 🎨 screen): render asks watermark() (logo
+                        top-left/right at TOP_Y=120, shown from the end of the hook card to the last word),
+                        end_card_seconds() (≤ end_seconds, never past max_clip_seconds; < 1 s → none) → freeze_tail()
+                        (tpad clone + blur/darken, before captions) + end_card_png() overlay + apad; overlay_graph()
+                        switches render to -filter_complex (-map [v] -map 0:a?). accent()/handle() feed covers, quote
+                        cards, carousels, post CTAs (fallback CAROUSEL_ACCENT/BRAND_HANDLE); accent_captions → preset
+                        active colour. `rev` bumps on burned-in changes; clip.brand_rev → "re-render" hint (never stale).
+                        No kit file = off: shorts render exactly as before. Per short: options.watermark / end_card
     voice.py            brand voice: your posts per platform (data/brand_voice.json, all jobs) → voice_block()
                         few-shot examples in PROMPT (≤5 per platform, borrows 2 from others if none); notes → Voice:
     history.py          variety engine: least-recently-used angle rotation + recent openers to avoid
@@ -153,6 +161,8 @@ publish: PATCH post {status, url}: posted_at set on → posted (cleared when it 
 - A waiting job (queued, no clips) can be deleted = removed from the queue; the worker skips a job that's gone.
 - `failed` → POST /retry → queued: same folder, so a finished download/transcript is reused (uploads re-run
   from their saved source.mp4; 409 if it's gone). Body `{"topic": ...}` changes the topic first ("" = none).
+- Jobs carry `title`/`channel` (batch/Find list → create; else meta.json on the first progress report after
+  download; older jobs read meta.json on load, in memory). The Jobs list and workspace header show them.
 - UI cache-busting: rendered files are requested with `?v=<clip.version>`.
 - Live updates: always save through JobStore (update/update_clip/delete) — that's what wakes the SSE streams;
   a job.json written any other way never reaches the UI. With the stream open, actions don't refetch the list
@@ -326,7 +336,7 @@ Keep it local: no cloud stock/B-roll/TTS APIs.
 17. [x] D. Reframe override: pick which face to follow (Shorts step). [ ] still open: crop keyframes dragged by hand.
 18. [ ] F. Colour emoji as PNG overlays (libass is monochrome) + optional auto-emoji per caption line (= roadmap 4).
 19. [ ] G. B-roll from your own folder, matched to the clip by Gemma keywords.
-20. [ ] H. Brand kit: logo watermark, end card with CTA.
+20. [x] H. Brand kit: logo watermark, end card with CTA, brand colour (covers/quotes/carousels/captions).
 21. [ ] I. Multi-aspect export: 1:1 and 4:5 alongside 9:16.
 22. [x] L. Several title/hook variants to choose from.
 23. [x] N. Batch: several links / a playlist / a channel / Find-videos picks as a queue of jobs; watched folder.

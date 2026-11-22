@@ -19,6 +19,7 @@ from .library import XLSX, Library, video_key, windows_path
 from .models import (
     BatchCreate,
     BatchLinks,
+    BrandKit,
     BrandVoice,
     Clip,
     ClipAdd,
@@ -42,7 +43,7 @@ from .models import (
     Vocabulary,
     WordEdit,
 )
-from .pipeline import batch, cover, discover, hinglish, quote, transcript_edit, vocabulary, voice, waveform
+from .pipeline import batch, brand, cover, discover, hinglish, quote, transcript_edit, vocabulary, voice, waveform
 from .pipeline.content import ANGLES, NAMES, ContentContext, clip_text, generate_post, load_meta, write_posts_md
 from .pipeline.export import build_pack
 from .pipeline.history import get_history
@@ -103,6 +104,49 @@ def create_app(pipeline=None, start_worker: bool = True, llm_factory=OllamaClien
         return {"api": "ok", "ollama": llm, "whisper": settings.whisper_model,
                 "encoder": settings.encoder}
 
+    # ---------------------------------------------------------------- brand kit (logo, end card, colour)
+
+    def kit_info(kit) -> dict:
+        return {**kit.model_dump(), "default_accent": settings.carousel_accent, "default_handle": settings.brand_handle,
+                "accent_now": brand.accent(kit), "handle_now": brand.handle(kit)}
+
+    @app.get("/api/brand-kit")
+    def get_brand_kit() -> dict:
+        return kit_info(brand.load())
+
+    @app.put("/api/brand-kit")
+    def put_brand_kit(body: BrandKit) -> dict:
+        return kit_info(brand.save(body))
+
+    @app.post("/api/brand-kit/logo")
+    def upload_logo(file: UploadFile = File(...)) -> dict:
+        data = file.file.read(10_000_001)
+        if len(data) > 10_000_000:
+            raise HTTPException(413, "logo over 10 MB — export a smaller PNG")
+        try:
+            return kit_info(brand.save_logo(data))
+        except ValueError as e:
+            raise HTTPException(400, str(e)) from e
+
+    @app.delete("/api/brand-kit/logo")
+    def delete_logo() -> dict:
+        return kit_info(brand.remove_logo())
+
+    @app.get("/api/brand-kit/logo.png")
+    def get_logo() -> FileResponse:
+        if not brand.logo_path().is_file():
+            raise HTTPException(404, "no logo")
+        return FileResponse(brand.logo_path(), media_type="image/png", headers={"Cache-Control": "no-cache"})
+
+    @app.get("/api/brand-kit/end-card.png")
+    def end_card_preview() -> FileResponse:
+        """The end card's overlay as it would be drawn now (the UI shows it over a dark frame)."""
+        out = settings.data_dir / "brand" / "end-card-preview.png"
+        out.parent.mkdir(parents=True, exist_ok=True)
+        kit = brand.load()
+        brand.end_card_png(kit.model_copy(update={"enabled": True}), out)
+        return FileResponse(out, media_type="image/png", headers={"Cache-Control": "no-cache"})
+
     @app.get("/api/caption-presets")
     def caption_presets() -> dict:
         """Caption looks for the Shorts step (built-in + data/caption_presets.json) and the global defaults."""
@@ -147,7 +191,8 @@ def create_app(pipeline=None, start_worker: bool = True, llm_factory=OllamaClien
         if not body.url.startswith(("http://", "https://")):
             raise HTTPException(400, "url must start with http(s)://")
         hinglish = settings.hinglish_default if body.hinglish is None else body.hinglish
-        job = store.create(body.url, body.num_clips, body.mode, body.topic, hinglish=hinglish)
+        job = store.create(body.url, body.num_clips, body.mode, body.topic, hinglish=hinglish, title=body.title,
+                           channel=body.channel)
         worker.submit(job.id, body.url)
         return job
 
@@ -172,7 +217,9 @@ def create_app(pipeline=None, start_worker: bool = True, llm_factory=OllamaClien
         hinglish = settings.hinglish_default if body.hinglish is None else body.hinglish
         jobs = []
         for u in urls:
-            job = store.create(u, body.num_clips, body.mode, body.topic, hinglish=hinglish)
+            known = body.info.get(u)
+            job = store.create(u, body.num_clips, body.mode, body.topic, hinglish=hinglish,
+                               title=known.title if known else "", channel=known.channel if known else "")
             worker.submit(job.id, u)
             jobs.append(job)
         return {"jobs": jobs}
@@ -180,7 +227,7 @@ def create_app(pipeline=None, start_worker: bool = True, llm_factory=OllamaClien
     @app.post("/api/jobs/upload", response_model=Job, status_code=201)
     def upload_job(file: UploadFile = File(...), num_clips: int = Form(5), mode: JobMode = Form(JobMode.review),
                    topic: str = Form("", max_length=200), hinglish: bool | None = Form(None)) -> Job:
-        job = store.create(file.filename or "upload.mp4", num_clips, mode, topic,
+        job = store.create(file.filename or "upload.mp4", num_clips, mode, topic, title=Path(file.filename or "").stem,
                            hinglish=settings.hinglish_default if hinglish is None else hinglish)
         d = store.dir(job.id)
         d.mkdir(parents=True, exist_ok=True)

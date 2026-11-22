@@ -11,6 +11,7 @@ from pathlib import Path
 
 from ..config import settings
 from ..models import Clip
+from . import brand
 from .fonts import font_for, pil_font, strip_emoji
 from .jumpcut import clean_removed
 
@@ -175,7 +176,7 @@ def draw_cutout_cover(frame, x: float | None, text: str, out: Path, font_family:
     person = cutout(frame, x, key=key)
     if person is None:
         return False
-    accent = _hex(settings.carousel_accent)
+    accent = _hex(brand.accent())
     small = cv2.resize(crop_9x16(frame, x) if x is not None else _center_crop(frame), (270, 480))
     bg = Image.fromarray(cv2.cvtColor(cv2.GaussianBlur(small, (0, 0), 10), cv2.COLOR_BGR2RGB)).resize((W, H))
     img = ImageEnhance.Brightness(bg).enhance(0.45).convert("RGBA")

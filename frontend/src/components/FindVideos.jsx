@@ -218,7 +218,7 @@ export default function FindVideos({ initialTopic = '', onUse, onQueue }) {
                 )}
               </div>
               <span className="find-acts">
-                <button type="button" className="btn" onClick={() => onUse(r.url, topic.trim())}>Use this video</button>
+                <button type="button" className="btn" onClick={() => onUse(r, topic.trim())}>Use this video</button>
                 <label className="checkline small" title="Tick several, then queue them all as one batch">
                   <input type="checkbox" checked={!!picked[r.id]} onChange={() => pick(r)} /> batch
                 </label>

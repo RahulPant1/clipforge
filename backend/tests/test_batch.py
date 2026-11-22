@@ -138,3 +138,48 @@ def test_watched_folder_takes_settled_videos_once(tmp_path, monkeypatch):
     os.utime(inbox / "talk.mp4", (st.st_atime, st.st_mtime + 60))  # replaced by a new version
     w2.scan()
     assert len(w2.scan()) == 1
+
+
+# ------------------------------------------------------------------ job titles (Jobs list)
+
+def test_job_titles_from_the_list_the_download_or_an_old_meta_json(tmp_path, monkeypatch):
+    import json
+
+    from app.jobs import JobStore, Worker
+    from app.main import create_app
+    from app.models import Clip, Stage
+    from app.pipeline.orchestrator import Steps
+
+    monkeypatch.setattr(settings, "data_dir", tmp_path / "d")
+    app = create_app(pipeline=lambda *a, **k: [], start_worker=False)
+    with TestClient(app) as c:
+        jobs = c.post("/api/jobs/batch", json={
+            "urls": ["https://youtu.be/aaaaaaaaaaa", "https://youtu.be/bbbbbbbbbbb"],
+            "info": {"https://youtu.be/aaaaaaaaaaa": {"title": "  Salary   talk ", "channel": "Ch"}}}).json()["jobs"]
+        assert [(j["title"], j["channel"]) for j in jobs] == [("Salary talk", "Ch"), ("", "")]
+        one = c.post("/api/jobs", json={"url": "https://youtu.be/ccccccccccc", "title": "From Find"}).json()
+        assert one["title"] == "From Find"
+
+    # the download writes meta.json → the next progress report puts the title on the job
+    store = JobStore(tmp_path / "w")
+    job = store.create("https://youtu.be/ddddddddddd", 1)
+
+    def prepare(source, job_dir, num_clips, report, candidates=None):
+        report(Stage.downloading, 0.5, "downloading")
+        assert store.get(job.id).title == ""
+        (job_dir / "meta.json").write_text(json.dumps({"title": "Real title", "channel": "Real channel"}))
+        report(Stage.transcribing, 0.1, "transcribing")
+        assert (store.get(job.id).title, store.get(job.id).channel) == ("Real title", "Real channel")
+        return [Clip(index=1, start=0, end=20, title="c", hook="h", score=5)]
+
+    worker = Worker(store, steps=Steps(prepare=prepare))
+    job_dir = store.dir(job.id)
+    job_dir.mkdir(parents=True, exist_ok=True)
+    worker._run("run", job.id, source=job.source)
+    assert store.get(job.id).status == JobStatus.review
+
+    # a job from before titles: read from its meta.json when the store loads
+    old = store.create("https://youtu.be/eeeeeeeeeee", 1)
+    store.update(old.id, status=JobStatus.done)
+    (store.dir(old.id) / "meta.json").write_text(json.dumps({"title": "Old one", "channel": "Old ch"}))
+    assert JobStore(tmp_path / "w").get(old.id).title == "Old one"

@@ -81,7 +81,7 @@ class Watcher:
 
     def take(self, path: Path, size: int, mtime: float) -> str | None:
         job = self.store.create(path.name, settings.watch_clips, JobMode(settings.watch_mode), settings.watch_topic,
-                                hinglish=settings.hinglish_default)
+                                hinglish=settings.hinglish_default, title=path.stem)
         self.taken[path.name] = {"size": size, "mtime": mtime, "job": job.id}
         self._save()
         try:

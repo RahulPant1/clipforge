@@ -2,6 +2,7 @@
 
 One worker on purpose: Whisper and Gemma share one laptop GPU, so jobs run one at a time.
 """
+import json
 import logging
 import queue
 import shutil
@@ -21,6 +22,15 @@ PipelineFn = Callable[..., list[Clip]]
 
 # Held while anything uses the GPU (a whole job, or a single "new angle" regeneration)
 GPU_LOCK = threading.Lock()
+
+
+def video_title(job_dir: Path) -> tuple[str, str]:
+    """(title, channel) from the job's meta.json (written by download), or ("", "")."""
+    try:
+        meta = json.loads((job_dir / "meta.json").read_text())
+    except (OSError, ValueError):
+        return "", ""
+    return " ".join(str(meta.get("title") or "").split())[:300], " ".join(str(meta.get("channel") or "").split())[:200]
 
 
 class JobStore:
@@ -49,6 +59,8 @@ class JobStore:
                 else:
                     job.status, job.error = JobStatus.failed, "Interrupted by server restart"
                 self._write(job)
+            if not job.title:  # jobs from before titles: take it from the download's meta.json (saved on next change)
+                job.title, job.channel = video_title(f.parent)
             self._jobs[job.id] = job
 
     def waiting(self) -> list[Job]:
@@ -84,11 +96,11 @@ class JobStore:
         (d / "job.json").write_text(job.model_dump_json(indent=2))
 
     def create(self, source: str, num_clips: int, mode: JobMode = JobMode.review, topic: str = "",
-               hinglish: bool = False) -> Job:
+               hinglish: bool = False, title: str = "", channel: str = "") -> Job:
         from .pipeline.highlights import clean_topic
 
         job = Job(id=uuid.uuid4().hex[:10], source=source, num_clips=num_clips, mode=mode, topic=clean_topic(topic),
-                  hinglish=hinglish)
+                  hinglish=hinglish, title=" ".join(title.split())[:300], channel=" ".join(channel.split())[:200])
         with self._lock:
             self._jobs[job.id] = job
             self._write(job)
@@ -188,7 +200,13 @@ class Worker:
         d = self.store.dir(job_id)
 
         def report(stage: Stage, progress: float, message: str) -> None:
-            self.store.update(job_id, stage=stage, progress=round(progress, 3), message=message)
+            named = {}
+            cur = self.store.get(job_id)
+            if cur is not None and not cur.title:  # download just wrote meta.json → the Jobs list shows the title
+                title, channel = video_title(d)
+                if title:
+                    named = {"title": title, "channel": channel}
+            self.store.update(job_id, stage=stage, progress=round(progress, 3), message=message, **named)
 
         try:
             with GPU_LOCK:

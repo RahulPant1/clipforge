@@ -18,14 +18,24 @@ export const api = {
   health: () => req('/health'),
   captionPresets: () => req('/caption-presets'),
   brandVoice: () => req('/brand-voice'),
+  brandKit: () => req('/brand-kit'),
+  saveBrandKit: (kit) => req('/brand-kit', json('PUT', kit)),
+  uploadLogo: (file) => {
+    const fd = new FormData()
+    fd.append('file', file)
+    return req('/brand-kit/logo', { method: 'POST', body: fd })
+  },
+  removeLogo: () => req('/brand-kit/logo', { method: 'DELETE' }),
+  logoUrl: (v) => `/api/brand-kit/logo.png?v=${v}`,
+  endCardUrl: (v) => `/api/brand-kit/end-card.png?v=${v}`,
   saveBrandVoice: (voice) => req('/brand-voice', json('PUT', voice)),
   voiceSuggestions: () => req('/brand-voice/suggestions'),
   listJobs: () => req('/jobs'),
   eventsUrl: () => '/api/events',
-  createJob: (url, num_clips, mode, topic = '', hinglish = true) =>
-    req('/jobs', json('POST', { url, num_clips, mode, topic, hinglish })),
-  createBatch: (urls, num_clips, mode, topic = '', hinglish = true) =>
-    req('/jobs/batch', json('POST', { urls, num_clips, mode, topic, hinglish })),
+  createJob: (url, num_clips, mode, topic = '', hinglish = true, known = {}) =>
+    req('/jobs', json('POST', { url, num_clips, mode, topic, hinglish, ...known })),
+  createBatch: (urls, num_clips, mode, topic = '', hinglish = true, info = {}) =>
+    req('/jobs/batch', json('POST', { urls, num_clips, mode, topic, hinglish, info })),
   batchExpand: (text) => req('/batch/expand', json('POST', { text })),
   uploadJob: (file, num_clips, mode, topic = '', hinglish = true) => {
     const fd = new FormData()

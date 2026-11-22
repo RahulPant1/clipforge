@@ -59,6 +59,11 @@ export default function Workspace({ job, onChanged }) {
 
   return (
     <div className="workspace">
+      {job.title && (
+        <div className="ws-title" title={job.source}>
+          <b>{job.title}</b>{job.channel && <span className="muted"> · {job.channel}</span>}
+        </div>
+      )}
       <nav className="stepper">
         {STEPS.map((s, i) => {
           const st = states[s.key]

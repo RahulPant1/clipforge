@@ -48,6 +48,7 @@ export default function NewJob({ onCreated, onOpen }) {
   const [vocab, setVocab] = useState('') // names & terms for Whisper, remembered for all jobs
   const [vocabSaved, setVocabSaved] = useState('')
   const [seen, setSeen] = useState([]) // earlier jobs for the pasted link
+  const [picked, setPicked] = useState(null) // { url, title, channel } chosen in Find videos
   const [items, setItems] = useState([]) // batch: videos to queue, each { url, title, …, on }
 
   useEffect(() => {
@@ -76,14 +77,17 @@ export default function NewJob({ onCreated, onOpen }) {
       if (vocab !== vocabSaved) await api.saveVocabulary(vocab.split(',').map((t) => t.trim()).filter(Boolean))
       const t = topic.trim()
       if (kind === 'batch') { // one job per video, run one after another by the worker
-        const { jobs } = await api.createBatch(queue.map((v) => v.url), numClips, mode, t, hinglish)
+        const info = Object.fromEntries(queue.filter((v) => v.title)
+          .map((v) => [v.url, { title: v.title.slice(0, 300), channel: (v.channel || '').slice(0, 200) }]))
+        const { jobs } = await api.createBatch(queue.map((v) => v.url), numClips, mode, t, hinglish, info)
         setItems([])
         onCreated(jobs[0])
         return
       }
       const job =
         kind === 'url'
-          ? await api.createJob(url.trim(), numClips, mode, t, hinglish)
+          ? await api.createJob(url.trim(), numClips, mode, t, hinglish,
+            picked?.url === url.trim() ? { title: picked.title.slice(0, 300), channel: picked.channel.slice(0, 200) } : {})
           : await api.uploadJob(file, numClips, mode, t, hinglish)
       onCreated(job)
     } catch (e) {
@@ -123,7 +127,10 @@ export default function NewJob({ onCreated, onOpen }) {
 
         {kind === 'find' ? (
           <FindVideos initialTopic={topic}
-                      onUse={(u, t) => { setUrl(u); setTopic(t); setKind('url') }}
+                      onUse={(r, t) => {
+                        setUrl(r.url); setTopic(t); setKind('url')
+                        setPicked({ url: r.url, title: r.title || '', channel: r.channel || '' })
+                      }}
                       onQueue={(picks, t) => {
                         const have = new Set(items.map((v) => v.url))
                         setItems([...items, ...picks.filter((v) => !have.has(v.url)).map((v) => ({ ...v, on: true }))])

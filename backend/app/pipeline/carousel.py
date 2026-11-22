@@ -3,6 +3,7 @@ import re
 from pathlib import Path
 
 from ..config import settings
+from . import brand
 from .fonts import font_for, pil_font, strip_emoji
 
 W, H = 1080, 1350
@@ -69,8 +70,8 @@ def _block(d, lines: list[str], font, y: int, fill, gap: int) -> int:
 
 
 def render_carousel(slides: list[dict], out_dir: Path, prefix: str, handle: str | None = None) -> list[str]:
-    handle = settings.brand_handle if handle is None else handle
-    accent = _hex(settings.carousel_accent)
+    handle = brand.handle() if handle is None else handle
+    accent = _hex(brand.accent())
     white, muted = (240, 241, 245), (160, 164, 178)
     files = []
     n = len(slides)

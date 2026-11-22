@@ -9,8 +9,8 @@ import logging
 import re
 from pathlib import Path
 
-from ..config import settings
 from ..models import Clip, Segment
+from . import brand
 from .fonts import font_for, pil_font, strip_emoji
 from .highlights import _ends_sentence
 from .jumpcut import clean_removed, clip_words, is_struck, norm
@@ -90,7 +90,7 @@ def draw_card(text: str, size: tuple[int, int], out: Path, person=None, source: 
     from .cutout import outlined
 
     w, h = size
-    accent = _hex(settings.carousel_accent)
+    accent = _hex(brand.accent())
     img = Image.new("RGB", size)
     d = ImageDraw.Draw(img)
     top, bottom = (14, 15, 19), tuple(int(14 + (a - 14) * 0.35) for a in accent)
@@ -126,8 +126,8 @@ def draw_card(text: str, size: tuple[int, int], out: Path, person=None, source: 
                 src = src[:-1]
             src = src.rstrip() + "…"
         d.text((PAD, h - PAD), src, font=foot, fill=(170, 174, 188, 255), anchor="ls")
-    if settings.brand_handle and person is None:
-        d.text((w - PAD, h - PAD), settings.brand_handle, font=_font(30), fill=(*accent, 255), anchor="rs")
+    if brand.handle() and person is None:
+        d.text((w - PAD, h - PAD), brand.handle(), font=_font(30), fill=(*accent, 255), anchor="rs")
     img.convert("RGB").save(out, "PNG", optimize=True)
 
 

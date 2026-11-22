@@ -1,9 +1,11 @@
 """Step 4 — jump cuts + face-tracking crop + captions + FFmpeg 9:16 render."""
 import subprocess
+from dataclasses import replace
 from pathlib import Path
 
 from ..config import settings
 from ..models import Clip, Segment
+from . import brand
 from .captions import build_ass, build_hook_ass, build_srt
 from .fonts import font_for, fontsdir_option
 from .jumpcut import audio_cut_graph, audio_silences, plan_cuts, video_select_expr, zoom_graph
@@ -47,7 +49,10 @@ def render_clip(video: Path, clip: Clip, segs: list[Segment], job_dir: Path) -> 
         (job_dir / cmd_file).write_text(rf.sendcmd(), encoding="utf-8")
 
     middle = rf.mode == "split"  # stacked speakers: captions on the seam, not over the bottom face
+    kit = brand.load()
     preset = get_preset(o.caption_preset)
+    if kit.enabled and kit.accent and kit.accent_captions:  # karaoke active word in the brand colour
+        preset = replace(preset, active=brand.ass_colour(kit.accent))
     font = preset.font
     if caption_style == "none":  # no-speech clips: nothing to caption (and Whisper invents words on music)
         subs = ""
@@ -69,6 +74,12 @@ def render_clip(video: Path, clip: Clip, segs: list[Segment], job_dir: Path) -> 
            "pad=1080:1920:(ow-iw)/2:(oh-ih)/2", "setsar=1"]
     if zoom and af:  # punch-in on alternate segments; output time, before captions so text never zooms
         vf.append(zoom_graph(plan.keeps, fps, settings.jumpcut_zoom_scale))
+    # Brand kit end card: the last frame held, blurred + darkened, after the last word (before captions, so
+    # no caption freezes on it); the card itself is overlaid below. Never past max_clip_seconds.
+    card = brand.end_card_seconds(kit, o, plan.duration)
+    if card:
+        vf += brand.freeze_tail(plan.duration, card)
+        af = [*af, f"apad=pad_dur={card:.3f}"]
     if subs:
         vf.append(subs)
     hook_font = font_for(clip.hook, font)
@@ -78,8 +89,20 @@ def render_clip(video: Path, clip: Clip, segs: list[Segment], job_dir: Path) -> 
         vf.append(f"ass={name}.hook.ass{fontsdir_option(hook_font)}")
 
     cmd = ["ffmpeg", "-y", "-loglevel", "error",
-           "-ss", f"{clip.start:.3f}", "-t", f"{clip.duration:.3f}", "-i", str(video.resolve()),
-           "-vf", ",".join(vf)]
+           "-ss", f"{clip.start:.3f}", "-t", f"{clip.duration:.3f}", "-i", str(video.resolve())]
+    logo = brand.watermark(kit, o)
+    card_png = brand.end_card_png(kit, job_dir / f"{name}.end.png") if card else None
+    if logo or card_png:  # images need their own inputs → filter_complex instead of -vf
+        inputs = [p for p in (logo, card_png) if p]
+        for p in inputs:
+            cmd += ["-i", str(p.resolve())]
+        logo_from = min(settings.hook_seconds, plan.duration) if hook_ass else 0.0  # the hook card owns the top
+        graph = brand.overlay_graph("b", logo_input=1 if logo else None, kit=kit,
+                                    card_input=inputs.index(card_png) + 1 if card_png else None,
+                                    start=logo_from, end=plan.duration, card_from=plan.duration)
+        cmd += ["-filter_complex", f"[0:v]{','.join(vf)}[b];{graph}", "-map", "[v]", "-map", "0:a?"]
+    else:
+        cmd += ["-vf", ",".join(vf)]
     if af:
         cmd += ["-af", ",".join(af)]
     cmd += [*_encoder_args(), "-c:a", "aac", "-b:a", "160k", "-movflags", "+faststart", f"{name}.mp4"]
@@ -91,6 +114,8 @@ def render_clip(video: Path, clip: Clip, segs: list[Segment], job_dir: Path) -> 
     subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-ss", "1", "-i", f"{name}.mp4",
                     "-frames:v", "1", "-vf", "scale=360:-1", f"{name}.jpg"],
                    cwd=job_dir, capture_output=True)
+    clip.out_duration = round(plan.duration + card, 2)
+    clip.brand_rev = kit.rev if brand.in_use(kit) else -1
     clip.version += 1
     clip.stale = False
     clip.render_error = None

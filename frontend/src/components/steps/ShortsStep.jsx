@@ -180,12 +180,15 @@ function QuotePanel({ job, clip, busy, act }) {
   )
 }
 
-function ShortCard({ job, clip, busy, act, presets }) {
+function ShortCard({ job, clip, busy, act, presets, kit }) {
   const o = clip.options || {}
   const setOpt = (k, v) => act(() => api.editClip(job.id, clip.index, { options: { ...o, [k]: v } })).catch(() => {})
   const src = clip.file && api.fileUrl(job.id, clip.file, clip.version)
   const poster = clip.file && api.fileUrl(job.id, clip.file.replace('.mp4', '.jpg'), clip.version)
   const noCaptions = (o.caption_style ?? presets?.style) === 'none'
+  const kitOn = kit?.enabled && (kit.logo || kit.end_card)
+  // rendered with another version of the brand kit (or before it existed) → offer a re-render
+  const oldKit = !!clip.file && !!kit && (kit.enabled ? clip.brand_rev !== kit.rev : clip.brand_rev >= 0)
 
   return (
     <div className={`short ${clip.stale ? 'is-stale' : ''}`}>
@@ -249,13 +252,22 @@ function ShortCard({ job, clip, busy, act, presets }) {
           </>
         )}
 
+        {kitOn && (
+          <>
+            <Seg label="Logo" value={o.watermark ?? true} disabled={busy || !kit.logo}
+                 options={[[true, 'On'], [false, 'Off']]} onChange={(v) => setOpt('watermark', v)} />
+            <Seg label="End card" value={o.end_card ?? kit.end_card} disabled={busy}
+                 options={[[true, 'On'], [false, 'Off']]} onChange={(v) => setOpt('end_card', v)} />
+          </>
+        )}
+
         <CoverPanel job={job} clip={clip} busy={busy} act={act}
                     defaultText={clip.content?.instagram?.extra?.cover_text || clip.hook} />
         <QuotePanel job={job} clip={clip} busy={busy} act={act} />
 
         {clip.render_error && <p className="err">Render failed: {clip.render_error}</p>}
         <div className="actions">
-          {(clip.stale || !clip.file || clip.render_error) && (
+          {(clip.stale || !clip.file || clip.render_error || oldKit) && (
             <button className="btn primary-link" disabled={busy}
                     onClick={() => act(() => api.rerender(job.id, clip.index)).catch(() => {})}>
               ↻ {clip.file ? 'Re-render' : 'Render'}
@@ -269,6 +281,10 @@ function ShortCard({ job, clip, busy, act, presets }) {
           )}
         </div>
         {clip.stale && <p className="hint warn">Changed since last render, so re-render to see it.</p>}
+        {!clip.stale && oldKit && (
+          <p className="hint">Made with {kit.enabled ? 'an older' : 'a switched-off'} brand kit — re-render for the
+            current look.</p>
+        )}
       </div>
     </div>
   )
@@ -278,8 +294,10 @@ export default function ShortsStep({ job, busy, act, go }) {
   const clips = job.clips.filter((c) => c.approved)
   const stale = clips.filter((c) => c.stale).length
   const [presets, setPresets] = useState(null)
+  const [kit, setKit] = useState(null)
   useEffect(() => {
     api.captionPresets().then(setPresets).catch(() => setPresets(null))
+    api.brandKit().then(setKit).catch(() => setKit(null))
   }, [])
   return (
     <div>
@@ -294,7 +312,7 @@ export default function ShortsStep({ job, busy, act, go }) {
       </div>
       <div className="shorts-grid">
         {clips.map((c) => (
-          <ShortCard key={c.index} job={job} clip={c} busy={busy} act={act} presets={presets} />
+          <ShortCard key={c.index} job={job} clip={c} busy={busy} act={act} presets={presets} kit={kit} />
         ))}
       </div>
       <div className="footer-bar">

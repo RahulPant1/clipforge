@@ -13,6 +13,7 @@ from pathlib import Path
 
 from ..config import settings
 from ..models import BrandVoice, Clip, Post, Segment
+from .brand import handle as kit_handle
 from .history import ContentHistory
 from .jumpcut import clean_removed, clip_words, is_struck
 from .llm import LLM
@@ -161,7 +162,8 @@ def build_prompt(platform: str, angle: str, ctx: ContentContext, avoid: list[str
     fmt = "thread" if angle == "thread" else "single"
     avoid_block = ("Do NOT start the post like any of these recent posts (be fresh):\n"
                    + "\n".join(f"- {a}" for a in avoid) + "\n") if avoid else ""
-    cta = f"If there is a call to action, you may mention {settings.brand_handle}." if settings.brand_handle else ""
+    h = kit_handle()
+    cta = f"If there is a call to action, you may mention {h}." if h else ""
     c = ctx.clip
     return PROMPT.format(
         platform_name=NAMES[platform], language=settings.content_language,

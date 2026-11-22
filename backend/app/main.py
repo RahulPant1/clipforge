@@ -38,7 +38,7 @@ from .models import (
     Vocabulary,
     WordEdit,
 )
-from .pipeline import cover, hinglish, quote, transcript_edit, vocabulary, voice, waveform
+from .pipeline import cover, discover, hinglish, quote, transcript_edit, vocabulary, voice, waveform
 from .pipeline.content import ANGLES, NAMES, ContentContext, clip_text, generate_post, load_meta, write_posts_md
 from .pipeline.export import build_pack
 from .pipeline.history import get_history
@@ -567,6 +567,34 @@ def create_app(pipeline=None, start_worker: bool = True, llm_factory=OllamaClien
     def library_lookup(url: str) -> dict:
         """Has this video been done before? Earlier jobs for the same video (any link form), newest first."""
         return {"matches": library.lookup(url)}
+
+    # ---------------------------------------------------------------- find videos for a topic
+
+    @app.get("/api/discover")
+    def discover_search(topic: str, cc: bool = True, min_minutes: float = 8, max_minutes: float = 90,
+                        n: int = 15) -> dict:
+        """YouTube search (yt-dlp, no API key) → long-form results; cc=True: Creative Commons only. Each result
+        says how many times you've already done that video. Score them with /api/discover/score."""
+        if not topic.strip():
+            raise HTTPException(400, "type a topic")
+        try:
+            found = discover.search(topic, n=max(1, min(n, 30)), cc=cc, min_minutes=min_minutes,
+                                    max_minutes=max_minutes)
+        except Exception as e:
+            raise HTTPException(502, f"YouTube search failed: {str(e)[:200]}") from e
+        for r in found:
+            r["done"] = len(library.lookup(r["url"]))
+        return {"results": found}
+
+    @app.get("/api/discover/score")
+    def discover_score(id: str, topic: str) -> dict:  # noqa: A002 - the video id, as in YouTube's URLs
+        """How much of one video is about `topic`, from its captions (no download): score, moments, licence."""
+        try:
+            return discover.score(id, topic)
+        except ValueError as e:
+            raise HTTPException(400, str(e)) from None
+        except Exception as e:
+            raise HTTPException(502, f"couldn't read that video: {str(e)[:200]}") from e
 
     @app.get("/api/library/history.xlsx")
     def library_xlsx() -> FileResponse:

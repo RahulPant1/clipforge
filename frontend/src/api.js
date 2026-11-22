@@ -63,5 +63,8 @@ export const api = {
   exportUrl: (id) => `/api/jobs/${id}/export.zip`,
   library: () => req('/library'),
   lookup: (url) => req(`/library/lookup?url=${encodeURIComponent(url)}`),
+  discover: (topic, cc, min, max) =>
+    req(`/discover?${new URLSearchParams({ topic, cc, min_minutes: min, max_minutes: max })}`),
+  discoverScore: (id, topic) => req(`/discover/score?${new URLSearchParams({ id, topic })}`),
   historyUrl: () => '/api/library/history.xlsx',
 }

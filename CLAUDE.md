@@ -33,6 +33,12 @@ backend/                FastAPI + pipeline (Python 3.11, conda env "clipforge")
   app/eval.py           `python -m app.eval <job> --model A --model B --prompt f.txt --think on/off` → data/evals/
                         (compares selection variants on one transcript; summarize() is pure + tested)
   app/pipeline/
+    discover.py         New job → Find videos: search() = yt-dlp search (no API key, ~2 s), long-form only
+                        (min/max minutes, no live), cc=True → YouTube's Creative Commons filter (sp=EgIwAQ==).
+                        score(id, topic) = video details + own-language captions as json3 (no download, ~3 s; UI runs 4
+                        at once): topic hits (word stems; Hindi captions via to_latin + consonant skeleton()) → 0-100
+                        (density/peak minute/coverage), top moments with timestamps, licence, language. Results flag
+                        videos already done (library.lookup). Tests fake `_extract`/`_fetch`: never hit YouTube
     download.py         yt-dlp, cookies support, progress hook; meta.json = video_meta() (channel, upload date,
                         views, tags, …; meta_version 2); transcribe writes transcript_info.json (spoken language)
     transcribe.py       faster-whisper, caches transcript.json, frees VRAM after; preloads cuBLAS from the pip wheel

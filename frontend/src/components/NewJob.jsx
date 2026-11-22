@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { api } from '../api.js'
+import FindVideos from './FindVideos.jsx'
 
 const FLOW = ['Source', 'Transcript', 'Pick clips', 'Shorts', 'Posts', 'Publish']
 
@@ -102,7 +103,15 @@ export default function NewJob({ onCreated, onOpen }) {
           <button type="button" className={kind === 'file' ? 'on' : ''} onClick={() => setKind('file')}>
             Upload file
           </button>
+          <button type="button" className={kind === 'find' ? 'on' : ''} onClick={() => setKind('find')}>
+            🔎 Find videos
+          </button>
         </div>
+
+        {kind === 'find' ? (
+          <FindVideos initialTopic={topic}
+                      onUse={(u, t) => { setUrl(u); setTopic(t); setKind('url') }} />
+        ) : (<>
 
         {kind === 'url' ? (
           <input
@@ -169,6 +178,7 @@ export default function NewJob({ onCreated, onOpen }) {
         </button>
         {err && <p className="err">{err}</p>}
         <p className="hint">Use your own or Creative Commons videos.</p>
+        </>)}
       </form>
     </div>
   )

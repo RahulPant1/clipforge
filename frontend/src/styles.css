@@ -65,6 +65,7 @@ input:focus, textarea:focus { outline: none; border-color: #4a5164; }
 .seg button { background: none; border: 0; color: var(--muted); padding: 6px 11px; border-radius: 7px; cursor: pointer; font-size: 13px; }
 .seg button.on { background: var(--line); color: var(--text); }
 .seg.sm button { padding: 4px 9px; font-size: 12px; }
+.opt .seg { flex-wrap: wrap; max-width: 100%; }  /* Framing has 6 options: wrap inside narrow short cards */
 .chip { font-size: 11px; padding: 2px 8px; border-radius: 999px; background: #1f2b3a; color: var(--info); }
 .warnchip { background: #3a2e13; color: var(--warn); }
 .score { background: var(--accent); color: white; font-size: 12px; font-weight: 700; padding: 2px 8px; border-radius: 8px; white-space: nowrap; }
@@ -391,3 +392,8 @@ aside { min-width: 0; }  /* a long History path must shrink (ellipsis), not wide
 .seen ul { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 6px; }
 .seen li { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 .seen li > span { min-width: 0; overflow-wrap: anywhere; }
+
+/* Quote cards (Shorts step) */
+.quote-thumbs { display: flex; gap: 6px; align-items: flex-end; }
+.quote-thumbs img { height: 110px; border-radius: 6px; border: 1px solid var(--line); display: block; }
+.cover-ctl textarea { width: 100%; font-size: 13px; resize: vertical; }

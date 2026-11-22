@@ -25,6 +25,7 @@ from .history import get_history
 from .llm import LLM, OllamaClient
 from .nospeech import probe_duration, select_no_speech
 from .presets import get_preset
+from .quote import make_cards
 from .render import render_clip
 from .transcribe import transcribe, words_per_minute
 
@@ -144,19 +145,25 @@ def produce(job_dir: Path, clips: list[Clip], report: Reporter, llm: LLM | None 
             clip.render_error = str(e)[:300]
             continue
         cover_for(video, clip, job_dir)
-    for clip in todo:  # rendered before covers existed
-        if clip.file and not clip.cover:
+    for clip in todo:  # rendered before covers / quote cards existed
+        if clip.file and (not clip.cover or (settings.quote_cards and not clip.quote_cards)):
             cover_for(video, clip, job_dir)
     report(Stage.done, 1.0, f"{sum(1 for c in todo if c.file)} shorts ready")
     return clips
 
 
 def cover_for(video: Path, clip: Clip, job_dir: Path) -> None:
-    """Reel cover next to the short; a failure is logged, never fails the render."""
+    """Reel cover + quote cards next to the short; a failure is logged, never fails the render."""
+    font = get_preset(clip.options.caption_preset).font
     try:
-        make_cover(video, clip, job_dir, get_preset(clip.options.caption_preset).font)
+        make_cover(video, clip, job_dir, font)
     except Exception:
         log.exception("cover failed for clip %s", clip.index)
+    if settings.quote_cards:
+        try:  # after the cover: same frame, so the speaker cutout is reused
+            make_cards(video, clip, job_dir, load_segments(job_dir), load_meta(job_dir), font)
+        except Exception:
+            log.exception("quote cards failed for clip %s", clip.index)
 
 
 def render_one(job_dir: Path, clip: Clip) -> Clip:

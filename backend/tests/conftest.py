@@ -31,6 +31,13 @@ def _offline_defaults(monkeypatch, tmp_path):
     # covers / face pickers call the detector directly: never download YuNet in tests (Haar is built in)
     monkeypatch.setattr(reframe.FaceDetector, "_ensure_model", staticmethod(lambda model_dir: None))
     monkeypatch.setattr(reframe, "_detector", None)
+    from app.pipeline import cutout
+
+    def _no_cutout(rgb):  # never download/run rembg in tests: covers fall back to the frame style
+        raise RuntimeError("no cutout model in tests")
+
+    monkeypatch.setattr(cutout, "_mask", _no_cutout)
+    cutout._cache.clear()
 
 
 @pytest.fixture

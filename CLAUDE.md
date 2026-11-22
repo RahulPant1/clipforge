@@ -82,7 +82,16 @@ backend/                FastAPI + pipeline (Python 3.11, conda env "clipforge")
     carousel.py         Instagram carousel PNGs (1080x1350, Pillow)
     hooks.py            title/hook variants on demand (STYLES: question, bold_claim, number, …) → clip.variants
     cover.py            reel cover short_N.cover.jpg: candidates() scores sampled frames (sharpness × face size ×
-                        frontal, never in struck words) → crop 9:16 on the face → text in the IG grid band (240-1680)
+                        frontal, never in struck words) → crop 9:16 on the face → text in the IG grid band (240-1680).
+                        COVER_STYLE / clip.cover_style "cutout" (default): best frame WITH a face → speaker cut out
+                        (white stroke + accent glow) on a blurred brand-tinted frame, text above; no person → frame style
+    cutout.py           rembg u2net_human_seg on CPU (~0.6 s, 168 MB in ~/.rembg once; birefnet was killed for memory,
+                        isnet kept mic stands/text). Needs a face (face-less frames cut out text cards), keeps ±0.45
+                        frame heights around it (touching podcast panels), rejects boxy masks (MAX_FILL). Cached per
+                        frame so cover + quote cards cut once. Tests stub `_mask` (conftest): never run rembg in tests
+    quote.py            quote cards short_N.quote.png (1:1, X) + .quote45.png (4:5, LinkedIn/IG): pick_quote() = a
+                        sentence said in the clip (keywords/hook/number, 6-24 words, struck words excluded — never model
+                        text); quote_custom keeps your own line. Credits the source video, not a person
     waveform.py         Pick timeline: loudness 0-100 at 20/s from one chunked ffmpeg PCM pass → waveform.json
     export.py           export pack zip (shorts, srt, posts, carousels, titles.csv)
     render.py           plan_cuts + plan_reframe → captions → ffmpeg

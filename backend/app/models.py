@@ -99,6 +99,12 @@ class Clip(BaseModel):
     cover_text: str = ""  # text printed on the cover ("" = Instagram cover_text, else the hook)
     cover_t: float | None = None  # SOURCE second of the cover frame (None = best frame, picked automatically)
     cover_version: int = 0  # bumps on every cover render (cache-busting)
+    cover_style: str | None = None  # cutout | frame; None = settings.cover_style
+    cover_cutout: bool = False  # the cover really is a cutout (a "cutout" cover with no person falls back to frame)
+    quote: str = ""  # quote card text: a line said in the clip ("" = picked automatically)
+    quote_custom: bool = False  # you wrote the quote: kept as is (a picked one is re-picked if a trim drops it)
+    quote_cards: list[str] = []  # short_N.quote.png (1:1), short_N.quote45.png (4:5) once made
+    quote_version: int = 0  # bumps on every quote card render (cache-busting)
     visual: str = ""  # no-speech clips: what the vision model saw on screen (feeds the posts instead of speech)
     options: RenderOptions = RenderOptions()
     stale: bool = False  # edited after rendering -> needs re-render
@@ -139,8 +145,13 @@ class ClipEdit(BaseModel):
 
 class CoverEdit(BaseModel):
     text: str | None = Field(default=None, max_length=80)  # None = keep
+    style: str | None = None  # cutout | frame; None = keep
     t: float | None = None  # source second of the frame; None = keep
     auto: bool = False  # forget the chosen frame and pick the best one again
+
+
+class QuoteEdit(BaseModel):
+    text: str | None = Field(default=None, max_length=300)  # None = keep, "" = pick a line automatically again
 
 
 class ClipAdd(BaseModel):

@@ -41,6 +41,8 @@ function Files({ job, c }) {
       {' · '}{dl(`short_${c.index}.srt`, 'captions')}
       {ig?.carousel?.length > 0 && <> · carousel {ig.carousel.map((f, i) => <span key={f}>{dl(f, i + 1)} </span>)}</>}
       {' · '}{dl(`short_${c.index}.posts.md`, 'posts')}
+      {c.quote_cards?.length > 0 && <> · quote {c.quote_cards.map((f) => (
+        <span key={f}>{dl(f, f.includes('quote45') ? '4:5' : '1:1')} </span>))}</>}
     </span>
   )
 }

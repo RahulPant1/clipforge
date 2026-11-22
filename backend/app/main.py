@@ -28,6 +28,7 @@ from .models import (
     JobStatus,
     Post,
     PostEdit,
+    QuoteEdit,
     RenderOptions,
     ReplaceWords,
     Retry,
@@ -37,7 +38,7 @@ from .models import (
     Vocabulary,
     WordEdit,
 )
-from .pipeline import cover, hinglish, transcript_edit, vocabulary, voice, waveform
+from .pipeline import cover, hinglish, quote, transcript_edit, vocabulary, voice, waveform
 from .pipeline.content import ANGLES, NAMES, ContentContext, clip_text, generate_post, load_meta, write_posts_md
 from .pipeline.export import build_pack
 from .pipeline.history import get_history
@@ -505,6 +506,10 @@ def create_app(pipeline=None, start_worker: bool = True, llm_factory=OllamaClien
         work = clip.model_copy(deep=True)
         if body.text is not None:
             work.cover_text = " ".join(body.text.split())
+        if body.style is not None:
+            if body.style not in ("cutout", "frame"):
+                raise HTTPException(400, "style must be cutout or frame")
+            work.cover_style = body.style
         if body.auto:
             work.cover_t = None
         elif body.t is not None:
@@ -518,7 +523,34 @@ def create_app(pipeline=None, start_worker: bool = True, llm_factory=OllamaClien
 
         def apply(c: Clip) -> None:
             c.cover, c.cover_text, c.cover_t = work.cover, work.cover_text, work.cover_t
+            c.cover_style, c.cover_cutout = work.cover_style, work.cover_cutout
             c.cover_version = max(c.cover_version, work.cover_version)
+
+        try:
+            return store.update_clip(job_id, index, apply)
+        except KeyError:
+            raise HTTPException(404, "clip not found") from None
+
+    @app.post("/api/jobs/{job_id}/clips/{index}/quote", response_model=Job)
+    def edit_quote(job_id: str, index: int, body: QuoteEdit) -> Job:
+        """(Re)make the quote cards: your own line (`text`, kept as you wrote it), or "" to pick a line from the
+        clip again."""
+        editable(job_id)
+        _, clip = clip_of(job_id, index)
+        d = store.dir(job_id)
+        work = clip.model_copy(deep=True)
+        if body.text is not None:
+            work.quote = quote.tidy(body.text)
+            work.quote_custom = bool(work.quote)
+        try:
+            quote.make_cards(source_of(job_id), work, d, transcript_edit.load(d), load_meta(d),
+                             get_preset(work.options.caption_preset).font)
+        except Exception as e:
+            raise HTTPException(500, f"quote cards failed: {e}") from e
+
+        def apply(c: Clip) -> None:
+            c.quote, c.quote_custom, c.quote_cards = work.quote, work.quote_custom, work.quote_cards
+            c.quote_version = max(c.quote_version, work.quote_version)
 
         try:
             return store.update_clip(job_id, index, apply)

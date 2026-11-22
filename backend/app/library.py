@@ -253,7 +253,9 @@ class Library:
             video = f"{base} - {safe_name(c.title, 60)}.mp4"
             files[video] = job_dir / c.file
             for src, dst in [(c.cover, f"{base} - cover.jpg"), (f"short_{c.index}.srt", f"{base} - captions.srt"),
-                             (f"short_{c.index}.posts.md", f"{base} - posts.md")]:
+                             (f"short_{c.index}.posts.md", f"{base} - posts.md"),
+                             (f"short_{c.index}.quote.png", f"{base} - quote card 1x1.png"),
+                             (f"short_{c.index}.quote45.png", f"{base} - quote card 4x5.png")]:
                 if src and (job_dir / src).exists():
                     files[dst] = job_dir / src
             ig = c.content.get("instagram")

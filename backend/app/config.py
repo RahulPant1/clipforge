@@ -60,6 +60,8 @@ class Settings(BaseSettings):
     carousel_enabled: bool = True
     carousel_font: str = ""  # path to a .ttf; auto-detects DejaVu/Liberation/Windows Arial if empty
     carousel_accent: str = "#ff4d6d"
+    cover_style: str = "cutout"  # reel cover: cutout (speaker cut out on a brand-tinted blur) | frame (frame + text)
+    quote_cards: bool = True  # quote card images (1:1 for X, 4:5 for LinkedIn/IG) next to each short
 
     # Download
     ytdlp_cookies: Path | None = None  # path to cookies.txt if YouTube asks "confirm you're not a bot"

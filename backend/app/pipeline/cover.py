@@ -155,18 +155,77 @@ def draw_cover(frame, x: float | None, text: str, out: Path, font_family: str | 
     img.save(out, "JPEG", quality=90)
 
 
-def make_cover(video: Path, clip: Clip, job_dir: Path, font_family: str | None = None, detector=None) -> str:
-    """Writes short_<n>.cover.jpg and fills clip.cover / cover_version. Returns the filename."""
+def _hex(c: str) -> tuple[int, int, int]:
+    c = c.lstrip("#")
+    try:
+        return tuple(int(c[i:i + 2], 16) for i in (0, 2, 4))
+    except ValueError:
+        return (255, 77, 109)
+
+
+def draw_cutout_cover(frame, x: float | None, text: str, out: Path, font_family: str | None = None,
+                      key=None) -> bool:
+    """The speaker cut out (white stroke + accent glow) on a blurred, darkened, brand-tinted copy of the frame,
+    big text above them. False (nothing written) when there's no usable person — draw_cover then."""
+    import cv2
+    from PIL import Image, ImageDraw, ImageEnhance
+
+    from .cutout import cutout, outlined
+
+    person = cutout(frame, x, key=key)
+    if person is None:
+        return False
+    accent = _hex(settings.carousel_accent)
+    small = cv2.resize(crop_9x16(frame, x) if x is not None else _center_crop(frame), (270, 480))
+    bg = Image.fromarray(cv2.cvtColor(cv2.GaussianBlur(small, (0, 0), 10), cv2.COLOR_BGR2RGB)).resize((W, H))
+    img = ImageEnhance.Brightness(bg).enhance(0.45).convert("RGBA")
+    tint = Image.new("L", (1, H))  # accent, stronger toward the bottom
+    for y in range(H):
+        tint.putpixel((0, y), int(60 + 110 * y / H))
+    img.paste(Image.new("RGBA", (W, H), (*accent, 255)), (0, 0), tint.resize((W, H)))
+
+    draw = ImageDraw.Draw(img)
+    text = strip_emoji(text).upper()
+    top = GRID_TOP + 40
+    bottom = top
+    if text:
+        font, lines, size = _fit(draw, text, font_for(text, font_family))
+        lh = int(size * 1.08)
+        bottom = top + lh * len(lines)
+    room = H - bottom - 30  # the person fills what's below the text; their face stays inside the IG grid band
+    canvas, pad = outlined(person, min(1450, room), 1000, glow=accent)
+    px = (W - canvas.width) // 2
+    py = H - canvas.height + pad if person.info.get("touches_bottom") else H - canvas.height - 40
+    img.alpha_composite(canvas, (px, max(py, bottom - pad)))
+    if text:
+        draw = ImageDraw.Draw(img)
+        for i, line in enumerate(lines):
+            fill = (255, 214, 10) if i == len(lines) - 1 and len(lines) > 1 else (255, 255, 255)
+            draw.text((W // 2, top + i * lh), line, font=font, fill=fill, anchor="ma",
+                      stroke_width=max(4, size // 14), stroke_fill=(0, 0, 0))
+    img.convert("RGB").save(out, "JPEG", quality=90)
+    return True
+
+
+def _center_crop(frame):
+    h, w = frame.shape[:2]
+    cw = min(w, int(h * 9 / 16))
+    return frame[:, (w - cw) // 2:(w - cw) // 2 + cw]
+
+
+def best_shot(video: Path, clip: Clip, detector=None, need_face: bool = False):
+    """(frame, t, face x) for the clip's cover: the chosen frame (cover_t) or the best-scoring one — with
+    need_face (cutouts), the best one that shows a face, when any does."""
     import cv2
 
     from .reframe import DETECT_WIDTH, get_detector
 
     t = clip.cover_t
     if t is None or not clip.start <= t <= clip.end:  # automatic: the best-scoring frame
-        best = candidates(video, clip, detector, n=1)
+        best = candidates(video, clip, detector, n=8 if need_face else 1)
         if not best:
             raise RuntimeError("couldn't read any frame of the clip")
-        t = best[0]["t"]
+        t = next((c for c in best if c["x"] is not None), best[0])["t"] if need_face else best[0]["t"]
     cap = cv2.VideoCapture(str(video))
     frame = _read(cap, t)
     cap.release()
@@ -175,9 +234,20 @@ def make_cover(video: Path, clip: Clip, job_dir: Path, font_family: str | None =
     h, w = frame.shape[:2]
     faces = (detector or get_detector()).detect(cv2.resize(frame, (DETECT_WIDTH, int(h * DETECT_WIDTH / w))))
     face = _face(faces, clip.options.follow)
-    x = face[0] if face is not None else clip.options.follow
+    return frame, t, (face[0] if face is not None else clip.options.follow)
+
+
+def make_cover(video: Path, clip: Clip, job_dir: Path, font_family: str | None = None, detector=None) -> str:
+    """Writes short_<n>.cover.jpg and fills clip.cover / cover_version / cover_cutout. Returns the filename.
+    Style: clip.cover_style, else COVER_STYLE — "cutout" falls back to "frame" when no person is found."""
+    style = clip.cover_style or settings.cover_style
+    frame, t, x = best_shot(video, clip, detector, need_face=style == "cutout")
     name = f"short_{clip.index}.cover.jpg"
-    draw_cover(frame, x, default_text(clip), job_dir / name, font_family)
+    text = default_text(clip)
+    clip.cover_cutout = style == "cutout" and draw_cutout_cover(frame, x, text, job_dir / name, font_family,
+                                                               key=(str(video), t))
+    if not clip.cover_cutout:
+        draw_cover(frame, x, text, job_dir / name, font_family)
     clip.cover = name
     clip.cover_version += 1
     return name

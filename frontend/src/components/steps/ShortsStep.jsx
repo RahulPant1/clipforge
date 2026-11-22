@@ -97,6 +97,11 @@ function CoverPanel({ job, clip, busy, act, defaultText }) {
   return (
     <div className="opt-col cover">
       <span className="muted">Cover <span className="small">· reel / Shorts thumbnail, text stays inside Instagram's grid crop</span></span>
+      <Seg label="Style" value={clip.cover_style ?? 'cutout'} disabled={busy || !clip.file}
+           options={[['cutout', 'Cutout'], ['frame', 'Frame']]} onChange={(v) => edit({ style: v })} />
+      {clip.cover && (clip.cover_style ?? 'cutout') === 'cutout' && !clip.cover_cutout && (
+        <span className="muted small">No clear person in this frame, so it's a frame cover — try another frame.</span>
+      )}
       <div className="cover-row">
         {url ? <a href={url} target="_blank" rel="noreferrer"><img src={url} alt="cover" /></a>
              : <div className="cover-empty muted small">Made after rendering</div>}
@@ -126,6 +131,51 @@ function CoverPanel({ job, clip, busy, act, defaultText }) {
           ))}
         </div>
       )}
+    </div>
+  )
+}
+
+// Quote cards: a line said in the clip (or your own), 1:1 for X and 4:5 for LinkedIn / Instagram
+function QuotePanel({ job, clip, busy, act }) {
+  const [text, setText] = useState(clip.quote)
+  useEffect(() => setText(clip.quote), [clip.quote])
+  const edit = (t) => act(() => api.editQuote(job.id, clip.index, t)).catch(() => {})
+  const cards = clip.quote_cards || []
+  return (
+    <div className="opt-col cover">
+      <span className="muted">Quote cards <span className="small">· for X (1:1) and LinkedIn / Instagram (4:5) posts</span></span>
+      <div className="cover-row">
+        {cards.length ? (
+          <div className="quote-thumbs">
+            {cards.map((f) => {
+              const url = api.fileUrl(job.id, f, clip.quote_version)
+              return <a key={f} href={url} target="_blank" rel="noreferrer"><img src={url} alt="quote card" /></a>
+            })}
+          </div>
+        ) : (
+          <div className="cover-empty muted small">
+            {!clip.file ? 'Made after rendering'
+              : clip.quote_version > 0 ? 'No line to quote (no speech)'
+              : <button className="btn sm" disabled={busy} onClick={() => edit('')}>Make quote cards</button>}
+          </div>
+        )}
+        <div className="cover-ctl">
+          <textarea rows={3} value={text} maxLength={300} disabled={busy || !clip.file}
+                    placeholder="A line from the clip — picked for you"
+                    onChange={(e) => setText(e.target.value)}
+                    onBlur={() => text.trim() !== (clip.quote || '') && edit(text)} />
+          <div className="row-btns">
+            {clip.quote_custom && (
+              <button className="btn sm ghost" disabled={busy} onClick={() => edit('')}>Pick from the clip</button>
+            )}
+            {cards.map((f) => (
+              <a key={f} className="btn sm ghost" href={api.fileUrl(job.id, f, clip.quote_version)} download={f}>
+                ⬇ {f.includes('quote45') ? '4:5' : '1:1'}
+              </a>
+            ))}
+          </div>
+        </div>
+      </div>
     </div>
   )
 }
@@ -201,6 +251,7 @@ function ShortCard({ job, clip, busy, act, presets }) {
 
         <CoverPanel job={job} clip={clip} busy={busy} act={act}
                     defaultText={clip.content?.instagram?.extra?.cover_text || clip.hook} />
+        <QuotePanel job={job} clip={clip} busy={busy} act={act} />
 
         {clip.render_error && <p className="err">Render failed: {clip.render_error}</p>}
         <div className="actions">

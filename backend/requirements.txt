@@ -10,3 +10,4 @@ opencv-python-headless>=4.8
 numpy>=1.24
 pillow>=10.1
 openpyxl>=3.1  # history spreadsheet (library.py)
+rembg[cpu]>=2.0.60  # speaker cutout for covers + quote cards (cutout.py; u2net_human_seg, CPU, 168 MB once)

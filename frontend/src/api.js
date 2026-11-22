@@ -53,6 +53,7 @@ export const api = {
   people: (id, index) => req(`/jobs/${id}/clips/${index}/people`),
   coverFrames: (id, index) => req(`/jobs/${id}/clips/${index}/cover/frames`),
   editCover: (id, index, body) => req(`/jobs/${id}/clips/${index}/cover`, json('POST', body)),
+  editQuote: (id, index, text) => req(`/jobs/${id}/clips/${index}/quote`, json('POST', { text })),
   rerender: (id, index) => req(`/jobs/${id}/clips/${index}/render`, { method: 'POST' }),
   regenerate: (id, index, platform) => req(`/jobs/${id}/clips/${index}/content/${platform}`, { method: 'POST' }),
   editPost: (id, index, platform, changes) =>

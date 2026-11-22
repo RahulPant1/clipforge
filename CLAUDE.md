@@ -171,6 +171,9 @@ done: PATCH clip options → stale → POST /clips/{i}/render ; PATCH/POST posts
   override carries to later words in the line, so `_colour()` emits `\1a&HAA&\c…&` for EVERY word.
 - Anything burned in (hook card, captions, carousel PNGs) goes through `fonts.strip_emoji()`: libass/Pillow draw
   colour emoji as empty boxes. Titles and post copy keep emoji.
+- Indic scripts (Hindi etc.): caption fonts have no Devanagari → boxes. Every burned-in text picks its font through
+  `fonts.font_for(text, family)` (Nirmala UI from Windows, else Noto Sans <Script>, Mangal…); Pillow loads it with
+  `fonts.pil_font()` (right face inside .ttc). Fixed Latin UI text ("swipe →") keeps the default font.
 - transcript.json is the one source for captions, .srt, posts and the UI: caption fixes edit it (never words copied
   elsewhere). Word edits mark rendered shorts covering the change `stale` (main.mark_stale). Words keep Whisper's
   leading space. Edits need the job editable (409 while busy).

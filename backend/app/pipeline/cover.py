@@ -11,7 +11,7 @@ from pathlib import Path
 
 from ..config import settings
 from ..models import Clip
-from .fonts import font_file, strip_emoji
+from .fonts import font_for, pil_font, strip_emoji
 from .jumpcut import clean_removed
 
 log = logging.getLogger(__name__)
@@ -121,13 +121,11 @@ def crop_9x16(frame, x: float | None):
     return frame[:, x0:x0 + cw]
 
 
-def _fit(draw, text: str, font_path: str | None):
-    from PIL import ImageFont
-
+def _fit(draw, text: str, family: str | None):
     from .carousel import _font, wrap
 
     for size in range(150, 69, -8):
-        font = ImageFont.truetype(font_path, size) if font_path else _font(size)
+        font = (pil_font(family, size) if family else None) or _font(size)
         lines = wrap(draw, text, font, TEXT_W)
         if len(lines) <= 3 and all(draw.textlength(ln, font=font) <= TEXT_W for ln in lines):
             return font, lines, size
@@ -147,7 +145,7 @@ def draw_cover(frame, x: float | None, text: str, out: Path, font_family: str | 
     text = strip_emoji(text).upper()
     if text:
         draw = ImageDraw.Draw(img)
-        font, lines, size = _fit(draw, text, font_file(font_family) if font_family else None)
+        font, lines, size = _fit(draw, text, font_for(text, font_family))  # Hindi etc. → a font that has it
         lh = int(size * 1.08)
         y = TEXT_BOTTOM - lh * len(lines)
         for i, line in enumerate(lines):

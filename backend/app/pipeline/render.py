@@ -5,7 +5,7 @@ from pathlib import Path
 from ..config import settings
 from ..models import Clip, Segment
 from .captions import build_ass, build_hook_ass, build_srt
-from .fonts import fontsdir_option
+from .fonts import font_for, fontsdir_option
 from .jumpcut import audio_cut_graph, audio_silences, plan_cuts, video_select_expr, zoom_graph
 from .presets import get_preset
 from .reframe import plan_reframe
@@ -52,10 +52,11 @@ def render_clip(video: Path, clip: Clip, segs: list[Segment], job_dir: Path) -> 
     if caption_style == "none":  # no-speech clips: nothing to caption (and Whisper invents words on music)
         subs = ""
     else:  # karaoke = word-by-word highlight; simple = whole line in the same look, no animation
+        cap_font = font_for("".join(w.word for w in plan.words), font)  # Hindi → a font with Devanagari
         ass = build_ass(plan.words, clip.keywords, middle=middle, preset=preset,
-                        position=o.caption_position, animate=caption_style != "simple")
+                        position=o.caption_position, animate=caption_style != "simple", font=cap_font)
         (job_dir / f"{name}.ass").write_text(ass, encoding="utf-8")
-        subs = f"ass={name}.ass{fontsdir_option(font)}"
+        subs = f"ass={name}.ass{fontsdir_option(cap_font)}"
 
     fps = settings.output_fps
     vf = [f"fps={fps}", *rf.filters(cmd_file)]
@@ -70,10 +71,11 @@ def render_clip(video: Path, clip: Clip, segs: list[Segment], job_dir: Path) -> 
         vf.append(zoom_graph(plan.keeps, fps, settings.jumpcut_zoom_scale))
     if subs:
         vf.append(subs)
-    hook_ass = build_hook_ass(clip.hook, plan.duration, seam=middle, font=font) if hook else ""
+    hook_font = font_for(clip.hook, font)
+    hook_ass = build_hook_ass(clip.hook, plan.duration, seam=middle, font=hook_font) if hook else ""
     if hook_ass:  # last, so the title card sits above captions (and never zooms)
         (job_dir / f"{name}.hook.ass").write_text(hook_ass, encoding="utf-8")
-        vf.append(f"ass={name}.hook.ass{fontsdir_option(font)}")
+        vf.append(f"ass={name}.hook.ass{fontsdir_option(hook_font)}")
 
     cmd = ["ffmpeg", "-y", "-loglevel", "error",
            "-ss", f"{clip.start:.3f}", "-t", f"{clip.duration:.3f}", "-i", str(video.resolve()),

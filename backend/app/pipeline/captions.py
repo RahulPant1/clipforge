@@ -66,7 +66,8 @@ def keyword_set(keywords: list[str], words: list[Word]) -> set[str]:
     return ks | {norm(w.word) for w in words if re.search(r"\d|%|₹|\$", w.word)}
 
 
-def _ass_header(preset: CaptionPreset, position: str | None = None, middle: bool = False) -> str:
+def _ass_header(preset: CaptionPreset, position: str | None = None, middle: bool = False,
+                font: str | None = None) -> str:
     """Style from the preset; middle=True (two-speaker stack) puts captions on the seam whatever the position."""
     align, margin_v = placement("middle" if middle else position)
     p = preset
@@ -83,7 +84,7 @@ ScaledBorderAndShadow: yes
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, \
 Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, \
 Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Default,{p.font},{p.size},{p.text},{p.text},{p.outline_color},{back},\
+Style: Default,{font or p.font},{p.size},{p.text},{p.text},{p.outline_color},{back},\
 {-1 if p.bold else 0},0,0,0,100,100,0,0,{border},{p.outline:g},{p.shadow:g},{align},60,60,{margin_v},1
 
 [Events]
@@ -118,7 +119,8 @@ def _line(chunk: Chunk, active: int, keywords: set[str], pop: bool, preset: Capt
 
 
 def build_ass(words: list[Word], keywords: list[str], n: int | None = None, middle: bool = False,
-              preset: CaptionPreset | None = None, position: str | None = None, animate: bool = True) -> str:
+              preset: CaptionPreset | None = None, position: str | None = None, animate: bool = True,
+              font: str | None = None) -> str:
     """Karaoke captions (animate=True: one event per word, active word + keywords coloured) or, animate=False,
     one plain line per chunk in the preset's look (the "simple" caption style)."""
     p = preset or get_preset()
@@ -142,7 +144,7 @@ def build_ass(words: list[Word], keywords: list[str], n: int | None = None, midd
         if 0 < nxt[0] - cur[1] < 0.6:
             cur[1] = nxt[0]
     body = "\n".join(f"Dialogue: 0,{ts_ass(s)},{ts_ass(e)},Default,,0,0,0,,{t}" for s, e, t in events)
-    return _ass_header(p, position, middle) + body + "\n"
+    return _ass_header(p, position, middle, font) + body + "\n"
 
 
 # ---------------------------------------------------------------- hook title (first seconds)

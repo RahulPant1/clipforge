@@ -140,3 +140,83 @@ def font_file(family: str) -> str | None:
     if not files:
         return None
     return next((f for f in files if BOLD.search(Path(f).name)), files[0])
+
+
+# ------------------------------------------------------------------ scripts the caption fonts don't cover
+
+# Caption/hook/cover fonts (Arial, Montserrat, Impact …) have no glyphs for Indic scripts: Hindi captions burned in
+# as rows of empty boxes. Text in one of these scripts switches to a font that has them — Nirmala UI ships with
+# Windows 10/11 and covers every Indic script (and Latin); Noto is the Linux package (`apt install fonts-noto-core`).
+INDIC_FONT = "Nirmala UI"
+SCRIPTS = {  # script -> (unicode ranges, fonts after INDIC_FONT, first found wins)
+    "Devanagari": ("\u0900-\u097F\uA8E0-\uA8FF", ["Noto Sans Devanagari", "Mangal", "Lohit Devanagari"]),
+    "Bengali": ("\u0980-\u09FF", ["Noto Sans Bengali", "Vrinda"]),
+    "Gurmukhi": ("\u0A00-\u0A7F", ["Noto Sans Gurmukhi", "Raavi"]),
+    "Gujarati": ("\u0A80-\u0AFF", ["Noto Sans Gujarati", "Shruti"]),
+    "Odia": ("\u0B00-\u0B7F", ["Noto Sans Oriya", "Kalinga"]),
+    "Tamil": ("\u0B80-\u0BFF", ["Noto Sans Tamil", "Latha"]),
+    "Telugu": ("\u0C00-\u0C7F", ["Noto Sans Telugu", "Gautami"]),
+    "Kannada": ("\u0C80-\u0CFF", ["Noto Sans Kannada", "Tunga"]),
+    "Malayalam": ("\u0D00-\u0D7F", ["Noto Sans Malayalam", "Kartika"]),
+}
+_SCRIPT_RE = {name: re.compile(f"[{ranges}]") for name, (ranges, _) in SCRIPTS.items()}
+
+
+def script_of(text: str) -> str | None:
+    """The Indic script used most in `text`, or None (Latin, incl. Hinglish written in Latin letters)."""
+    counts = {name: len(rx.findall(text or "")) for name, rx in _SCRIPT_RE.items()}
+    best = max(counts, key=counts.get)
+    return best if counts[best] else None
+
+
+def font_for(text: str, family: str | None) -> str | None:
+    """`family`, unless `text` is in a script it can't draw — then the first installed font that can."""
+    script = script_of(text)
+    if not script:
+        return family
+    choices = [INDIC_FONT, *SCRIPTS[script][1]]
+    if family in choices:
+        return family
+    found = _script_font(script)
+    return found or family
+
+
+@functools.lru_cache(maxsize=16)
+def _script_font(script: str) -> str | None:
+    for fam in [INDIC_FONT, *SCRIPTS[script][1]]:
+        if font_available(fam):
+            log.info("%s text: using font %r (the caption font has no %s letters)", script, fam, script)
+            return fam
+    log.warning("no %s font found — %s text will show as empty boxes. On WSL Windows' Nirmala UI is used "
+                "automatically; otherwise `sudo apt install fonts-noto-core`.", script, script)
+    return None
+
+
+@functools.lru_cache(maxsize=32)
+def _face_index(file: str, family: str) -> int:
+    """Index of the boldest face of `family` inside a .ttc collection (0 for plain .ttf/.otf)."""
+    if not file.lower().endswith((".ttc", ".otc")):
+        return 0
+    best, best_w = 0, -1
+    for line in _fc("scan", "--format", "%{index}\t%{family}\t%{weight}\n", file).splitlines():
+        idx, fams, weight = (line.split("\t") + ["", "", ""])[:3]
+        try:
+            w = float(weight.split()[0]) if weight else 0
+        except ValueError:
+            w = 0
+        if family.casefold() in (f.strip().casefold() for f in fams.split(",")) and w > best_w:
+            best, best_w = int(idx), w
+    return best
+
+
+def pil_font(family: str, size: int):
+    """Pillow font for `family` (bold face, the right face inside .ttc collections); None if not found."""
+    from PIL import ImageFont
+
+    file = font_file(family)
+    if not file:
+        return None
+    try:
+        return ImageFont.truetype(file, size, index=_face_index(file, family))
+    except OSError:
+        return None

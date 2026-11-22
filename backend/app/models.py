@@ -54,6 +54,8 @@ class Post(BaseModel):
     extra: dict[str, str | list[str]] = {}  # yt tags, pinned comment, ig cover text …
     status: str = "draft"  # draft | approved | posted
     edited: bool = False  # you changed the text by hand
+    posted_at: datetime | None = None  # set when marked posted (cleared if it goes back)
+    url: str = ""  # link to the live post, pasted after posting (History links to it)
 
 
 class RenderOptions(BaseModel):
@@ -153,6 +155,7 @@ class PostEdit(BaseModel):
     title: str | None = None
     parts: list[str] | None = None
     status: str | None = None  # draft | approved | posted
+    url: str | None = Field(default=None, max_length=500)  # link to the live post ("" clears it)
 
 
 class Job(BaseModel):

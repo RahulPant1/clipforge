@@ -40,6 +40,7 @@ header { display: flex; justify-content: space-between; align-items: center; gap
 main { display: grid; grid-template-columns: 280px 1fr; gap: 18px; align-items: start; }
 @media (max-width: 900px) { main { grid-template-columns: 1fr; } }
 aside { display: flex; flex-direction: column; gap: 12px; position: sticky; top: 12px; }
+@media (max-width: 900px) { aside { position: static; } }  /* one column: a pinned sidebar would cover the step */
 .detail { min-width: 0; }
 
 .card { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 16px; }
@@ -266,19 +267,32 @@ input:focus, textarea:focus { outline: none; border-color: #4a5164; }
 .pub-bar > div { position: absolute; left: 0; top: 0; bottom: 0; background: #133a2a; border-radius: 12px; transition: width 0.4s; }
 .pub-bar span { position: relative; font-weight: 700; color: var(--text) !important; font-size: 14px !important; }
 .pub-table { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; overflow: hidden; }
-.pub-row { display: grid; grid-template-columns: 2fr repeat(4, 1fr); gap: 8px; align-items: center; padding: 10px 12px; border-bottom: 1px solid var(--line); }
+.pub-row { display: grid; grid-template-columns: 2fr repeat(4, 1fr); gap: 10px; align-items: start; padding: 10px 12px; border-bottom: 1px solid var(--line); }
 .pub-row:last-child { border-bottom: 0; }
 .pub-row.head { background: var(--panel2); color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; }
 .pub-clip { display: flex; gap: 10px; align-items: center; min-width: 0; }
 .pub-clip img { width: 44px; border-radius: 6px; flex: none; }
 .pub-clip > span { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-.pub-clip b { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pub-clip b { overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
 .pub-clip a { font-size: 12px; }
-.pub-cell { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.pub-cell { display: flex; flex-direction: column; gap: 6px; align-items: flex-start; min-width: 0; }
+.pub-status { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.pub-copies { display: flex; gap: 4px; flex-wrap: wrap; }
+.pub-copies .btn.sm { padding: 2px 8px; font-size: 11px; }
+.pub-files { font-size: 12px; color: var(--muted); line-height: 1.6; }
+.pub-files a { white-space: nowrap; }
+.pub-plabel { display: none; font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
+.pub-live { display: inline-flex; gap: 4px; align-items: center; font-size: 12px; }
+.linkbtn { background: none; border: 0; padding: 0; font-size: 12px; color: var(--muted); cursor: pointer; text-decoration: underline; }
+.linkbtn:disabled { cursor: default; opacity: 0.5; }
+.pub-url { width: 100%; font-size: 12px; padding: 3px 6px; }
 .stbtn { border: 0; border-radius: 999px; padding: 4px 10px; font-size: 12px; cursor: pointer; background: var(--line); color: var(--muted); text-transform: capitalize; }
 .stbtn.approved { background: #133a2a; color: var(--good); }
 .stbtn.posted { background: #1f2b3a; color: var(--info); }
-@media (max-width: 1000px) { .pub-row { grid-template-columns: 1fr 1fr; } .pub-row.head { display: none; } }
+@media (max-width: 1000px) {
+  .pub-row { grid-template-columns: 1fr 1fr; } .pub-row.head { display: none; }
+  .pub-clip { grid-column: 1 / -1; } .pub-plabel { display: block; }
+}
 
 /* Pick step timeline */
 .cand-card:focus-visible, .cand-card:focus-within { outline: 1px solid #3a4152; outline-offset: 2px; }
@@ -309,9 +323,10 @@ input:focus, textarea:focus { outline: none; border-color: #4a5164; }
 /* Brand voice */
 .voicebtn { background: var(--panel); color: var(--text); border: 1px solid var(--line); padding: 9px; border-radius: 12px; cursor: pointer; }
 .voicebtn.on { border-color: var(--accent); }
-.history { display: flex; flex-direction: column; gap: 4px; }
+.history { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+aside { min-width: 0; }  /* a long History path must shrink (ellipsis), not widen the sidebar on phones */
 .history a.voicebtn { display: block; text-align: center; text-decoration: none; }
-.history-dir { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--muted); min-width: 0; }
+.history-dir { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--muted); min-width: 0; max-width: 100%; }
 .history-dir span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .voice-wrap { max-width: 760px; display: flex; flex-direction: column; gap: 14px; }
 .voice-toggle { display: flex; align-items: center; gap: 8px; font-size: 14px; cursor: pointer; }

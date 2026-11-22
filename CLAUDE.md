@@ -112,6 +112,9 @@ queued → running(prepare: download, transcribe, select 2×N candidates) → re
 review: PATCH clips (trim/title/keywords/approve), POST clips (custom from transcript)
 POST /produce → running(writing posts for approved clips w/o posts, rendering missing/stale) → done
 done: PATCH clip options → stale → POST /clips/{i}/render ; PATCH/POST posts ; status draft→approved→posted
+publish: PATCH post {status, url}: posted_at set on → posted (cleared when it goes back); pasting a live url marks it
+         posted. History links each posted status to its url. Publish step: per-short file links, one copy button per
+         upload-form field (YouTube title/description/tags/pinned comment, one per X thread post)
 ```
 - Edits are refused (409) while queued/running — the worker writes clips at the end and would overwrite.
 - Never save a job snapshot taken before slow work (Gemma calls): write through `store.update_clip()` on the

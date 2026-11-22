@@ -266,6 +266,9 @@ class Library:
                 "end": round(c.end, 2), "length": c.out_duration or round(c.end - c.start, 1), "score": c.score,
                 "relevance": c.relevance, "keywords": c.keywords, "reframe": c.reframe,
                 "status": {p: c.content[p].status for p in PLATFORMS if p in c.content},
+                "links": {p: c.content[p].url for p in PLATFORMS if p in c.content and c.content[p].url},
+                "posted_at": {p: c.content[p].posted_at.isoformat() for p in PLATFORMS
+                              if p in c.content and c.content[p].posted_at},
                 "youtube_title": (yt.title or "") if yt else "", "file": video,
             })
         for dst, src in files.items():
@@ -318,8 +321,10 @@ def info_md(rec: dict) -> str:
         for s in rec["shorts"]:
             st = s.get("status", {})
             at = f"[{mmss(s['start'])}–{mmss(s['end'])}]({moment_url(url, s['start'])})"
+            links = s.get("links", {})
+            cells = [f"[{st.get(p)}]({links[p]})" if links.get(p) else st.get(p, "—") for p in PLATFORMS]
             lines.append(f"| {s['index']} | {s['title']} | {at} | {s['length']:.0f}s | {s['score']} | "
-                         + " | ".join(st.get(p, "—") for p in PLATFORMS) + f" | {s['file']} |")
+                         + " | ".join(cells) + f" | {s['file']} |")
     if m.get("description"):
         lines += ["", "## Video description", "", m["description"]]
     return "\n".join(lines) + "\n"
@@ -399,7 +404,8 @@ def write_xlsx(records: list[dict], path: Path) -> bool:
             put(shorts, [_day(rec.get("processed")), m.get("channel", ""), title, s["index"], s["title"], s["hook"],
                          mmss(s["start"]), mmss(s["end"]), s["length"], s["score"], ", ".join(s.get("keywords") or []),
                          *(st.get(p, "") for p in PLATFORMS), s.get("youtube_title", ""), s["file"], rec["id"]],
-                {3: url, 7: moment_url(url, s["start"]), 17: folder + s["file"]}, dates=(1,), grey=gone)
+                {3: url, 7: moment_url(url, s["start"]), 17: folder + s["file"],
+                 **{12 + k: s.get("links", {}).get(p) for k, p in enumerate(PLATFORMS)}}, dates=(1,), grey=gone)
     for ws in (videos, shorts):
         ws.auto_filter.ref = ws.dimensions
     tmp = path.with_name(f".{path.name}.tmp")

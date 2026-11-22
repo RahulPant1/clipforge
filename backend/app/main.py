@@ -5,6 +5,7 @@ import logging
 import re
 import shutil
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime
 from pathlib import Path
 
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
@@ -361,6 +362,9 @@ def create_app(pipeline=None, start_worker: bool = True, llm_factory=OllamaClien
         editable(job_id)
         if body.status and body.status not in ("draft", "approved", "posted"):
             raise HTTPException(400, "status must be draft, approved or posted")
+        url = None if body.url is None else body.url.strip()
+        if url and not url.startswith(("http://", "https://")):
+            raise HTTPException(400, "the post link must start with http(s)://")
         out: dict[str, Post] = {}
 
         def apply(c: Clip) -> None:
@@ -378,7 +382,15 @@ def create_app(pipeline=None, start_worker: bool = True, llm_factory=OllamaClien
             if body.text is not None or body.parts is not None or body.title is not None:
                 post.edited = True
             if body.status:
+                if body.status == "posted" and post.status != "posted":
+                    post.posted_at = datetime.now(UTC)
+                elif body.status != "posted":
+                    post.posted_at = None
                 post.status = body.status
+            if url is not None:
+                post.url = url
+                if url and post.status != "posted":  # a live link means it's out there
+                    post.status, post.posted_at = "posted", datetime.now(UTC)
             out["post"] = post
 
         try:

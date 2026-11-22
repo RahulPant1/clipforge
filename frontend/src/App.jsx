@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { api } from './api.js'
+import History from './components/History.jsx'
 import BrandVoice from './components/BrandVoice.jsx'
 import HealthBadge from './components/HealthBadge.jsx'
 import JobList from './components/JobList.jsx'
@@ -97,6 +98,7 @@ export default function App() {
           <button className={`voicebtn ${selectedId === VOICE ? 'on' : ''}`} onClick={() => setSelectedId(VOICE)}>
             🎙 Brand voice
           </button>
+          <History />
           <JobList jobs={jobs} selectedId={selectedId} onSelect={setSelectedId} onDelete={onDelete} />
         </aside>
         <section className="detail">

@@ -95,6 +95,9 @@ def transcribe(video: Path, job_dir: Path, on_progress: ProgressFn | None = None
     gc.collect()
 
     cache.write_text(json.dumps([s.model_dump() for s in segs], ensure_ascii=False))
+    (job_dir / "transcript_info.json").write_text(json.dumps(  # spoken language, for the history (library.py)
+        {"language": getattr(info, "language", None), "duration": round(getattr(info, "duration", 0) or 0, 1),
+         "probability": round(getattr(info, "language_probability", 0) or 0, 3)}))
     return segs
 
 

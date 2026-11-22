@@ -14,6 +14,7 @@ from fastapi.responses import FileResponse, StreamingResponse
 from .config import settings
 from .events import job_events
 from .jobs import GPU_LOCK, JobStore, Worker
+from .library import XLSX, Library, windows_path
 from .models import (
     BrandVoice,
     Clip,
@@ -52,15 +53,18 @@ SAFE_NAME = re.compile(r"^[\w.\-]+$")
 def create_app(pipeline=None, start_worker: bool = True, llm_factory=OllamaClient, steps=None) -> FastAPI:
     store = JobStore(settings.data_dir)
     worker = Worker(store, pipeline, steps)
+    library = Library(store, fetch_meta=settings.library_fetch_meta)
+    store.listeners.append(library.touch)
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
         if start_worker:
             worker.start()
+            library.start()
         yield
 
     app = FastAPI(title="ClipForge", version="0.1.0", lifespan=lifespan)
-    app.state.store, app.state.worker = store, worker
+    app.state.store, app.state.worker, app.state.library = store, worker, library
     app.add_middleware(CORSMiddleware, allow_origins=["http://localhost:5173"],
                        allow_methods=["*"], allow_headers=["*"])
 
@@ -488,6 +492,21 @@ def create_app(pipeline=None, start_worker: bool = True, llm_factory=OllamaClien
             return store.update_clip(job_id, index, apply)
         except KeyError:
             raise HTTPException(404, "clip not found") from None
+
+    @app.get("/api/library")
+    def library_info() -> dict:
+        """Where the history lives (folders + spreadsheet) — shown in the UI so you can open it."""
+        root = library.root.resolve()
+        return {"dir": str(root), "xlsx": str(root / XLSX), "windows_dir": windows_path(root)}
+
+    @app.get("/api/library/history.xlsx")
+    def library_xlsx() -> FileResponse:
+        library.flush()  # anything saved in the last couple of seconds
+        path = library.root / XLSX
+        if not path.exists():
+            raise HTTPException(404, "no history yet")
+        return FileResponse(path, filename=XLSX,
+                            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
     @app.get("/api/jobs/{job_id}/export.zip")
     def export_pack(job_id: str) -> FileResponse:

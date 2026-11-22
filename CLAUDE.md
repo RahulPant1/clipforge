@@ -22,11 +22,17 @@ backend/                FastAPI + pipeline (Python 3.11, conda env "clipforge")
   app/events.py         SSE: job_events() → snapshot, then job/deleted events (coalesced, MIN_GAP), : ping
                         (GET /api/events = all jobs, /api/jobs/{id}/events = one). App.jsx: EventSource;
                         polls only while the stream is down
+  app/library.py        history outside the job folders (LIBRARY_DIR, default data/library): per video a readable
+                        "<date> <channel> - <title> [<id>]" folder (shorts/covers/srt/posts as hard links, info.md) +
+                        "ClipForge history.xlsx" (Videos + Shorts sheets) from history.json. Debounced thread fed by
+                        JobStore.listeners (Library.touch); busy jobs wait; deleted jobs stay (marked); old jobs get
+                        full metadata once via download.fetch_meta (no download). `python -m app.library` rebuilds
   app/cli.py            `python -m app.cli <url|file> --clips N`
   app/eval.py           `python -m app.eval <job> --model A --model B --prompt f.txt --think on/off` → data/evals/
                         (compares selection variants on one transcript; summarize() is pure + tested)
   app/pipeline/
-    download.py         yt-dlp, cookies support, progress hook
+    download.py         yt-dlp, cookies support, progress hook; meta.json = video_meta() (channel, upload date,
+                        views, tags, …; meta_version 2); transcribe writes transcript_info.json (spoken language)
     transcribe.py       faster-whisper, caches transcript.json, frees VRAM after; preloads cuBLAS from the pip wheel
     transcript_edit.py  caption fixes: set_word(seg, i), replace_all(find, replace) (phrases merge into one word,
                         each occurrence keeps its own trailing punctuation), rebuild seg.text; transcript.json atomic

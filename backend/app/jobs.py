@@ -34,6 +34,7 @@ class JobStore:
         self.version = 0
         self._seen: dict[str, int] = {}  # job id -> version of its last change
         self._deleted: dict[str, int] = {}  # job id -> version it was deleted at
+        self.listeners: list[Callable[[str], None]] = []  # called with the job id after every save/delete
         self._load()
 
     def _load(self) -> None:
@@ -54,6 +55,8 @@ class JobStore:
         if not deleted:
             self._deleted.pop(job_id, None)
         self._changed.notify_all()
+        for fn in self.listeners:  # must be quick (they run under the store lock): Library.touch just queues
+            fn(job_id)
 
     def changes(self, since: int, timeout: float) -> tuple[int, list[Job], list[str]]:
         """Block until something changed after version `since` (or timeout).

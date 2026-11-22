@@ -9,6 +9,10 @@ class Settings(BaseSettings):
 
     # Storage
     data_dir: Path = Path("data")
+    # History of every video + its shorts (library.py): readable folders + "ClipForge history.xlsx".
+    # Default data/library; e.g. /mnt/c/Users/<you>/Videos/ClipForge to browse it in Windows (files copied there).
+    library_dir: Path | None = None
+    library_fetch_meta: bool = True  # look up full YouTube metadata (no download) for jobs that lack it
 
     # LLM (Gemma via Ollama)
     ollama_url: str = "http://localhost:11434"

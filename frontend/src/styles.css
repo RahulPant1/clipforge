@@ -425,3 +425,7 @@ aside { min-width: 0; }  /* a long History path must shrink (ellipsis), not wide
   .find { grid-template-columns: 1fr; }
   .find-thumb img { width: 100%; }
 }
+
+.find-why { font-size: 13px; color: var(--text); }
+.find-moments a.best { font-weight: 600; }
+.fbadge.gemma { font-weight: 600; }

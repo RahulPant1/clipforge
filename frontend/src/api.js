@@ -63,8 +63,13 @@ export const api = {
   exportUrl: (id) => `/api/jobs/${id}/export.zip`,
   library: () => req('/library'),
   lookup: (url) => req(`/library/lookup?url=${encodeURIComponent(url)}`),
-  discover: (topic, cc, min, max) =>
-    req(`/discover?${new URLSearchParams({ topic, cc, min_minutes: min, max_minutes: max })}`),
+  discover: (topic, cc, min, max, queries = []) => {
+    const q = new URLSearchParams({ topic, cc, min_minutes: min, max_minutes: max })
+    queries.forEach((x) => q.append('queries', x))
+    return req(`/discover?${q}`)
+  },
+  discoverExpand: (topic) => req('/discover/expand', json('POST', { topic })),
+  discoverJudge: (id, topic) => req('/discover/judge', json('POST', { id, topic })),
   discoverScore: (id, topic) => req(`/discover/score?${new URLSearchParams({ id, topic })}`),
   historyUrl: () => '/api/library/history.xlsx',
 }

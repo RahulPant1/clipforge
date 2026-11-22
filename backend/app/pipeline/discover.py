@@ -178,3 +178,108 @@ def score(vid: str, topic: str) -> dict:
     return {"id": vid, **out, "has_captions": bool(lines), "language": meta.get("language") or "",
             "license": lic, "cc": "creative commons" in lic.lower(), "likes": meta.get("like_count"),
             "views": meta.get("view_count"), "upload_date": f"{up[:4]}-{up[4:6]}-{up[6:8]}" if len(up) == 8 else ""}
+
+
+# ------------------------------------------------------------------ smart search (optional, Gemma)
+# Gemma needs the GPU: the API takes GPU_LOCK (409 while a job runs) — plain search never does.
+
+EXPAND_PROMPT = """You help find long YouTube videos to cut into Shorts.
+
+Topic: "{topic}"
+
+Write {n} different YouTube search queries that find LONG videos (podcasts, interviews, talks, tutorials) where this
+topic is discussed in depth. Give each a different angle (e.g. podcast / expert interview, how-to, real story).
+If the topic is in Hindi or Hinglish, or about India, write one query in Hinglish.
+Plain search words only: under 8 words each, no quotes, hashtags or years."""
+
+EXPAND_SCHEMA = {"type": "object", "properties": {"queries": {"type": "array", "items": {"type": "string"}}},
+                 "required": ["queries"]}
+
+JUDGE_PROMPT = """You pick source videos for YouTube Shorts.
+
+Topic: "{topic}"
+Video: "{title}" ({channel})
+
+Caption excerpts from the parts of the video that mention the topic most:
+{excerpts}
+
+Rate 1-10 how good this video is for Shorts about the topic: 10 = it really explains / argues / tells a story about
+the topic with substance; 1 = it only mentions the words. Judge only from the excerpts — don't assume anything else.
+best: the number of the excerpt that would make the best Short.
+why: one short sentence (under 20 words) on what the video actually says about the topic."""
+
+JUDGE_SCHEMA = {"type": "object", "properties": {"relevance": {"type": "integer"}, "best": {"type": "integer"},
+                                                 "why": {"type": "string"}},
+                "required": ["relevance", "best", "why"]}
+
+
+def expand_queries(topic: str, llm, n: int = 3) -> list[str]:
+    """[topic, + up to n searches Gemma wrote from it] — cleaned, deduped; the topic itself always searched."""
+    topic = " ".join(topic.split())[:120]
+    raw = llm.chat_json(EXPAND_PROMPT.format(topic=topic, n=n), EXPAND_SCHEMA, think=settings.content_think)
+    items = raw.get("queries") if isinstance(raw, dict) else None
+    out, seen = [topic], {topic.casefold()}
+    for q in items if isinstance(items, list) else []:
+        q = " ".join(re.sub(r"[\"#*]", " ", str(q)).split())[:80]
+        if q and q.casefold() not in seen and len(q.split()) <= 12:
+            seen.add(q.casefold())
+            out.append(q)
+        if len(out) == n + 1:
+            break
+    return out
+
+
+def search_many(queries: list[str], n: int = 20, **kw) -> list[dict]:
+    """All queries, merged round-robin (each query's best first), duplicates dropped; `found_by` says which."""
+    lists = []
+    for q in queries:
+        try:
+            lists.append([{**r, "found_by": q} for r in search(q, n=n, **kw)])
+        except Exception as e:  # one failing query doesn't lose the others
+            log.warning("search %r failed: %s", q, e)
+    if not lists and queries:
+        raise RuntimeError("every search failed")
+    out, seen = [], set()
+    for i in range(max((len(x) for x in lists), default=0)):
+        for x in lists:
+            if i < len(x) and x[i]["id"] not in seen:
+                seen.add(x[i]["id"])
+                out.append(x[i])
+    return out[:n]
+
+
+def excerpts(lines, moments: list[dict], span: float = 60.0, limit: int = 700) -> list[tuple[int, str]]:
+    """~1 minute of captions from each moment (a few seconds before it), Hindi in Hinglish."""
+    out = []
+    for m in moments:
+        start = m["t"] - 5
+        text = " ".join(to_latin(x) if DEVANAGARI.search(x) else x for t, x in lines if start <= t < start + span)
+        out.append((m["t"], " ".join(text.split())[:limit]))
+    return out
+
+
+def judge(vid: str, topic: str, llm) -> dict:
+    """Gemma rates one video for the topic from its best caption moments: relevance 1-10, best moment, why.
+    {"relevance": None} when there's nothing to judge (no captions / never mentions the topic)."""
+    if not VIDEO_ID.match(vid or ""):
+        raise ValueError("not a YouTube video id")
+    meta, lines = _video(vid)
+    moments = score_lines(lines, topic, meta.get("duration"))["moments"]
+    ex = excerpts(lines, moments)
+    if not ex:
+        return {"id": vid, "relevance": None, "why": "", "best_t": None}
+    listing = "\n".join(f"[{i + 1}] ({int(t) // 60}:{int(t) % 60:02d}) {text}" for i, (t, text) in enumerate(ex))
+    prompt = JUDGE_PROMPT.format(topic=topic, title=meta.get("title") or "", channel=meta.get("channel") or "",
+                                 excerpts=listing)
+    raw = llm.chat_json(prompt, JUDGE_SCHEMA, think=settings.content_think)
+    raw = raw if isinstance(raw, dict) else {}
+    try:
+        rel = max(1, min(10, int(raw.get("relevance"))))
+    except (TypeError, ValueError):
+        raise ValueError("Gemma gave no rating") from None
+    try:
+        best = ex[max(1, min(len(ex), int(raw.get("best")))) - 1][0]
+    except (TypeError, ValueError):
+        best = ex[0][0]
+    why = " ".join(str(raw.get("why") or "").replace("*", "").split())[:160]
+    return {"id": vid, "relevance": rel, "why": why, "best_t": int(best)}

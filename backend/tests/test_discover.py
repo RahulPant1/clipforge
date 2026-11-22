@@ -110,3 +110,79 @@ def test_youtube_errors_are_a_502(monkeypatch):
         r = c.get("/api/discover", params={"topic": "salary"})
         assert r.status_code == 502 and "Sign in" in r.json()["detail"]
         assert c.get("/api/discover/score", params={"id": "aaaaaaaaaaa", "topic": "x"}).status_code == 502
+
+
+# ------------------------------------------------------------------ smart search (Gemma)
+
+class Gemma:
+    """Fake LLM: answers by schema; records prompts."""
+    def __init__(self, queries=None, judge=None):
+        self.queries = queries if queries is not None else ["salary negotiation podcast", "how to negotiate pay",
+                                                            "salary negotiation podcast", "salary kaise badhaye"]
+        self.verdict = judge or {"relevance": 8, "best": 2, "why": "Explains **anchoring** high, with a real offer."}
+        self.prompts = []
+
+    def chat_json(self, prompt, schema, **kw):
+        self.prompts.append(prompt)
+        return {"queries": self.queries} if "queries" in schema["properties"] else self.verdict
+
+    def unload(self):
+        pass
+
+
+def test_expand_queries_keeps_the_topic_first_and_cleans_gemmas():
+    llm = Gemma(queries=['"salary negotiation podcast" #career', "SALARY NEGOTIATION", "x " * 20, "pay raise tips",
+                         "salary kaise badhaye"])
+    qs = discover.expand_queries("  salary negotiation ", llm)
+    assert qs == ["salary negotiation", "salary negotiation podcast career", "pay raise tips", "salary kaise badhaye"]
+    assert "Hinglish" in llm.prompts[0]
+    assert discover.expand_queries("salary", Gemma(queries="nonsense")) == ["salary"]
+
+
+def test_search_many_merges_round_robin_without_duplicates(monkeypatch):
+    results = {"a": [{"id": "1"}, {"id": "2"}], "b": [{"id": "2"}, {"id": "3"}], "c": []}
+
+    def fake_search(q, n=20, **kw):
+        if q == "boom":
+            raise RuntimeError("blocked")
+        return [dict(r) for r in results[q]]
+
+    monkeypatch.setattr(discover, "search", fake_search)
+    found = discover.search_many(["a", "b", "boom", "c"])
+    assert [(r["id"], r["found_by"]) for r in found] == [("1", "a"), ("2", "b"), ("3", "b")]  # each top first
+    with pytest.raises(RuntimeError):
+        discover.search_many(["boom"])
+
+
+def test_judge_rates_from_the_best_moments(yt):
+    llm = Gemma()
+    v = discover.judge("aaaaaaaaaaa", "salary negotiation", llm)
+    assert v == {"id": "aaaaaaaaaaa", "relevance": 8, "why": "Explains anchoring high, with a real offer.",
+                 "best_t": 600}  # excerpt 2 = the moment at 10:00
+    assert "[1] (0:05)" in llm.prompts[0] and "negotiate the salary" in llm.prompts[0]
+    assert discover.judge("aaaaaaaaaaa", "quantum physics", Gemma())["relevance"] is None  # never discussed
+    with pytest.raises(ValueError):
+        discover.judge("aaaaaaaaaaa", "salary", Gemma(judge={"best": 1, "why": "?"}))  # no rating
+
+
+def test_api_smart_search_takes_the_gpu_and_waits_for_jobs(yt):
+    from app.jobs import GPU_LOCK
+    from app.main import create_app
+
+    llm = Gemma()
+    app = create_app(pipeline=lambda *a, **k: [], start_worker=False, llm_factory=lambda: llm)
+    with TestClient(app) as c:
+        qs = c.post("/api/discover/expand", json={"topic": "salary negotiation"}).json()["queries"]
+        assert qs[0] == "salary negotiation" and len(qs) == 4
+        r = c.get("/api/discover", params=[("topic", "salary negotiation"), ("cc", "false"),
+                                           *[("queries", q) for q in qs]]).json()["results"]
+        assert [x["id"] for x in r] == ["aaaaaaaaaaa", "fffffffffff"] and r[0]["found_by"] == "salary negotiation"
+        assert len([u for u, flat, _ in yt if flat]) == 4  # every query searched
+        v = c.post("/api/discover/judge", json={"id": "aaaaaaaaaaa", "topic": "salary negotiation"}).json()
+        assert v["relevance"] == 8 and v["best_t"] == 600
+        assert c.post("/api/discover/judge", json={"id": "../etc", "topic": "x"}).status_code == 422
+        with GPU_LOCK:
+            r = c.post("/api/discover/expand", json={"topic": "salary"})
+            assert r.status_code == 409 and "plain search" in r.json()["detail"]
+        llm.verdict = {"why": "no number"}
+        assert c.post("/api/discover/judge", json={"id": "aaaaaaaaaaa", "topic": "salary"}).status_code == 502

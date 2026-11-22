@@ -154,6 +154,15 @@ class QuoteEdit(BaseModel):
     text: str | None = Field(default=None, max_length=300)  # None = keep, "" = pick a line automatically again
 
 
+class SmartTopic(BaseModel):
+    topic: str = Field(min_length=1, max_length=120)
+
+
+class SmartJudge(BaseModel):
+    id: str = Field(pattern=r"^[\w-]{11}$")  # YouTube video id
+    topic: str = Field(min_length=1, max_length=120)
+
+
 class ClipAdd(BaseModel):
     start: float
     end: float

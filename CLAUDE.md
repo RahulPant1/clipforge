@@ -39,6 +39,10 @@ backend/                FastAPI + pipeline (Python 3.11, conda env "clipforge")
                         at once): topic hits (word stems; Hindi captions via to_latin + consonant skeleton()) → 0-100
                         (density/peak minute/coverage), top moments with timestamps, licence, language. Results flag
                         videos already done (library.lookup). Tests fake `_extract`/`_fetch`: never hit YouTube
+                        Optional smart search (Gemma, UI checkbox): POST /discover/expand → expand_queries() (topic +
+                        3 angles, one Hinglish) → search_many() round-robin merge (found_by); POST /discover/judge →
+                        judge() rates the top 6 by keyword score 1-10 from ~1 min of captions per moment (best moment,
+                        why). Both take GPU_LOCK like hooks (409 while a job runs → UI falls back to plain search)
     download.py         yt-dlp, cookies support, progress hook; meta.json = video_meta() (channel, upload date,
                         views, tags, …; meta_version 2); transcribe writes transcript_info.json (spoken language)
     transcribe.py       faster-whisper, caches transcript.json, frees VRAM after; preloads cuBLAS from the pip wheel

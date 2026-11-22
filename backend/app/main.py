@@ -8,7 +8,7 @@ from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 
-from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
 
@@ -34,6 +34,8 @@ from .models import (
     Retry,
     ScriptChoice,
     Segment,
+    SmartJudge,
+    SmartTopic,
     Stage,
     Vocabulary,
     WordEdit,
@@ -572,19 +574,46 @@ def create_app(pipeline=None, start_worker: bool = True, llm_factory=OllamaClien
 
     @app.get("/api/discover")
     def discover_search(topic: str, cc: bool = True, min_minutes: float = 8, max_minutes: float = 90,
-                        n: int = 15) -> dict:
+                        n: int = 15, queries: list[str] | None = Query(None)) -> dict:  # noqa: B008
         """YouTube search (yt-dlp, no API key) → long-form results; cc=True: Creative Commons only. Each result
-        says how many times you've already done that video. Score them with /api/discover/score."""
+        says how many times you've already done that video. Score them with /api/discover/score.
+        `queries` (smart search: from /api/discover/expand) are all searched and merged instead of `topic`."""
         if not topic.strip():
             raise HTTPException(400, "type a topic")
+        kw = {"n": max(1, min(n, 30)), "cc": cc, "min_minutes": min_minutes, "max_minutes": max_minutes}
         try:
-            found = discover.search(topic, n=max(1, min(n, 30)), cc=cc, min_minutes=min_minutes,
-                                    max_minutes=max_minutes)
+            qs = [q for q in (queries or []) if q.strip()][:5]
+            found = discover.search_many(qs, **kw) if qs else discover.search(topic, **kw)
         except Exception as e:
             raise HTTPException(502, f"YouTube search failed: {str(e)[:200]}") from e
         for r in found:
             r["done"] = len(library.lookup(r["url"]))
         return {"results": found}
+
+    def with_gemma(work):
+        """Smart search runs Gemma, which needs the GPU: wait our turn briefly, 409 while a job holds it."""
+        if not GPU_LOCK.acquire(timeout=2):
+            raise HTTPException(409, "Gemma is busy with a job — use plain search, or try again when it finishes")
+        try:
+            return work(llm_factory())
+        except HTTPException:
+            raise
+        except ValueError as e:
+            raise HTTPException(502, f"Gemma: {e}") from e
+        except Exception as e:
+            raise HTTPException(502, f"Gemma failed: {str(e)[:200]}") from e
+        finally:
+            GPU_LOCK.release()
+
+    @app.post("/api/discover/expand")
+    def discover_expand(body: SmartTopic) -> dict:
+        """Smart search, step 1: Gemma turns the topic into a few different YouTube searches (topic always first)."""
+        return {"queries": with_gemma(lambda llm: discover.expand_queries(body.topic, llm))}
+
+    @app.post("/api/discover/judge")
+    def discover_judge(body: SmartJudge) -> dict:
+        """Smart search, step 2: Gemma reads the video's best caption moments and rates it 1-10 for the topic."""
+        return with_gemma(lambda llm: discover.judge(body.id, body.topic, llm))
 
     @app.get("/api/discover/score")
     def discover_score(id: str, topic: str) -> dict:  # noqa: A002 - the video id, as in YouTube's URLs

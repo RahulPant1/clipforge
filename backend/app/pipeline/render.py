@@ -20,7 +20,7 @@ def _encoder_args() -> list[str]:
 def render_clip(video: Path, clip: Clip, segs: list[Segment], job_dir: Path) -> str:
     """Renders short_<n>.mp4 (+ .srt export, .jpg thumbnail) in job_dir.
 
-    Also fills clip.cut_seconds / clip.out_duration / clip.reframe. Returns the mp4 filename.
+    Also fills clip.cut_seconds / clip.out_duration / clip.reframe / clip.fit_seconds. Returns the mp4 filename.
     """
     name = f"short_{clip.index}"
     o = clip.options
@@ -40,6 +40,7 @@ def render_clip(video: Path, clip: Clip, segs: list[Segment], job_dir: Path) -> 
     # Speaker-following crop (runs before jump-cut select, so it works in source-relative time)
     rf = plan_reframe(video, clip.start, clip.end, mode=reframe_mode, follow=o.follow)
     clip.reframe = rf.mode
+    clip.fit_seconds = round(clip.duration if rf.mode == "fit" else sum(b - a for a, b in rf.fit), 1)
     cmd_file = None
     if rf.mode in ("face", "speaker"):
         cmd_file = f"{name}.crop.cmd"

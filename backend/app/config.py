@@ -88,7 +88,8 @@ class Settings(BaseSettings):
     reframe_lead: float = 0.15  # lead room: crop shift (share of its width) toward where the face looks/moves; 0 = off
     lead_window: float = 1.5  # s of head turn / movement read (median) per decision
     lead_hold: float = 2.0  # a new lead-room side must last this long (glances don't pan)
-    face_min_coverage: float = 0.3  # need faces in >=30% of samples, else centre crop
+    face_min_coverage: float = 0.3  # a shot needs faces in >=30% of its samples to be cropped on a face
+    reframe_no_face: str = "fit"  # shots without a face: fit (whole frame over a blurred copy) | crop (centre/hold)
     two_speaker_min_share: float = 0.6  # auto: two faces in >=60% of samples -> stacked two-speaker layout
     speaker_window: float = 1.0  # s of mouth activity averaged before deciding who talks
     speaker_min_shot: float = 2.0  # s on a speaker before the camera may cut away

@@ -54,6 +54,9 @@ backend/                FastAPI + pipeline (Python 3.11, conda env "clipforge")
                         two_speakers() → split_panels(): static 9:8 crop per speaker, split+vstack ("split" mode)
                         or speaker_activity() (aligned mouth-minus-eye thumbnail change) → active_speaker_path()
                         (offline turns, cut at turn start) → same sendcmd crop ("speaker" mode)
+                        no_face_spans(): shots (split at scene cuts) with faces in < FACE_MIN_COVERAGE of samples are shown
+                        whole over a blurred copy (fit_graph, overlaid on the crop branch with enable=between(t,…));
+                        no face anywhere → mode "fit". REFRAME_NO_FACE=crop restores centre crop. Covers do the same.
                         options.follow (x of a face from people()) → pick_face tracks only that person (FOLLOW_RADIUS,
                         holds when they're out of frame) in "face" mode, whatever the framing says except "center"
     content.py          Content Studio: ANGLES (creative styles per platform), RULES, SCHEMAS, PROMPT,

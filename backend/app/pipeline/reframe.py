@@ -53,16 +53,33 @@ class Speaker:
 PANEL_W, PANEL_H = 1080, 960  # two panels stacked = the 1080x1920 canvas
 
 
+def fit_graph(inp: str = "", out: str = "") -> str:
+    """Whole frame scaled to the width, centred on a blurred, darkened copy that fills 1080x1920 — for screen
+    recordings, slides and action shots, where a 9:16 crop cuts the content off. Blur runs at 1/4 size (cheap)."""
+    return (f"{inp}split[fitfg][fitbg];[fitbg]scale=270:480:force_original_aspect_ratio=increase,crop=270:480,"
+            f"boxblur=12:2,eq=brightness=-0.08,scale=1080:1920,setsar=1[fitb];[fitfg]scale=1080:-2,setsar=1[fitf];"
+            f"[fitb][fitf]overlay=(W-w)/2:(H-h)/2{out}")
+
+
 @dataclass
 class ReframePlan:
-    mode: str  # "face" | "split" | "speaker" | "center" | "none" (source already vertical)
+    mode: str  # "face" | "split" | "speaker" | "center" | "fit" | "none" (source already vertical)
     src_w: int
     src_h: int
     crop_w: int
     keyframes: list[tuple[float, int]] = field(default_factory=list)  # (t, crop x px)
     panels: list[tuple[int, int, int, int]] = field(default_factory=list)  # split: (w, h, x, y) top, bottom
+    fit: list[tuple[float, float]] = field(default_factory=list)  # face/speaker: no-face spans shown whole (s)
 
     def filters(self, cmd_file: str | None) -> list[str]:
+        if self.mode == "fit":
+            return [fit_graph()]
+        if self.mode in ("face", "speaker") and self.keyframes and cmd_file and self.fit:
+            # crop branch, with the fitted branch laid over it during the no-face shots (same source time)
+            on = "+".join(f"between(t,{a:.3f},{b:.3f})" for a, b in self.fit)
+            crop = f"sendcmd=f={cmd_file},crop@track={self.crop_w}:{self.src_h}:{self.keyframes[0][1]}:0"
+            return [f"split[rfc][rff];[rfc]{crop},scale=1080:1920,setsar=1[rfcv];{fit_graph('[rff]', '[rffv]')};"
+                    f"[rfcv][rffv]overlay=enable='{on}'"]
         if self.mode == "split" and len(self.panels) == 2:
             (w0, h0, x0, y0), (w1, h1, x1, y1) = self.panels
             size = f"scale={PANEL_W}:{PANEL_H},setsar=1"
@@ -547,6 +564,39 @@ def to_keyframes(path: list[Sample], src_w: int, crop_w: int, duration: float,
     return keys
 
 
+# ------------------------------------------------------------------ shots without a face
+
+FIT_MIN_SAMPLES = 3  # shorter shots (< ~0.6 s, often a false cut) copy the shot before them: no flicker
+
+
+def no_face_spans(samples: list[Sample], duration: float, share: float | None = None) -> list[tuple[float, float]]:
+    """Clip-relative spans of the shots (split at scene cuts) where any face shows in < `share` of samples.
+
+    Uses every detected face, not just the followed one: a shot of the other person is still a face shot.
+    """
+    share = settings.face_min_coverage if share is None else share
+    shots: list[list[Sample]] = []
+    for s in samples:
+        if not shots or s.cut:
+            shots.append([])
+        shots[-1].append(s)
+    bounds = [0.0] + [sh[0].t for sh in shots[1:]] + [duration]
+    no_face = [sum(bool(x.faces) for x in sh) / len(sh) < share for sh in shots]
+    for i, sh in enumerate(shots):
+        if len(sh) < FIT_MIN_SAMPLES and len(shots) > 1:
+            no_face[i] = no_face[i - 1] if i else no_face[1]
+    spans: list[tuple[float, float]] = []
+    for i, nf in enumerate(no_face):
+        a, b = round(bounds[i], 3), round(min(bounds[i + 1], duration), 3)
+        if not nf or b <= a:
+            continue
+        if spans and abs(spans[-1][1] - a) < 1e-6:
+            spans[-1] = (spans[-1][0], b)
+        else:
+            spans.append((a, b))
+    return spans
+
+
 # ------------------------------------------------------------------ entry point
 
 _detector: FaceDetector | None = None
@@ -577,11 +627,14 @@ def plan_reframe(video: Path, start: float, end: float, detector: FaceDetector |
     if not src_w or crop_w >= src_w:
         return ReframePlan("none", src_w, src_h, src_w)
     mode = mode or settings.reframe_mode
+    if mode == "fit":
+        return ReframePlan("fit", src_w, src_h, crop_w)
     if follow is not None and mode != "center":
         mode = "face"
     if mode not in ("face", "auto", "split", "speaker"):
         return ReframePlan("center", src_w, src_h, crop_w)
 
+    fit_on = settings.reframe_no_face == "fit"
     try:
         samples, _, _ = sample_faces(video, start, end, detector or get_detector(), follow)
     except Exception as e:
@@ -595,9 +648,19 @@ def plan_reframe(video: Path, start: float, end: float, detector: FaceDetector |
         lead = settings.reframe_lead * crop_w / src_w
         if pair and layout == "speaker":
             path = active_speaker_path(samples, speaker_activity(samples, *pair), *pair, lead=lead)
-            return ReframePlan("speaker", src_w, src_h, crop_w, to_keyframes(path, src_w, crop_w, end - start))
+            return ReframePlan("speaker", src_w, src_h, crop_w, to_keyframes(path, src_w, crop_w, end - start),
+                               fit=no_face_spans(samples, end - start) if fit_on else [])
         if pair:
             return ReframePlan("split", src_w, src_h, crop_w, panels=split_panels(*pair, src_w, src_h))
+
+    if fit_on:  # per shot: faces → tracked crop, none → the whole frame over a blurred copy
+        spans = no_face_spans(samples, end - start) if samples else [(0.0, end - start)]
+        keys = to_keyframes(smooth(samples, lead=settings.reframe_lead * crop_w / src_w), src_w, crop_w, end - start)
+        if not keys and follow is not None:
+            keys = to_keyframes([Sample(0.0, follow)], src_w, crop_w, end - start)
+        if not keys or sum(b - a for a, b in spans) >= end - start - 1e-6:
+            return ReframePlan("fit", src_w, src_h, crop_w)
+        return ReframePlan("face", src_w, src_h, crop_w, keys, fit=spans)
 
     found = sum(s.cx is not None for s in samples)
     if not samples or found / len(samples) < settings.face_min_coverage:

@@ -59,7 +59,7 @@ class Post(BaseModel):
 class RenderOptions(BaseModel):
     """Per-clip overrides; None = use the global setting."""
     jumpcut: bool | None = None
-    reframe: str | None = None  # auto | face | split | speaker | center
+    reframe: str | None = None  # auto | face | split | speaker | center | fit
     caption_style: str | None = None  # karaoke | simple | none
     caption_preset: str | None = None  # classic | punch | clean | boxed | neon | custom (presets.py)
     caption_position: str | None = None  # bottom | middle
@@ -86,7 +86,8 @@ class Clip(BaseModel):
     file: str | None = None  # filename inside the job folder once rendered
     cut_seconds: float = 0.0  # silence/filler removed by jump cuts
     out_duration: float | None = None  # final length after cuts
-    reframe: str = "center"  # face | split | speaker | center | none — how the crop was chosen
+    reframe: str = "center"  # face | split | speaker | center | fit | none — how the crop was chosen
+    fit_seconds: float = 0.0  # source seconds shown whole over a blurred copy (shots with no face)
     content: dict[str, Post] = {}  # platform -> generated post
     approved: bool = True  # chosen for rendering (review step)
     custom: bool = False  # added by you from the transcript

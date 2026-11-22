@@ -161,6 +161,12 @@ function ShortCard({ job, clip, busy, act, presets }) {
           {clip.reframe === 'face' && <span className="cut"> · 🎯 face</span>}
           {clip.reframe === 'split' && <span className="cut"> · 👥 2 speakers</span>}
           {clip.reframe === 'speaker' && <span className="cut"> · 🎙 follows talker</span>}
+          {clip.reframe === 'fit' && <span className="cut" title="No face to follow: the whole frame over a blurred copy"> · 🖼 whole frame</span>}
+          {clip.reframe !== 'fit' && clip.fit_seconds > 0 && (
+            <span className="cut" title="Shots with no face (screen, slides, action) are shown whole over a blurred copy">
+              {' '}· 🖼 {clip.fit_seconds.toFixed(0)}s shown whole
+            </span>
+          )}
         </p>
 
         <Seg label="Jump cuts" value={o.jumpcut ?? true} disabled={busy}
@@ -168,7 +174,7 @@ function ShortCard({ job, clip, busy, act, presets }) {
         <Seg label="Zoom" value={o.zoom ?? false} disabled={busy || o.jumpcut === false}
              options={[[false, 'Off'], [true, 'Punch-in']]} onChange={(v) => setOpt('zoom', v)} />
         <Seg label="Framing" value={o.reframe ?? 'auto'} disabled={busy}
-             options={[['auto', 'Auto'], ['face', 'Face'], ['split', '2-up'], ['speaker', 'Talker'], ['center', 'Centre']]}
+             options={[['auto', 'Auto'], ['face', 'Face'], ['split', '2-up'], ['speaker', 'Talker'], ['fit', 'Fit'], ['center', 'Centre']]}
              onChange={(v) => setOpt('reframe', v)} />
         <FollowPicker job={job} clip={clip} busy={busy} act={act} o={o} />
         <Seg label="Hook title" value={o.hook ?? true} disabled={busy || !clip.hook}

@@ -9,6 +9,7 @@ import logging
 import math
 from pathlib import Path
 
+from ..config import settings
 from ..models import Clip
 from .fonts import font_file, strip_emoji
 from .jumpcut import clean_removed
@@ -92,9 +93,28 @@ def candidates(video: Path, clip: Clip, detector=None, n: int = CHOICES, samples
     return best
 
 
-def crop_9x16(frame, x: float | None):
-    """Vertical crop around face x (0..1), clamped to the frame; already-vertical sources are used whole."""
+def fit_9x16(frame):
+    """The whole frame across the width, centred on a blurred, darkened copy (same look as reframe.fit_graph)."""
+    import cv2
+
     h, w = frame.shape[:2]
+    bg_scale = max(270 / w, 480 / h)
+    bg = cv2.resize(frame, (max(270, round(w * bg_scale)), max(480, round(h * bg_scale))), interpolation=cv2.INTER_AREA)
+    y0, x0 = (bg.shape[0] - 480) // 2, (bg.shape[1] - 270) // 2
+    bg = cv2.GaussianBlur(bg[y0:y0 + 480, x0:x0 + 270], (0, 0), 8)
+    out = cv2.resize(cv2.convertScaleAbs(bg, alpha=0.85), (W, H))
+    fh = round(h * W / w)
+    top = (H - fh) // 2
+    out[top:top + fh] = cv2.resize(frame, (W, fh), interpolation=cv2.INTER_AREA)
+    return out
+
+
+def crop_9x16(frame, x: float | None):
+    """Vertical crop around face x (0..1), clamped to the frame; already-vertical sources are used whole.
+    No face (x None) on a wide frame → fit_9x16, like the short itself (REFRAME_NO_FACE=fit)."""
+    h, w = frame.shape[:2]
+    if x is None and w > h * 9 / 16 * 1.05 and settings.reframe_no_face == "fit":
+        return fit_9x16(frame)
     cw = min(w, int(h * 9 / 16))
     cx = (x if x is not None else 0.5) * w
     x0 = int(min(max(cx - cw / 2, 0), w - cw))

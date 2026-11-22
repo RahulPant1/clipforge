@@ -100,7 +100,10 @@ def test_plan_reframe_modes(tmp_path, monkeypatch):
 
     monkeypatch.setattr(settings, "reframe_mode", "face")
     land = _video(tmp_path, "1280x720")
-    assert plan_reframe(land, 0, 3, detector=NoFaces()).mode == "center"
+    assert plan_reframe(land, 0, 3, detector=NoFaces()).mode == "fit"  # nothing to track: show it all
+    monkeypatch.setattr(settings, "reframe_no_face", "crop")
+    assert plan_reframe(land, 0, 3, detector=NoFaces()).mode == "center"  # the old behaviour
+    monkeypatch.setattr(settings, "reframe_no_face", "fit")
     face = plan_reframe(land, 0, 3, detector=FixedFace())
     assert face.mode == "face" and face.crop_w == 404
     assert face.keyframes[0][1] == 822  # 0.8*1280 - 404/2

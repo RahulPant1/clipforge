@@ -1,7 +1,9 @@
 import { useEffect, useState } from 'react'
 import { api } from '../api.js'
+import BatchList from './BatchList.jsx'
 import FindVideos from './FindVideos.jsx'
 
+const MAX_BATCH = 50 // the API's limit per batch
 const FLOW = ['Source', 'Transcript', 'Pick clips', 'Shorts', 'Posts', 'Publish']
 
 const STATUS = { done: 'done', review: 'in review', failed: 'failed', running: 'running', queued: 'queued',
@@ -46,6 +48,7 @@ export default function NewJob({ onCreated, onOpen }) {
   const [vocab, setVocab] = useState('') // names & terms for Whisper, remembered for all jobs
   const [vocabSaved, setVocabSaved] = useState('')
   const [seen, setSeen] = useState([]) // earlier jobs for the pasted link
+  const [items, setItems] = useState([]) // batch: videos to queue, each { url, title, …, on }
 
   useEffect(() => {
     const u = url.trim()
@@ -62,7 +65,8 @@ export default function NewJob({ onCreated, onOpen }) {
     }).catch(() => {})
   }, [])
 
-  const ready = kind === 'url' ? url.trim().startsWith('http') : !!file
+  const queue = items.filter((v) => v.on)
+  const ready = kind === 'url' ? url.trim().startsWith('http') : kind === 'batch' ? queue.length > 0 && queue.length <= MAX_BATCH : !!file
 
   const submit = async (e) => {
     e.preventDefault()
@@ -71,6 +75,12 @@ export default function NewJob({ onCreated, onOpen }) {
     try {
       if (vocab !== vocabSaved) await api.saveVocabulary(vocab.split(',').map((t) => t.trim()).filter(Boolean))
       const t = topic.trim()
+      if (kind === 'batch') { // one job per video, run one after another by the worker
+        const { jobs } = await api.createBatch(queue.map((v) => v.url), numClips, mode, t, hinglish)
+        setItems([])
+        onCreated(jobs[0])
+        return
+      }
       const job =
         kind === 'url'
           ? await api.createJob(url.trim(), numClips, mode, t, hinglish)
@@ -103,6 +113,9 @@ export default function NewJob({ onCreated, onOpen }) {
           <button type="button" className={kind === 'file' ? 'on' : ''} onClick={() => setKind('file')}>
             Upload file
           </button>
+          <button type="button" className={kind === 'batch' ? 'on' : ''} onClick={() => setKind('batch')}>
+            📋 Batch{items.length > 0 && ` (${queue.length})`}
+          </button>
           <button type="button" className={kind === 'find' ? 'on' : ''} onClick={() => setKind('find')}>
             🔎 Find videos
           </button>
@@ -110,10 +123,18 @@ export default function NewJob({ onCreated, onOpen }) {
 
         {kind === 'find' ? (
           <FindVideos initialTopic={topic}
-                      onUse={(u, t) => { setUrl(u); setTopic(t); setKind('url') }} />
+                      onUse={(u, t) => { setUrl(u); setTopic(t); setKind('url') }}
+                      onQueue={(picks, t) => {
+                        const have = new Set(items.map((v) => v.url))
+                        setItems([...items, ...picks.filter((v) => !have.has(v.url)).map((v) => ({ ...v, on: true }))])
+                        setTopic(t)
+                        setKind('batch')
+                      }} />
         ) : (<>
 
-        {kind === 'url' ? (
+        {kind === 'batch' ? (
+          <BatchList items={items} setItems={setItems} />
+        ) : kind === 'url' ? (
           <input
             type="url"
             autoFocus
@@ -174,9 +195,17 @@ export default function NewJob({ onCreated, onOpen }) {
         </div>
 
         <button className="primary" disabled={!ready || busy}>
-          {busy ? 'Starting…' : 'Start →'}
+          {busy ? 'Starting…' : kind === 'batch'
+            ? `Queue ${queue.length} video${queue.length === 1 ? '' : 's'} →` : 'Start →'}
         </button>
         {err && <p className="err">{err}</p>}
+        {kind === 'batch' && queue.length > MAX_BATCH && (
+          <p className="err">At most {MAX_BATCH} videos per batch — untick {queue.length - MAX_BATCH}.</p>
+        )}
+        {kind === 'batch' && (
+          <p className="hint">They run one at a time, in this order — leave it overnight. In review mode each stops at
+            Pick clips for you; a queued job can be removed from the Jobs list until it starts.</p>
+        )}
         <p className="hint">Use your own or Creative Commons videos.</p>
         </>)}
       </form>

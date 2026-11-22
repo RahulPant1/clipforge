@@ -40,13 +40,21 @@ class JobStore:
     def _load(self) -> None:
         for f in self.root.glob("*/job.json"):
             job = Job.model_validate_json(f.read_text())
-            if job.status in (JobStatus.queued, JobStatus.running):
+            if job.status == JobStatus.queued and not job.clips:
+                job.message = "Queued (kept across a server restart)"  # never started: create_app re-submits it
+                self._write(job)
+            elif job.status in (JobStatus.queued, JobStatus.running):
                 if job.clips:  # interrupted while producing/rendering — your edits are kept
                     job.status, job.message = JobStatus.review, "Interrupted by server restart — run again"
                 else:
                     job.status, job.error = JobStatus.failed, "Interrupted by server restart"
                 self._write(job)
             self._jobs[job.id] = job
+
+    def waiting(self) -> list[Job]:
+        """New jobs that never started (a batch queue), oldest first — the worker's queue is lost on restart."""
+        return sorted((j for j in self.list() if j.status == JobStatus.queued and not j.clips),
+                      key=lambda j: j.created_at)
 
     def _bump(self, job_id: str, deleted: bool = False) -> None:
         """Record a change (caller holds the lock) and wake the event streams."""
@@ -173,7 +181,10 @@ class Worker:
         if not job:
             return
         before = restore
-        self.store.update(job_id, status=JobStatus.running)
+        try:
+            self.store.update(job_id, status=JobStatus.running)
+        except KeyError:  # cancelled (deleted) just as it came up in the queue
+            return
         d = self.store.dir(job_id)
 
         def report(stage: Stage, progress: float, message: str) -> None:

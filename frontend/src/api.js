@@ -24,6 +24,9 @@ export const api = {
   eventsUrl: () => '/api/events',
   createJob: (url, num_clips, mode, topic = '', hinglish = true) =>
     req('/jobs', json('POST', { url, num_clips, mode, topic, hinglish })),
+  createBatch: (urls, num_clips, mode, topic = '', hinglish = true) =>
+    req('/jobs/batch', json('POST', { urls, num_clips, mode, topic, hinglish })),
+  batchExpand: (text) => req('/batch/expand', json('POST', { text })),
   uploadJob: (file, num_clips, mode, topic = '', hinglish = true) => {
     const fd = new FormData()
     fd.append('file', file)

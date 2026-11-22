@@ -29,6 +29,9 @@ backend/                FastAPI + pipeline (Python 3.11, conda env "clipforge")
                         full metadata once via download.fetch_meta (no download). `python -m app.library` rebuilds
                         Library.lookup(url) / GET /api/library/lookup: earlier jobs for the same video (video_key = YouTube
                         id, any link form) → "worked on this before" notice on the New job form
+  app/watch.py          WATCH_DIR (off by default): Watcher scans every WATCH_INTERVAL s; a video whose size+mtime held
+                        still over two scans is copied into a new job (WATCH_CLIPS/MODE/TOPIC); data/watched.json
+                        remembers what was taken (a changed file is taken again). Never moves/deletes your files
   app/cli.py            `python -m app.cli <url|file> --clips N`
   app/eval.py           `python -m app.eval <job> --model A --model B --prompt f.txt --think on/off` → data/evals/
                         (compares selection variants on one transcript; summarize() is pure + tested)
@@ -43,6 +46,10 @@ backend/                FastAPI + pipeline (Python 3.11, conda env "clipforge")
                         3 angles, one Hinglish) → search_many() round-robin merge (found_by); POST /discover/judge →
                         judge() rates the top 6 by keyword score 1-10 from ~1 min of captions per moment (best moment,
                         why). Both take GPU_LOCK like hooks (409 while a job runs → UI falls back to plain search)
+    batch.py            New job → Batch: expand(text) = links → videos (playlists/channels listed flat via
+                        discover._extract, channel → /videos; private/live skipped; same video once; MAX_VIDEOS=50).
+                        POST /batch/expand (+ done count) → tick → POST /jobs/batch = one job each, queued in order.
+                        Find videos: tick "batch" on results → "Queue N as a batch" hands them to this tab
     download.py         yt-dlp, cookies support, progress hook; meta.json = video_meta() (channel, upload date,
                         views, tags, …; meta_version 2); transcribe writes transcript_info.json (spoken language)
     transcribe.py       faster-whisper, caches transcript.json, frees VRAM after; preloads cuBLAS from the pip wheel
@@ -141,7 +148,9 @@ publish: PATCH post {status, url}: posted_at set on → posted (cleared when it 
   after acquiring `GPU_LOCK`, so neither can overwrite the other. Deleting a busy job → 409.
 - produce() never overwrites existing posts (hand edits survive); only renders clips with no file or `stale`.
 - A failed produce/render restores the previous status (review/done) with `error` — never loses edits.
-- Server restart mid-produce → job returns to `review` (clips kept); mid-prepare → `failed`.
+- Server restart mid-produce → job returns to `review` (clips kept); mid-prepare → `failed`. Jobs still waiting
+  (queued, no clips — a batch) stay queued: create_app re-submits `store.waiting()` oldest first.
+- A waiting job (queued, no clips) can be deleted = removed from the queue; the worker skips a job that's gone.
 - `failed` → POST /retry → queued: same folder, so a finished download/transcript is reused (uploads re-run
   from their saved source.mp4; 409 if it's gone). Body `{"topic": ...}` changes the topic first ("" = none).
 - UI cache-busting: rendered files are requested with `?v=<clip.version>`.
@@ -320,5 +329,5 @@ Keep it local: no cloud stock/B-roll/TTS APIs.
 20. [ ] H. Brand kit: logo watermark, end card with CTA.
 21. [ ] I. Multi-aspect export: 1:1 and 4:5 alongside 9:16.
 22. [x] L. Several title/hook variants to choose from.
-23. [ ] N. Batch: a playlist or a watched folder as a queue of jobs.
+23. [x] N. Batch: several links / a playlist / a channel / Find-videos picks as a queue of jobs; watched folder.
 (M = Hinglish/bilingual captions → item 10; O = calendar + auto-publish → items 9 and 11.)

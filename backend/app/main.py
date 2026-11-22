@@ -15,8 +15,10 @@ from fastapi.responses import FileResponse, StreamingResponse
 from .config import settings
 from .events import job_events
 from .jobs import GPU_LOCK, JobStore, Worker
-from .library import XLSX, Library, windows_path
+from .library import XLSX, Library, video_key, windows_path
 from .models import (
+    BatchCreate,
+    BatchLinks,
     BrandVoice,
     Clip,
     ClipAdd,
@@ -40,7 +42,7 @@ from .models import (
     Vocabulary,
     WordEdit,
 )
-from .pipeline import cover, discover, hinglish, quote, transcript_edit, vocabulary, voice, waveform
+from .pipeline import batch, cover, discover, hinglish, quote, transcript_edit, vocabulary, voice, waveform
 from .pipeline.content import ANGLES, NAMES, ContentContext, clip_text, generate_post, load_meta, write_posts_md
 from .pipeline.export import build_pack
 from .pipeline.history import get_history
@@ -49,6 +51,7 @@ from .pipeline.jumpcut import clean_removed
 from .pipeline.llm import OllamaClient
 from .pipeline.presets import POSITIONS, all_presets, get_preset
 from .pipeline.reframe import people
+from .watch import Watcher
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 
@@ -60,16 +63,34 @@ def create_app(pipeline=None, start_worker: bool = True, llm_factory=OllamaClien
     worker = Worker(store, pipeline, steps)
     library = Library(store, fetch_meta=settings.library_fetch_meta)
     store.listeners.append(library.touch)
+    watcher = Watcher(store, worker.submit)
+
+    def source_for(job: Job) -> str | None:
+        """What the worker downloads/reads for a new job: its link, or the uploaded copy in its folder."""
+        if job.source.startswith(("http://", "https://")):
+            return job.source
+        upload = store.dir(job.id) / "source.mp4"
+        return str(upload) if upload.is_file() else None
+
+    for job in store.waiting():  # a batch queued before a restart carries on, in the same order
+        src = source_for(job)
+        if src:
+            worker.submit(job.id, src)
+        else:
+            store.update(job.id, status=JobStatus.failed, error="Interrupted by server restart (upload incomplete)")
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
         if start_worker:
             worker.start()
             library.start()
+            watcher.start()
         yield
+        watcher.stop()
 
     app = FastAPI(title="ClipForge", version="0.1.0", lifespan=lifespan)
     app.state.store, app.state.worker, app.state.library = store, worker, library
+    app.state.watcher = watcher
     app.add_middleware(CORSMiddleware, allow_origins=["http://localhost:5173"],
                        allow_methods=["*"], allow_headers=["*"])
 
@@ -129,6 +150,32 @@ def create_app(pipeline=None, start_worker: bool = True, llm_factory=OllamaClien
         job = store.create(body.url, body.num_clips, body.mode, body.topic, hinglish=hinglish)
         worker.submit(job.id, body.url)
         return job
+
+    @app.post("/api/batch/expand")
+    def batch_expand(body: BatchLinks) -> dict:
+        """Pasted links → the videos they stand for (playlists/channels listed, no download) + "done before"."""
+        out = batch.expand(body.text)
+        for v in out["videos"]:
+            v["done"] = len(library.lookup(v["url"]))
+        return out
+
+    @app.post("/api/jobs/batch", status_code=201)
+    def create_batch(body: BatchCreate) -> dict:
+        """One job per link, same settings, queued in order — the single worker runs them one after another."""
+        urls, seen = [], set()
+        for u in (x.strip() for x in body.urls):
+            if not u.startswith(("http://", "https://")):
+                raise HTTPException(400, f"not a link: {u[:80]}")
+            if video_key(u) not in seen:
+                seen.add(video_key(u))
+                urls.append(u)
+        hinglish = settings.hinglish_default if body.hinglish is None else body.hinglish
+        jobs = []
+        for u in urls:
+            job = store.create(u, body.num_clips, body.mode, body.topic, hinglish=hinglish)
+            worker.submit(job.id, u)
+            jobs.append(job)
+        return {"jobs": jobs}
 
     @app.post("/api/jobs/upload", response_model=Job, status_code=201)
     def upload_job(file: UploadFile = File(...), num_clips: int = Form(5), mode: JobMode = Form(JobMode.review),
@@ -201,7 +248,8 @@ def create_app(pipeline=None, start_worker: bool = True, llm_factory=OllamaClien
         job = store.get(job_id)
         if not job:
             raise HTTPException(404, "job not found")
-        if job.status in (JobStatus.queued, JobStatus.running):
+        waiting = job.status == JobStatus.queued and not job.clips  # never started: cancel it (worker skips it)
+        if job.status in (JobStatus.queued, JobStatus.running) and not waiting:
             raise HTTPException(409, "job is busy — wait until it finishes before deleting it")
         store.delete(job_id)
 

@@ -14,6 +14,13 @@ class Settings(BaseSettings):
     library_dir: Path | None = None
     library_fetch_meta: bool = True  # look up full YouTube metadata (no download) for jobs that lack it
     hinglish_default: bool = True  # new jobs: Hindi speech → transcript/captions in Latin letters (hinglish.py)
+    # Watched folder (watch.py): every video dropped here becomes a job. Off unless set, e.g.
+    # WATCH_DIR=/mnt/c/Users/<you>/Videos/ClipForge inbox. Files are copied, never moved or deleted.
+    watch_dir: Path | None = None
+    watch_interval: float = 30.0  # seconds between scans
+    watch_clips: int = 5
+    watch_mode: str = "review"  # review | auto
+    watch_topic: str = ""
 
     # LLM (Gemma via Ollama)
     ollama_url: str = "http://localhost:11434"

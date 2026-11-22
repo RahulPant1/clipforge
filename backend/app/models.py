@@ -124,6 +124,18 @@ class JobCreate(BaseModel):
     hinglish: bool | None = None  # Hindi speech → Latin letters; None = settings.hinglish_default
 
 
+class BatchCreate(BaseModel):
+    urls: list[str] = Field(min_length=1, max_length=50)  # one job each, same settings, queued in this order
+    num_clips: int = Field(default=5, ge=1, le=20)
+    mode: JobMode = JobMode.review
+    topic: str = Field(default="", max_length=200)
+    hinglish: bool | None = None
+
+
+class BatchLinks(BaseModel):
+    text: str = Field(min_length=1, max_length=20000)  # pasted links: videos, playlists, channels
+
+
 class ScriptChoice(BaseModel):
     hinglish: bool  # True: transcript in Latin letters; False: back to Whisper's Devanagari
 

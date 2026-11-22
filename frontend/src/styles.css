@@ -429,3 +429,23 @@ aside { min-width: 0; }  /* a long History path must shrink (ellipsis), not wide
 .find-why { font-size: 13px; color: var(--text); }
 .find-moments a.best { font-weight: 600; }
 .fbadge.gemma { font-weight: 600; }
+
+/* New job → Batch */
+.batch { display: flex; flex-direction: column; gap: 8px; }
+.batch textarea { min-height: 90px; font-size: 13px; }
+.batch-bar, .find-queue { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; }
+.batch-bar .grow, .find-queue .grow { flex: 1; }
+.batch-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px;
+  max-height: 360px; overflow-y: auto; }
+.batch-list li { padding: 6px 8px; border: 1px solid var(--line); border-radius: 8px; }
+.batch-list li.off { opacity: 0.55; }
+.batch-list .checkline { align-items: center; }
+.batch-list img { width: 64px; aspect-ratio: 4 / 3; object-fit: cover; border-radius: 4px; flex: none; }
+.batch-name { display: flex; flex-direction: column; min-width: 0; flex: 1; }
+.batch-name a { color: var(--text); text-decoration: none; overflow-wrap: anywhere; }
+.find-queue { position: sticky; top: 0; z-index: 2; padding: 8px 10px; border-radius: 10px;
+  background: var(--panel); border: 1px solid var(--info); }
+.find.picked { border-color: var(--info); }
+.find-acts { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; }
+.find-acts .checkline { font-size: 12px; }
+@media (max-width: 700px) { .find-acts { flex-direction: row; align-items: center; justify-content: space-between; } }

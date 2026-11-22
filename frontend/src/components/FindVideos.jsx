@@ -20,7 +20,7 @@ function scoreClass(s) {
 
 // New job → "Find videos": YouTube search for a topic, long-form only, optional Creative Commons filter,
 // each result scored by its captions (how much of it is about the topic, and where)
-export default function FindVideos({ initialTopic = '', onUse }) {
+export default function FindVideos({ initialTopic = '', onUse, onQueue }) {
   const [topic, setTopic] = useState(initialTopic)
   const [cc, setCc] = useState(true)
   const [smart, setSmart] = useState(false) // Gemma: better searches + judges the best moments
@@ -33,6 +33,9 @@ export default function FindVideos({ initialTopic = '', onUse }) {
   const [state, setState] = useState('') // '' | searching | scoring | done
   const [err, setErr] = useState('')
   const run = useRef(0) // a newer search cancels the scoring of an older one
+  const [picked, setPicked] = useState({}) // id -> result, ticked for the batch queue
+  const pick = (r) => setPicked((x) => { const y = { ...x }; if (y[r.id]) delete y[r.id]; else y[r.id] = r; return y })
+  const picks = Object.values(picked)
 
   const search = async () => {
     const t = topic.trim()
@@ -154,12 +157,25 @@ export default function FindVideos({ initialTopic = '', onUse }) {
           {cc ? ' or untick Creative Commons' : ''}.</p>
       )}
 
+      {picks.length > 0 && (
+        <div className="find-queue">
+          <b>{picks.length} ticked</b>
+          <button type="button" className="linkbtn" onClick={() => setPicked({})}>untick</button>
+          <span className="grow" />
+          <button type="button" className="primary" onClick={() => onQueue(picks.map((r) => ({
+            id: r.id, url: r.url, title: r.title, channel: r.channel, duration: r.duration, done: r.done,
+            from: `search “${topic.trim()}”` })), topic.trim())}>
+            Queue {picks.length} as a batch →
+          </button>
+        </div>
+      )}
+
       <div className="finds">
         {(list || []).map((r) => {
           const s = scores[r.id]
           const g = judged[r.id]
           return (
-            <div key={r.id} className="find">
+            <div key={r.id} className={`find ${picked[r.id] ? 'picked' : ''}`}>
               <a href={r.url} target="_blank" rel="noreferrer" className="find-thumb">
                 <img src={r.thumbnail} alt="" loading="lazy" />
                 <span>{fmt(r.duration)}</span>
@@ -201,7 +217,12 @@ export default function FindVideos({ initialTopic = '', onUse }) {
                   </span>
                 )}
               </div>
-              <button type="button" className="btn" onClick={() => onUse(r.url, topic.trim())}>Use this video</button>
+              <span className="find-acts">
+                <button type="button" className="btn" onClick={() => onUse(r.url, topic.trim())}>Use this video</button>
+                <label className="checkline small" title="Tick several, then queue them all as one batch">
+                  <input type="checkbox" checked={!!picked[r.id]} onChange={() => pick(r)} /> batch
+                </label>
+              </span>
             </div>
           )
         })}

@@ -61,5 +61,6 @@ export const api = {
   fileUrl: (id, name, v) => `/api/jobs/${id}/files/${name}${v ? `?v=${v}` : ''}`,
   exportUrl: (id) => `/api/jobs/${id}/export.zip`,
   library: () => req('/library'),
+  lookup: (url) => req(`/library/lookup?url=${encodeURIComponent(url)}`),
   historyUrl: () => '/api/library/history.xlsx',
 }

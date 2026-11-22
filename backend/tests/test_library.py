@@ -167,3 +167,40 @@ def test_windows_path(path, expected):
 
     assert lib.windows_path(Path(path)) == expected
 
+
+@pytest.mark.parametrize("url", ["https://www.youtube.com/watch?v=lriCkWIHEHs", "https://youtu.be/lriCkWIHEHs?si=abc",
+                                 "https://www.youtube.com/watch?app=desktop&v=lriCkWIHEHs&t=42s",
+                                 "https://m.youtube.com/shorts/lriCkWIHEHs", "https://www.youtube.com/embed/lriCkWIHEHs"])
+def test_any_link_form_is_the_same_video(url):
+    assert lib.video_key(url) == "yt:lriCkWIHEHs"
+
+
+def test_lookup_finds_live_and_deleted_jobs_for_the_video(tmp_path):
+    store = JobStore(tmp_path / "data")
+    old = _job(store)
+    library = lib.Library(store, root=tmp_path / "lib", fetch_meta=False)
+    store.listeners.append(library.touch)
+    library.touch(old.id)
+    library.flush()
+    store.delete(old.id)
+    library.flush()
+    live = _job(store)
+    store.update(live.id, created_at=datetime(2026, 11, 21, tzinfo=UTC))
+    store.create("https://www.youtube.com/watch?v=someOtherVid", 1)
+
+    found = library.lookup("https://youtu.be/lriCkWIHEHs")
+    assert [(m["id"], m["exists"]) for m in found] == [(live.id, True), (old.id, False)]  # newest first
+    assert found[0]["shorts"] == ["God's Eye View / Your Life"] and found[0]["posted"] == 1
+    assert found[1]["status"] == "deleted" and found[1]["folder_kept"] and found[1]["shorts"]
+    assert library.lookup("https://www.youtube.com/watch?v=neverDoneIt") == []
+    assert library.lookup("not a url") == []
+
+
+def test_api_lookup(tmp_path):
+    from app.main import create_app
+
+    app = create_app(pipeline=lambda *a, **k: [], start_worker=False)
+    job = _job(app.state.store)
+    with TestClient(app) as c:
+        r = c.get("/api/library/lookup", params={"url": "https://youtu.be/lriCkWIHEHs"}).json()
+        assert [m["id"] for m in r["matches"]] == [job.id] and r["matches"][0]["exists"]

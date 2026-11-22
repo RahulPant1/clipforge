@@ -112,6 +112,7 @@ export default function App() {
                 setSelectedId(job.id)
                 changed()
               }}
+              onOpen={setSelectedId}
             />
           )}
         </section>

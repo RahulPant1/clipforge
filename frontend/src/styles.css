@@ -369,3 +369,10 @@ input:focus, textarea:focus { outline: none; border-color: #4a5164; }
   border: 1px solid var(--line); border-radius: 10px; font-size: 13px; }
 .checkline { display: flex; align-items: flex-start; gap: 8px; font-size: 14px; cursor: pointer; }
 .checkline input { margin-top: 3px; }
+
+/* New job: this video was done before */
+.seen { border: 1px solid #b8860b; background: rgba(184, 134, 11, 0.08); border-radius: 10px; padding: 10px 12px;
+  display: flex; flex-direction: column; gap: 6px; font-size: 13px; }
+.seen ul { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 6px; }
+.seen li { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.seen li > span { min-width: 0; overflow-wrap: anywhere; }

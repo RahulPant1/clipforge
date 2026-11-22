@@ -519,6 +519,11 @@ def create_app(pipeline=None, start_worker: bool = True, llm_factory=OllamaClien
         root = library.root.resolve()
         return {"dir": str(root), "xlsx": str(root / XLSX), "windows_dir": windows_path(root)}
 
+    @app.get("/api/library/lookup")
+    def library_lookup(url: str) -> dict:
+        """Has this video been done before? Earlier jobs for the same video (any link form), newest first."""
+        return {"matches": library.lookup(url)}
+
     @app.get("/api/library/history.xlsx")
     def library_xlsx() -> FileResponse:
         library.flush()  # anything saved in the last couple of seconds

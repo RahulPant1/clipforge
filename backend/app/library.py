@@ -82,6 +82,19 @@ def moment_url(url: str, start: float) -> str:
     return f"{url}{'&' if '?' in url else '?'}t={int(start)}s"
 
 
+_YT_ID = re.compile(r"(?:[?&]v=|youtu\.be/|/shorts/|/embed/|/live/|/v/)([\w-]{11})")
+
+
+def video_key(url: str) -> str:
+    """Same video, whatever the link looks like: YouTube by its 11-char id (watch?v=, youtu.be/, /shorts/, …),
+    anything else by the URL without query/fragment."""
+    url = (url or "").strip()
+    m = _YT_ID.search(url)
+    if m:
+        return f"yt:{m[1]}"
+    return re.sub(r"[?#].*$", "", url).rstrip("/").lower()
+
+
 def folder_name(job: Job, meta: dict) -> str:
     day = f"{job.created_at.astimezone():%Y-%m-%d}"
     title = safe_name(meta.get("title") or Path(job.source).stem or job.source, 80)
@@ -138,6 +151,39 @@ class Library:
                 self.flush()
             except Exception:  # the history must never take the app down
                 log.exception("library: update failed")
+
+    # ---------------------------------------------------------------- "worked on this before?"
+
+    def lookup(self, url: str) -> list[dict]:
+        """Every earlier job for this video, newest first — live jobs from the store, deleted ones from the history."""
+        key = video_key(url)
+        if not key or not url.startswith(("http://", "https://")):
+            return []
+        out: dict[str, dict] = {}
+        for job in self.store.list():
+            if video_key(job.source) == key:
+                made = [c for c in job.clips if c.file]
+                out[job.id] = {
+                    "id": job.id, "processed": job.created_at.isoformat(), "status": job.status.value,
+                    "topic": job.topic, "candidates": len(job.clips), "shorts": [c.title for c in made],
+                    "posted": sum(p.status == "posted" for c in made for p in c.content.values()),
+                    "exists": True, "folder": None}
+        for rec in _read_json(self.root / RECORD).values():
+            m = rec.get("meta", {})
+            if video_key(m.get("url") or rec.get("source", "")) != key:
+                continue
+            if rec["id"] in out:
+                out[rec["id"]]["folder"] = rec.get("folder")
+                out[rec["id"]]["title"] = m.get("title")
+                continue
+            out[rec["id"]] = {
+                "id": rec["id"], "processed": rec.get("processed"), "status": rec.get("status"),
+                "topic": rec.get("topic", ""), "candidates": rec.get("candidates", 0),
+                "shorts": [s["title"] for s in rec.get("shorts", [])],
+                "posted": sum(v == "posted" for s in rec.get("shorts", []) for v in s.get("status", {}).values()),
+                "exists": False, "folder": rec.get("folder"), "title": m.get("title"),
+                "folder_kept": bool(rec.get("folder")) and (self.root / rec["folder"]).is_dir()}
+        return sorted(out.values(), key=lambda r: r.get("processed") or "", reverse=True)
 
     # ---------------------------------------------------------------- syncing
 

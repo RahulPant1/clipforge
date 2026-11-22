@@ -27,6 +27,8 @@ backend/                FastAPI + pipeline (Python 3.11, conda env "clipforge")
                         "ClipForge history.xlsx" (Videos + Shorts sheets) from history.json. Debounced thread fed by
                         JobStore.listeners (Library.touch); busy jobs wait; deleted jobs stay (marked); old jobs get
                         full metadata once via download.fetch_meta (no download). `python -m app.library` rebuilds
+                        Library.lookup(url) / GET /api/library/lookup: earlier jobs for the same video (video_key = YouTube
+                        id, any link form) → "worked on this before" notice on the New job form
   app/cli.py            `python -m app.cli <url|file> --clips N`
   app/eval.py           `python -m app.eval <job> --model A --model B --prompt f.txt --think on/off` → data/evals/
                         (compares selection variants on one transcript; summarize() is pure + tested)

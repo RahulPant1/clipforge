@@ -3,7 +3,36 @@ import { api } from '../api.js'
 
 const FLOW = ['Source', 'Transcript', 'Pick clips', 'Shorts', 'Posts', 'Publish']
 
-export default function NewJob({ onCreated }) {
+const STATUS = { done: 'done', review: 'in review', failed: 'failed', running: 'running', queued: 'queued',
+  deleted: 'deleted' }
+
+// "You've done this video before": earlier jobs for the same video (any link form), from jobs + history
+function SeenBefore({ matches, onOpen }) {
+  if (!matches.length) return null
+  return (
+    <div className="seen">
+      <b>⚠ You've worked on this video before{matches[0].title ? <> — “{matches[0].title}”</> : ''}</b>
+      <ul>
+        {matches.map((m) => (
+          <li key={m.id}>
+            <span>
+              {new Date(m.processed).toLocaleDateString()} · {STATUS[m.status] || m.status}
+              {m.topic && <> · topic “{m.topic}”</>} · <b>{m.shorts.length} short{m.shorts.length === 1 ? '' : 's'}</b>
+              {m.posted > 0 && <> · {m.posted} posted</>}
+              {m.shorts.length > 0 && <span className="muted"> — {m.shorts.slice(0, 3).join(' · ')}
+                {m.shorts.length > 3 && ` +${m.shorts.length - 3}`}</span>}
+              {!m.exists && m.folder_kept && <span className="muted"> · files kept in the History folder</span>}
+            </span>
+            {m.exists && <button type="button" className="btn" onClick={() => onOpen(m.id)}>Open</button>}
+          </li>
+        ))}
+      </ul>
+      <span className="muted small">You can still start a new job for it.</span>
+    </div>
+  )
+}
+
+export default function NewJob({ onCreated, onOpen }) {
   const [kind, setKind] = useState('url')
   const [url, setUrl] = useState('')
   const [file, setFile] = useState(null)
@@ -15,6 +44,14 @@ export default function NewJob({ onCreated }) {
   const [err, setErr] = useState('')
   const [vocab, setVocab] = useState('') // names & terms for Whisper, remembered for all jobs
   const [vocabSaved, setVocabSaved] = useState('')
+  const [seen, setSeen] = useState([]) // earlier jobs for the pasted link
+
+  useEffect(() => {
+    const u = url.trim()
+    if (kind !== 'url' || !u.startsWith('http')) return setSeen([])
+    const t = setTimeout(() => api.lookup(u).then((r) => setSeen(r.matches)).catch(() => setSeen([])), 350)
+    return () => clearTimeout(t)
+  }, [url, kind])
 
   useEffect(() => {
     api.vocabulary().then((v) => {
@@ -78,6 +115,7 @@ export default function NewJob({ onCreated }) {
         ) : (
           <input type="file" accept="video/*" onChange={(e) => setFile(e.target.files?.[0] || null)} />
         )}
+        {kind === 'url' && <SeenBefore matches={seen} onOpen={onOpen} />}
 
         <label className="row">
           Shorts you want

@@ -65,6 +65,7 @@ export const api = {
   produce: (id) => req(`/jobs/${id}/produce`, { method: 'POST' }),
   hookVariants: (id, index) => req(`/jobs/${id}/clips/${index}/hooks`, { method: 'POST' }),
   people: (id, index) => req(`/jobs/${id}/clips/${index}/people`),
+  crop: (id, index) => req(`/jobs/${id}/clips/${index}/crop`),
   coverFrames: (id, index) => req(`/jobs/${id}/clips/${index}/cover/frames`),
   editCover: (id, index, body) => req(`/jobs/${id}/clips/${index}/cover`, json('POST', body)),
   editQuote: (id, index, text) => req(`/jobs/${id}/clips/${index}/quote`, json('POST', { text })),

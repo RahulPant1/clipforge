@@ -130,6 +130,9 @@ class Settings(BaseSettings):
     sfx_pop_db: float = -12.0
     music_lufs: float = -30.0  # every track is loudness-normalised to this (speech sits ~-16), then ducked ~7-10 dB
                                # under speech — the file's own loudness doesn't matter
+    # Colour emoji (emoji.py, Noto Color Emoji downloaded once to data/emoji): one above a caption line when a word
+    # has one (or you typed one into the transcript) + the hook emoji above the hook card. Per short (Shorts step).
+    caption_emoji: bool = False
     # Feed versions (render.ASPECTS): besides the 9:16 short, also render "4:5" (Instagram feed, LinkedIn) and/or
     # "1:1" (X, LinkedIn) — own face-tracked crop (wider: more of the scene), captions/hook/logo re-placed.
     # Comma list for new shorts, e.g. EXTRA_ASPECTS=4:5 ; each short can switch them in the Shorts step.

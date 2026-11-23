@@ -484,3 +484,24 @@ aside { min-width: 0; }  /* a long History path must shrink (ellipsis), not wide
 }
 .opt select { max-width: 60%; font-size: 12px; padding: 3px 6px; background: var(--panel); color: var(--text);
   border: 1px solid var(--line); border-radius: 8px; }
+
+/* modal + crop editor */
+.modal-bg { position: fixed; inset: 0; z-index: 50; background: rgba(0, 0, 0, 0.6); display: grid; place-items: center; padding: 16px; }
+.modal { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 16px; width: min(960px, 100%); max-height: calc(100vh - 32px); overflow: auto; display: flex; flex-direction: column; gap: 10px; box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5); }
+.modal-head { display: flex; justify-content: space-between; align-items: center; }
+.modal-head h3 { margin: 0; }
+.crop-stage { position: relative; width: 100%; max-height: 62vh; overflow: hidden; border-radius: 8px; background: #000; cursor: ew-resize; touch-action: none; user-select: none; }
+.crop-stage video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: fill; pointer-events: none; }
+.crop-rect { position: absolute; top: 0; bottom: 0; border: 2px solid var(--accent); box-shadow: 0 0 0 4000px rgba(0, 0, 0, 0.55); border-radius: 2px; pointer-events: none; }
+.crop-rect.dragging { border-color: #fff; }
+.crop-feed { position: absolute; top: 0; bottom: 0; border: 1px dashed rgba(255, 255, 255, 0.55); pointer-events: none; }
+.crop-feed span { position: absolute; top: 4px; left: 4px; font-size: 11px; color: rgba(255, 255, 255, 0.8); }
+.crop-time { display: flex; align-items: center; gap: 10px; }
+.crop-track { position: relative; flex: 1; }
+.crop-track input { width: 100%; }
+.crop-key { position: absolute; top: -10px; width: 10px; height: 10px; margin-left: -5px; padding: 0; border-radius: 2px; transform: rotate(45deg); background: var(--accent); border: 1px solid var(--bg); cursor: pointer; }
+.crop-key.pan { background: #7dd3fc; }
+.crop-key.on { outline: 2px solid #fff; }
+.crop-bar, .crop-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.crop-actions .grow { flex: 1; }
+.mono { font-variant-numeric: tabular-nums; }

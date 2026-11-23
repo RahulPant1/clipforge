@@ -106,3 +106,43 @@ export const FEED = {
   '1:1': { suffix: '.11', ratio: '1 / 1', use: 'X, LinkedIn' },
 }
 export const feedFile = (index, aspect) => `short_${index}${FEED[aspect].suffix}.mp4`
+
+// Hand-set crop (backend reframe.manual_path): keys {t SOURCE s, x centre 0..1, pan}. A key holds until the next
+// one; a pan key glides there from the previous key. Before the first key, the first key's x.
+export function cropAt(keys, t) {
+  if (!keys.length) return 0.5
+  const ks = [...keys].sort((a, b) => a.t - b.t)
+  let i = -1
+  while (i + 1 < ks.length && ks[i + 1].t <= t) i++
+  if (i < 0) return ks[0].x
+  const next = ks[i + 1]
+  if (next && next.pan && next.t > ks[i].t) return ks[i].x + (next.x - ks[i].x) * (t - ks[i].t) / (next.t - ks[i].t)
+  return ks[i].x
+}
+
+// Where the last render's tracker had the crop at `t` (tracked = [[t, x], …] per change)
+export function trackedAt(tracked, t) {
+  let x = tracked.length ? tracked[0][1] : 0.5
+  for (const [tt, xx] of tracked) { if (tt > t) break; x = xx }
+  return x
+}
+
+// Starting keys from the tracker: where the clip begins + every jump (a cut), so a hand fix keeps the rest
+export function seedKeys(tracked, start, jump = 0.06, max = 30) {
+  if (!tracked.length) return []
+  const keys = [{ t: start, x: trackedAt(tracked, start), pan: false }]
+  for (let i = 1; i < tracked.length && keys.length < max; i++) {
+    if (tracked[i][0] > start && Math.abs(tracked[i][1] - tracked[i - 1][1]) > jump) {
+      keys.push({ t: tracked[i][0], x: tracked[i][1], pan: false })
+    }
+  }
+  return keys
+}
+
+// Set the crop at `t`: moves a key within `near` s, else adds one there
+export function upsertKey(keys, t, x, near = 0.15) {
+  const r = (v) => Math.round(v * 1000) / 1000
+  const hit = keys.find((k) => Math.abs(k.t - t) < near)
+  if (hit) return keys.map((k) => (k === hit ? { ...k, x: r(x) } : k))
+  return [...keys, { t: r(t), x: r(x), pan: false }].sort((a, b) => a.t - b.t)
+}

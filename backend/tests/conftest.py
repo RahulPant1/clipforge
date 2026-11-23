@@ -39,6 +39,13 @@ def _offline_defaults(monkeypatch, tmp_path):
 
     monkeypatch.setattr(cutout, "_mask", _no_cutout)
     cutout._cache.clear()
+    from app.pipeline import emoji
+
+    def _no_download(dest):  # never fetch the emoji font in tests (test_emoji fakes the drawing)
+        raise RuntimeError("no downloads in tests")
+
+    monkeypatch.setattr(emoji, "_download", _no_download)
+    monkeypatch.setattr(emoji, "SYSTEM_FONTS", [])
 
 
 @pytest.fixture

@@ -89,6 +89,11 @@ backend/                FastAPI + pipeline (Python 3.11, conda env "clipforge")
                         no face anywhere → mode "fit". REFRAME_NO_FACE=crop restores centre crop. Covers do the same.
                         options.follow (x of a face from people()) → pick_face tracks only that person (FOLLOW_RADIUS,
                         holds when they're out of frame) in "face" mode, whatever the framing says except "center"
+                        reframe="manual" + options.crop_keys (CropKey: SOURCE t, centre x, pan) → manual_path() (a key
+                        holds until the next = cut; pan=True glides from the previous) → same sendcmd crop, no face
+                        detection. No key inside the clip → auto. GET /clips/{i}/crop: sizes, crop width per format,
+                        tracked_path() (last render's .crop.cmd) → CropEditor.jsx (modal; cropAt/seedKeys/upsertKey
+                        in util.js mirror manual_path)
     content.py          Content Studio: ANGLES (creative styles per platform), RULES, SCHEMAS, PROMPT,
                         plain() strips markdown/LaTeX Gemma writes (**bold**, $\rightarrow$) from every field,
                         assemblers enforcing platform limits, generate_post/generate_all, posts.md writer
@@ -124,6 +129,13 @@ backend/                FastAPI + pipeline (Python 3.11, conda env "clipforge")
     quote.py            quote cards short_N.quote.png (1:1, X) + .quote45.png (4:5, LinkedIn/IG): pick_quote() = a
                         sentence said in the clip (keywords/hook/number, 6-24 words, struck words excluded — never model
                         text); quote_custom keeps your own line. Credits the source video, not a person
+    emoji.py            colour emoji as PNG overlays (libass is monochrome): Noto Color Emoji (OFL) in data/emoji
+                        (system font, else downloaded once; no font → no emoji, render unchanged) → png(e, px) cached.
+                        caption_events(): one per caption line — typed into the transcript first, else MAP / data/
+                        emoji_map.json word (keywords first), ≥ SPACING apart, ≤ MAX; hook_emoji() above the hook card
+                        (top layout only). render.place_emoji() mirrors the ASS placement (margins, measured wrap);
+                        overlays go after captions/hook, before logo/end card. options.emoji / CAPTION_EMOJI. Tests:
+                        conftest blocks _download; test_emoji_crop fakes font_path/_render
     waveform.py         Pick timeline: loudness 0-100 at 20/s from one chunked ffmpeg PCM pass → waveform.json
     export.py           export pack zip (shorts, srt, posts, carousels, titles.csv)
     render.py           plan_cuts + plan_reframe → captions → ffmpeg
@@ -321,8 +333,7 @@ publish: PATCH post {status, url}: posted_at set on → posted (cleared when it 
        [ ] still open: audio-event cues (cheering/laughter/explosions) and beat-synced cut points for music.
 4. [x] Caption presets (`presets.py`: classic = CAPTION_* settings, punch/clean/boxed/neon, custom JSON; per-clip
        `options.caption_preset` / `caption_position` bottom|middle; chips with live CSS previews in ShortsStep).
-   [ ] Emoji per line (needs colour-emoji capable renderer —
-       libass draws monochrome; overlay PNG emoji via ffmpeg overlay instead).
+   [x] Emoji per line: PNG overlays from Noto Color Emoji (emoji.py, = item 18).
 5. [x] **Re-render / edit** — UI to nudge start/end ±seconds and re-render a single clip (shipped in v0.5).
 6. [x] **SSE progress** instead of polling (`/api/events` for the UI, `/api/jobs/{id}/events` per job).
 6b.[x] Pick step timeline: waveform (`waveform.py`, cached waveform.json) with drag handles (snap to sentence edges +
@@ -345,8 +356,8 @@ Keep it local: no cloud stock/B-roll/TTS APIs.
 15. [x] E. Sound design: whoosh on cuts, pop on keywords, background music auto-ducked under speech
         (ffmpeg sidechaincompress) from a local sound folder.
 16. [x] K. Reel/Shorts cover image: `cover_text` (already generated) on the best frame (Pillow).
-17. [x] D. Reframe override: pick which face to follow (Shorts step). [ ] still open: crop keyframes dragged by hand.
-18. [ ] F. Colour emoji as PNG overlays (libass is monochrome) + optional auto-emoji per caption line (= roadmap 4).
+17. [x] D. Reframe override: pick which face to follow (Shorts step); crop keyframes dragged by hand (✋ Adjust crop).
+18. [x] F. Colour emoji as PNG overlays (libass is monochrome) + optional auto-emoji per caption line (= roadmap 4).
 19. [ ] G. B-roll from your own folder, matched to the clip by Gemma keywords.
 20. [x] H. Brand kit: logo watermark, end card with CTA, brand colour (covers/quotes/carousels/captions).
 21. [x] I. Multi-aspect export: 1:1 and 4:5 alongside 9:16 (own face-tracked crop, captions re-placed).

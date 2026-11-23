@@ -66,7 +66,7 @@ def fit_graph(inp: str = "", out: str = "", size: tuple[int, int] = (1080, 1920)
 
 @dataclass
 class ReframePlan:
-    mode: str  # "face" | "split" | "speaker" | "center" | "fit" | "none" (source already vertical)
+    mode: str  # "face" | "split" | "speaker" | "manual" | "center" | "fit" | "none" (source already vertical)
     src_w: int
     src_h: int
     crop_w: int
@@ -91,7 +91,7 @@ class ReframePlan:
             size = f"scale={w}:{h // 2},setsar=1"
             return [f"split[sp0][sp1];[sp0]crop={w0}:{h0}:{x0}:{y0},{size}[spt];"
                     f"[sp1]crop={w1}:{h1}:{x1}:{y1},{size}[spb];[spt][spb]vstack"]
-        if self.mode in ("face", "speaker") and self.keyframes and cmd_file:
+        if self.mode in ("face", "speaker", "manual") and self.keyframes and cmd_file:
             x0 = self.keyframes[0][1]
             return [f"sendcmd=f={cmd_file}", f"crop@track={self.crop_w}:{self.src_h}:{x0}:0"]
         # centre crop to the canvas shape; a source narrower than it (vertical video → 4:5) loses top and bottom,
@@ -639,19 +639,62 @@ def _cached_samples(video: Path, start: float, end: float, detector: FaceDetecto
     return _samples_cache["value"]
 
 
+def tracked_path(job_dir: Path, name: str, src_w: int, crop_w: int, start: float) -> list[tuple[float, float]]:
+    """Where the last render's crop sat — (SOURCE t, centre x 0..1) per change, from its sendcmd file — so the
+    crop editor can show the tracker's choice and start from it. [] if that render had no moving crop."""
+    f = job_dir / f"{name}.crop.cmd"
+    if not f.is_file() or not src_w:
+        return []
+    out = []
+    for line in f.read_text(encoding="utf-8").splitlines():
+        parts = line.rstrip(";").split()
+        if len(parts) == 4 and parts[1] == "crop@track":
+            out.append((round(start + float(parts[0]), 3), round((int(parts[3]) + crop_w / 2) / src_w, 4)))
+    return out
+
+
+def source_size(video: Path) -> tuple[int, int]:
+    import cv2
+
+    cap = cv2.VideoCapture(str(video))
+    size = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)), int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    cap.release()
+    return size
+
+
+def manual_path(keys: list, start: float, end: float) -> list[Sample]:
+    """Hand-set crop keys (CropKey: SOURCE t, centre x, pan) → a clip-relative path for to_keyframes().
+
+    The key at or before the clip start sets where it begins; each later key cuts there at its time (hold, then
+    jump — like a camera change), or with pan=True glides there from the previous key. Keys past the end are ignored.
+    """
+    ks = sorted(keys, key=lambda k: k.t)
+    before = [k for k in ks if k.t <= start]
+    inside = [k for k in ks if start < k.t < end]
+    first = before[-1] if before else (inside[0] if inside else None)
+    if first is None:
+        return []
+    path = [Sample(0.0, first.x)]
+    for k in inside:
+        if k is first:
+            continue
+        path.append(Sample(round(k.t - start, 3), k.x, cut=not k.pan))
+    return path
+
+
 def plan_reframe(video: Path, start: float, end: float, detector: FaceDetector | None = None,
                  mode: str | None = None, follow: float | None = None,
-                 size: tuple[int, int] = (1080, 1920)) -> ReframePlan:
+                 size: tuple[int, int] = (1080, 1920), keys: list | None = None) -> ReframePlan:
     """`follow` (x 0..1 of a face picked with people()) tracks that one person in "face" mode, whatever `mode`
     says — except "center", which stays a plain centre crop. `size` = output canvas: its shape sets the crop
     width (9:16 narrow, 4:5 / 1:1 wider, so more of the scene stays in)."""
-    plan = _plan_reframe(video, start, end, detector, mode, follow, size)
+    plan = _plan_reframe(video, start, end, detector, mode, follow, size, keys)
     plan.size = size
     return plan
 
 
 def _plan_reframe(video: Path, start: float, end: float, detector: FaceDetector | None,
-                  mode: str | None, follow: float | None, size: tuple[int, int]) -> ReframePlan:
+                  mode: str | None, follow: float | None, size: tuple[int, int], keys: list | None) -> ReframePlan:
     try:
         import cv2
     except ImportError:
@@ -665,6 +708,11 @@ def _plan_reframe(video: Path, start: float, end: float, detector: FaceDetector 
     if not src_w or crop_w >= src_w:
         return ReframePlan("none", src_w, src_h, src_w)
     mode = mode or settings.reframe_mode
+    if mode == "manual":  # you placed the crop by hand: no face detection at all
+        path = manual_path(keys or [], start, end)
+        if path:
+            return ReframePlan("manual", src_w, src_h, crop_w, to_keyframes(path, src_w, crop_w, end - start))
+        mode = "auto"  # no keys inside the clip (yet): the tracker decides
     if mode == "fit":
         return ReframePlan("fit", src_w, src_h, crop_w)
     if follow is not None and mode != "center":

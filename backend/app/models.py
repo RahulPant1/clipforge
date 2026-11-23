@@ -59,10 +59,18 @@ class Post(BaseModel):
     url: str = ""  # link to the live post, pasted after posting (History links to it)
 
 
+class CropKey(BaseModel):
+    """A hand-set crop position (Shorts step → Adjust crop): from `t` on, the crop is centred on `x`."""
+    t: float = Field(ge=0)  # SOURCE seconds (survives trims, like clip.removed)
+    x: float = Field(ge=0, le=1)  # crop centre, 0..1 of the source width
+    pan: bool = False  # glide here from the previous key (camera pan) instead of cutting at t
+
+
 class RenderOptions(BaseModel):
     """Per-clip overrides; None = use the global setting."""
     jumpcut: bool | None = None
-    reframe: str | None = None  # auto | face | split | speaker | center | fit
+    reframe: str | None = None  # auto | face | split | speaker | center | fit | manual (crop_keys)
+    crop_keys: list[CropKey] | None = Field(None, max_length=200)  # reframe="manual": where the crop sits, over time
     caption_style: str | None = None  # karaoke | simple | none
     caption_preset: str | None = None  # classic | punch | clean | boxed | neon | custom (presets.py)
     caption_position: str | None = None  # bottom | middle
@@ -73,6 +81,7 @@ class RenderOptions(BaseModel):
     end_card: bool | None = None  # brand kit end card after the last word (None = the kit's setting)
     sfx: bool | None = None  # whoosh on cuts + pop on keywords (None = SFX_DEFAULT)
     music: str | None = None  # track in data/sounds/music ("" = none, None = MUSIC_DEFAULT)
+    emoji: bool | None = None  # colour emoji above caption lines + the hook's emoji (None = CAPTION_EMOJI)
     aspects: list[Literal["4:5", "1:1"]] | None = None  # feed versions next to the 9:16 (None = EXTRA_ASPECTS)
 
 

@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { api } from '../../api.js'
+import CropEditor from '../CropEditor.jsx'
 import { FEED, feedFile, fmt } from '../../util.js'
 
 function Seg({ label, value, options, onChange, disabled }) {
@@ -185,6 +186,7 @@ function ShortCard({ job, clip, busy, act, presets, kit, sounds }) {
   const setOpt = (k, v) => act(() => api.editClip(job.id, clip.index, { options: { ...o, [k]: v } })).catch(() => {})
   const formats = (clip.formats || []).filter((a) => FEED[a])
   const [view, setView] = useState('9:16')
+  const [cropOpen, setCropOpen] = useState(false)
   const shown = view !== '9:16' && formats.includes(view) ? view : '9:16'
   const file = clip.file && (shown === '9:16' ? clip.file : feedFile(clip.index, shown))
   const src = file && api.fileUrl(job.id, file, clip.version)
@@ -230,6 +232,7 @@ function ShortCard({ job, clip, busy, act, presets, kit, sounds }) {
           {clip.reframe === 'face' && <span className="cut"> · 🎯 face</span>}
           {clip.reframe === 'split' && <span className="cut"> · 👥 2 speakers</span>}
           {clip.reframe === 'speaker' && <span className="cut"> · 🎙 follows talker</span>}
+          {clip.reframe === 'manual' && <span className="cut"> · ✋ your crop</span>}
           {clip.reframe === 'fit' && <span className="cut" title="No face to follow: the whole frame over a blurred copy"> · 🖼 whole frame</span>}
           {clip.reframe !== 'fit' && clip.fit_seconds > 0 && (
             <span className="cut" title="Shots with no face (screen, slides, action) are shown whole over a blurred copy">
@@ -243,9 +246,17 @@ function ShortCard({ job, clip, busy, act, presets, kit, sounds }) {
         <Seg label="Zoom" value={o.zoom ?? false} disabled={busy || o.jumpcut === false}
              options={[[false, 'Off'], [true, 'Punch-in']]} onChange={(v) => setOpt('zoom', v)} />
         <Seg label="Framing" value={o.reframe ?? 'auto'} disabled={busy}
-             options={[['auto', 'Auto'], ['face', 'Face'], ['split', '2-up'], ['speaker', 'Talker'], ['fit', 'Fit'], ['center', 'Centre']]}
+             options={[['auto', 'Auto'], ['face', 'Face'], ['split', '2-up'], ['speaker', 'Talker'], ['fit', 'Fit'],
+               ['center', 'Centre'], ...(o.crop_keys?.length ? [['manual', '✋ Yours']] : [])]}
              onChange={(v) => setOpt('reframe', v)} />
-        <FollowPicker job={job} clip={clip} busy={busy} act={act} o={o} />
+        {o.reframe !== 'manual' && <FollowPicker job={job} clip={clip} busy={busy} act={act} o={o} />}
+        <div className="opt-col">
+          <button className="btn sm ghost" disabled={busy} onClick={() => setCropOpen(true)}
+                  title="Drag the crop where face tracking picked the wrong spot">
+            ✋ {o.reframe === 'manual' ? 'Edit your crop' : 'Adjust crop by hand'}
+          </button>
+        </div>
+        {cropOpen && <CropEditor job={job} clip={clip} busy={busy} act={act} o={o} onClose={() => setCropOpen(false)} />}
         <Seg label="Hook title" value={o.hook ?? true} disabled={busy || !clip.hook}
              options={[[true, 'On'], [false, 'Off']]} onChange={(v) => setOpt('hook', v)} />
         <Seg label="Captions" value={o.caption_style ?? presets?.style ?? 'karaoke'} disabled={busy}
@@ -261,6 +272,13 @@ function ShortCard({ job, clip, busy, act, presets, kit, sounds }) {
                 ))}
               </div>
             </div>
+            <Seg label="Emoji" value={o.emoji ?? presets.emoji ?? false} disabled={busy}
+                 options={[[false, 'Off'], [true, 'Colour emoji']]} onChange={(v) => setOpt('emoji', v)} />
+            {(o.emoji ?? presets.emoji) && (
+              <p className="muted small">Above a caption line when a word has one (money 💰, gym 🏋️ — or type one into the
+                transcript), and the hook's emoji above the title card.
+                {!presets.emoji_ready && ' The open-source Noto Color Emoji set (11 MB) downloads on the first render.'}</p>
+            )}
             <Seg label={clip.reframe === 'split' ? 'Position (2-up: on the seam)' : 'Position'}
                  value={o.caption_position ?? presets.position} disabled={busy || noCaptions || clip.reframe === 'split'}
                  options={[['bottom', 'Bottom'], ['middle', 'Middle']]}

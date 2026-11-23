@@ -6,11 +6,12 @@ from pathlib import Path
 
 from ..config import settings
 from ..models import BrandKit, Clip, RenderOptions, Segment
-from . import brand, sfx
-from .captions import build_ass, build_hook_ass, build_srt, text_scale
+from . import brand, emoji, sfx
+from .captions import _text as caption_text
+from .captions import build_ass, build_hook_ass, build_srt, chunk_words, text_scale
 from .fonts import font_for, fontsdir_option
 from .jumpcut import CutPlan, audio_cut_graph, audio_silences, plan_cuts, video_select_expr, zoom_graph
-from .presets import get_preset
+from .presets import get_preset, placement
 from .reframe import ReframePlan, plan_reframe
 
 log = logging.getLogger(__name__)
@@ -111,9 +112,9 @@ def _encode(video: Path, clip: Clip, plan: CutPlan, job_dir: Path, name: str, si
     hook = settings.hook_overlay if o.hook is None else o.hook
 
     # Speaker-following crop (runs before jump-cut select, so it works in source-relative time)
-    rf = plan_reframe(video, clip.start, clip.end, mode=reframe_mode, follow=o.follow, size=size)
+    rf = plan_reframe(video, clip.start, clip.end, mode=reframe_mode, follow=o.follow, size=size, keys=o.crop_keys)
     cmd_file = None
-    if rf.mode in ("face", "speaker"):
+    if rf.mode in ("face", "speaker", "manual"):
         cmd_file = f"{name}.crop.cmd"
         (job_dir / cmd_file).write_text(rf.sendcmd(), encoding="utf-8")
 
@@ -124,6 +125,7 @@ def _encode(video: Path, clip: Clip, plan: CutPlan, job_dir: Path, name: str, si
     if h != 1920:  # feed versions: smaller text for the smaller frame
         preset = replace(preset, size=text_scale(preset.size, h))
     font = preset.font
+    cap_font = font
     if caption_style == "none":  # no-speech clips: nothing to caption (and Whisper invents words on music)
         subs = ""
     else:  # karaoke = word-by-word highlight; simple = whole line in the same look, no animation
@@ -167,6 +169,12 @@ def _encode(video: Path, clip: Clip, plan: CutPlan, job_dir: Path, name: str, si
         inputs.append(p)
         return len(inputs)
 
+    want_emoji = settings.caption_emoji if o.emoji is None else o.emoji
+    placed = place_emoji(clip, plan, preset, cap_font, middle, size, captions=bool(subs),
+                         hook=bool(hook_ass)) if want_emoji else []
+    pngs = [(e, emoji.png(e.emoji, e.px)) for e in placed]  # None: no font / not drawable → left out
+    placed = [e for e, f in pngs if f]
+    emoji_in = [add(f) for _, f in pngs if f]
     logo = brand.watermark(kit, o)
     card_png = brand.end_card_png(kit, job_dir / f"{name}.end.png", height=h) if card else None
     logo_in = add(logo) if logo else None
@@ -176,11 +184,15 @@ def _encode(video: Path, clip: Clip, plan: CutPlan, job_dir: Path, name: str, si
     fx_in = add(fx) if fx else None
 
     graphs, maps = [], []
-    if logo_in or card_in:  # images need their own inputs → filter_complex instead of -vf
+    if logo_in or card_in or placed:  # images need their own inputs → filter_complex instead of -vf
         logo_from = min(settings.hook_seconds, plan.duration) if hook_ass else 0.0  # the hook card owns the top
-        graphs += [f"[0:v]{','.join(vf)}[b]",
-                   brand.overlay_graph("b", logo_input=logo_in, kit=kit, card_input=card_in, start=logo_from,
-                                       end=plan.duration, card_from=plan.duration, height=h)]
+        graphs.append(f"[0:v]{','.join(vf)}[b]")
+        base = "b"
+        if placed:  # over captions + hook card, under the logo / end card
+            g, base = emoji.graph("b", placed, emoji_in[0])
+            graphs.append(g)
+        graphs.append(brand.overlay_graph(base, logo_input=logo_in, kit=kit, card_input=card_in, start=logo_from,
+                                          end=plan.duration, card_from=plan.duration, height=h))
         maps += ["-map", "[v]"]
     if music_in or fx_in:
         graphs.append(sfx.audio_graph(af, music_in, fx_in, total))
@@ -204,3 +216,29 @@ def _encode(video: Path, clip: Clip, plan: CutPlan, job_dir: Path, name: str, si
     if res.returncode != 0:
         raise RuntimeError(f"ffmpeg failed for {name}: {res.stderr.strip()[-500:]}")
     return rf
+
+
+def place_emoji(clip: Clip, plan: CutPlan, preset, font: str, middle: bool, size: tuple[int, int],
+                captions: bool, hook: bool) -> list[emoji.Placed]:
+    """Where each colour emoji goes on this canvas: above its caption line (same placement rules as the ASS
+    captions: bottom / middle / seam, margins, measured line wrap) and above the hook card (top layout only)."""
+    w, h = size
+    out: list[emoji.Placed] = []
+    if hook and not middle:  # seam layout: the card's top edge depends on its wrapping — no sticker there
+        e = emoji.hook_emoji(clip.hook)
+        end = min(settings.hook_seconds, plan.duration)
+        if e and end > 0.3:
+            px = round(text_scale(settings.hook_size, h) * 1.3)
+            top = round(settings.hook_margin_v * h / 1920) - 18  # the card's box starts 18 px (padding) higher
+            out.append(emoji.Placed(0.0, end, e, (w - px) // 2, max(top - emoji.GAP - px, 8), px))
+    if captions:
+        chunks = chunk_words(plan.words, preset.words)
+        align, margin = placement("middle" if middle else clip.options.caption_position, h)
+        px = round(preset.size * emoji.SIZE)
+        line_h = preset.size * 1.2 + 2 * preset.outline
+        for start, end, e, i in emoji.caption_events(chunks, clip.keywords):
+            text = " ".join(t for t in (caption_text(wd, preset) for wd in chunks[i]) if t)
+            block = emoji.text_lines(text, font, preset.size, w - 120) * line_h
+            top = (h - margin - block) if align == 2 else (h - block) / 2
+            out.append(emoji.Placed(start, end, e, (w - px) // 2, max(round(top - emoji.GAP - px), 8), px))
+    return out

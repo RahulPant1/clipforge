@@ -43,7 +43,20 @@ from .models import (
     Vocabulary,
     WordEdit,
 )
-from .pipeline import batch, brand, cover, discover, hinglish, quote, sfx, transcript_edit, vocabulary, voice, waveform
+from .pipeline import (
+    batch,
+    brand,
+    cover,
+    discover,
+    emoji,
+    hinglish,
+    quote,
+    sfx,
+    transcript_edit,
+    vocabulary,
+    voice,
+    waveform,
+)
 from .pipeline.content import ANGLES, NAMES, ContentContext, clip_text, generate_post, load_meta, write_posts_md
 from .pipeline.export import build_pack
 from .pipeline.history import get_history
@@ -51,8 +64,8 @@ from .pipeline.hooks import write_variants
 from .pipeline.jumpcut import clean_removed
 from .pipeline.llm import OllamaClient
 from .pipeline.presets import POSITIONS, all_presets, get_preset
-from .pipeline.reframe import people
-from .pipeline.render import FEED, extra_aspects
+from .pipeline.reframe import people, source_size, tracked_path
+from .pipeline.render import ASPECTS, FEED, extra_aspects
 from .watch import Watcher
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -163,6 +176,7 @@ def create_app(pipeline=None, start_worker: bool = True, llm_factory=OllamaClien
         return {"default": settings.caption_preset, "position": settings.caption_position,
                 "style": settings.caption_style, "positions": list(POSITIONS),
                 "aspects": extra_aspects(RenderOptions()), "feed_aspects": FEED,
+                "emoji": settings.caption_emoji, "emoji_ready": emoji.ready(),
                 "presets": [p.public() for p in all_presets().values()]}
 
     # ---------------------------------------------------------------- brand voice (all jobs)
@@ -597,6 +611,20 @@ def create_app(pipeline=None, start_worker: bool = True, llm_factory=OllamaClien
         _, clip = clip_of(job_id, index)
         found = people(source_of(job_id), clip.start, clip.end)
         return [{**{k: v for k, v in p.items() if k != "jpeg"}, "img": data_url(p["jpeg"])} for p in found]
+
+    @app.get("/api/jobs/{job_id}/clips/{index}/crop")
+    def clip_crop(job_id: str, index: int) -> dict:
+        """For the crop editor: source size, crop width per format (fraction of the source width), where the last
+        render's tracker put the crop (SOURCE t, centre x) and your hand-set keys."""
+        _, clip = clip_of(job_id, index)
+        src_w, src_h = source_size(source_of(job_id))
+        if not src_w:
+            raise HTTPException(400, "can't read the source video")
+        crop = {a: min(1.0, round(int(src_h * w / h) // 2 * 2 / src_w, 4)) for a, ((w, h), _) in ASPECTS.items()}
+        tracked = tracked_path(store.dir(job_id), f"short_{index}", src_w, int(crop["9:16"] * src_w), clip.start) \
+            if clip.reframe in ("face", "speaker", "manual") else []
+        return {"src_w": src_w, "src_h": src_h, "crop": crop, "mode": clip.reframe, "tracked": tracked,
+                "keys": [k.model_dump() for k in clip.options.crop_keys or []]}
 
     @app.get("/api/jobs/{job_id}/clips/{index}/cover/frames")
     def cover_frames(job_id: str, index: int) -> list[dict]:

@@ -259,8 +259,10 @@ def test_render_overlays_the_card_when_the_number_is_said(tmp_path, monkeypatch)
 
 
 @needs_ffmpeg
-def test_real_pillow_card_renders_in_every_format(tmp_path):
+def test_real_pillow_card_renders_in_every_format(tmp_path, monkeypatch):
     from app.pipeline import render
+
+    monkeypatch.setattr(settings, "carousel_accent", "#00E5FF")  # the card's number colour: cyan, unlike captions
 
     src = _src(tmp_path, d=4)
     segs = [seg("we raised ₹2.5 crore in seed funding last year.", step=0.4)]
@@ -271,9 +273,15 @@ def test_real_pillow_card_renders_in_every_format(tmp_path):
                 options=RenderOptions(jumpcut=False, reframe="center", hook=False, aspects=["4:5", "1:1"]))
     render.render_clip(src, clip, segs, tmp_path)
     assert clip.render_error is None and clip.formats == ["4:5", "1:1"]
-    f = _frame(tmp_path / "short_1.mp4", ins.t + 1.0)
-    yellow = (f[..., 0] > 200) & (f[..., 1] > 170) & (f[..., 2] < 80)  # the accent number
-    assert yellow.sum() > 2000
+    x, y = inserts.placement(ins, (1080, 1920), split=False, caption_position=None, captions=True)
+    bw, bh = inserts.box_size(1920)
+
+    def accent_in_card(t: float) -> int:  # the number's pixels inside the card box (captions are yellow/white)
+        f = _frame(tmp_path / "short_1.mp4", t)[y:y + bh, x:x + bw]
+        return int(((f[..., 0] < 80) & (f[..., 1] > 170) & (f[..., 2] > 200)).sum())
+
+    assert accent_in_card(ins.t + 1.0) > 500  # font-independent: CI has no Arial
+    assert accent_in_card(0.05) == 0  # not on screen before the number is said
     assert len(list((tmp_path / "inserts" / "short_1").iterdir())) == 3  # one card size per format
 
 

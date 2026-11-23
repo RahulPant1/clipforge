@@ -317,3 +317,167 @@ def test_editing_approved_inserts_marks_the_short_stale(tmp_path, monkeypatch):
         assert r.json()["clips"][0]["stale"] is True
         bad = c.patch(f"/api/jobs/{jid}/clips/1", json={"inserts": [{**ins, "value": "nan"}]})
         assert bad.status_code == 422
+
+
+# ------------------------------------------------------------------ phase 3: Gemma picks + labels
+
+STATS = "So 40% of startups fail in year one. I have 12 cats at home. We raised ₹2 crore last year."
+
+
+class CardLLM:
+    """Fake Gemma for the stat card schema: a fixed answer (or an exception), prompts recorded."""
+
+    def __init__(self, answer=None, error: Exception | None = None):
+        self.answer, self.error, self.prompts = answer, error, []
+
+    def chat_json(self, prompt, schema, temperature=None, think=None, images=None):
+        assert "cards" in schema["properties"]
+        self.prompts.append(prompt)
+        if self.error:
+            raise self.error
+        return self.answer
+
+    def unload(self):
+        pass
+
+
+def _stat_clip(start=0.0, **kw) -> tuple[Clip, list[Segment]]:
+    segs = [seg(STATS, start=start, step=0.5)]
+    return Clip(index=1, start=start, end=start + 12, title="t", hook="h", score=7, **kw), segs
+
+
+def test_gemma_only_picks_by_id_and_labels_come_from_the_sentence():
+    clip, segs = _stat_clip()
+    llm = CardLLM({"cards": [
+        {"id": 1, "worth": 9, "label": "of **startups** fail."},
+        {"id": 3, "worth": 8, "label": "raised by our genius founders"},  # invented words → rule label
+        {"id": 2, "worth": 3, "label": "cats"},  # not worth a card
+        {"id": 7, "worth": 10, "label": "made up"},  # no such number
+        {"id": 1, "worth": 10, "label": "dup"},
+    ]})
+    got = inserts.suggest(clip, segs, llm)
+    assert [(inserts.display(i), i.label, i.approved) for i in got] == [
+        ("40%", "of startups fail", False), ("₹2 crore", "last year", False)]
+    prompt = llm.prompts[0]
+    assert '1: 40% - "So 40% of startups fail in year one."' in prompt and "3: ₹2 crore" in prompt
+    assert all(i.t == pytest.approx(next(w.start for w in segs[0].words if w.word.strip() == i.spoken.split()[0]))
+               for i in got)
+
+
+def test_label_check():
+    clip, segs = _stat_clip()
+    c = inserts.candidates(segs, clip)[0]  # 40%
+    assert inserts.label_ok("startups fail", c) and inserts.label_ok("Of Startups, fail", c)
+    assert not inserts.label_ok("40%", c) and not inserts.label_ok("of founders fail", c)
+    assert not inserts.label_ok("", c)
+
+
+@pytest.mark.parametrize("llm", [CardLLM(error=ConnectionError("ollama down")), CardLLM({"oops": 1}),
+                                 CardLLM("not json")])
+def test_gemma_failing_falls_back_to_rule_picks(llm):
+    clip, segs = _stat_clip()
+    got = inserts.suggest(clip, segs, llm)
+    assert [inserts.display(i) for i in got] == ["40%", "₹2 crore"]  # units; "12 cats" scores too low
+    assert got[0].label == "of startups fail in"
+
+
+def test_no_numbers_no_gemma_call():
+    llm = CardLLM({"cards": []})
+    clip = Clip(index=1, start=0, end=5, title="t", hook="h", score=7)
+    assert inserts.suggest(clip, [seg("nothing to count here at all")], llm) == [] and not llm.prompts
+
+
+def test_merge_keeps_yours_and_replaces_old_suggestions():
+    mine = Insert(t=1.0, value=5, custom=True, approved=True)
+    ok = Insert(t=6.0, value=40, approved=True)
+    old = Insert(t=9.0, value=12)
+    clip = Clip(index=1, start=0, end=12, title="t", hook="h", score=7, inserts=[old, ok, mine])
+    new = [Insert(t=6.1, value=40), Insert(t=10.0, value=2)]
+    assert [(i.t, i.approved) for i in inserts.merge(clip, new)] == [(1.0, True), (6.0, True), (10.0, False)]
+
+
+def test_transcript_edit_drops_suggestions_on_the_changed_word_only():
+    sug, ok = Insert(t=2.0, value=40), Insert(t=2.0, value=40, approved=True, id="mine")
+    far = Insert(t=8.0, value=12)
+    clip = Clip(index=1, start=0, end=12, title="t", hook="h", score=7, inserts=[sug, ok, far], inserts_checked=True)
+    assert inserts.forget_changed(clip, [(1.9, 2.3)])
+    assert [i.id for i in clip.inserts] == ["mine", far.id] and clip.inserts_checked is False
+    assert not inserts.forget_changed(clip, [(1.9, 2.3)])
+
+
+def test_produce_suggests_once_with_the_same_gemma_load(tmp_path, monkeypatch):
+    import json as _json
+
+    from app.pipeline import orchestrator
+
+    monkeypatch.setattr(settings, "content_enabled", False)
+    renders = []
+
+    def fake_render(video, clip, segs, job_dir):
+        renders.append(clip.index)
+        clip.stale = False
+        return f"short_{clip.index}.mp4"
+
+    monkeypatch.setattr(orchestrator, "render_clip", fake_render)
+    monkeypatch.setattr(orchestrator, "cover_for", lambda *a: None)
+    clip, segs = _stat_clip()
+    (tmp_path / "transcript.json").write_text(_json.dumps([s.model_dump() for s in segs]))
+    llm = CardLLM({"cards": [{"id": 1, "worth": 9, "label": "startups fail"}]})
+    orchestrator.produce(tmp_path, [clip], lambda *a: None, llm=llm)
+    assert [(inserts.display(i), i.label, i.approved) for i in clip.inserts] == [("40%", "startups fail", False)]
+    assert clip.inserts_checked and renders == [1] and len(llm.prompts) == 1
+
+    orchestrator.produce(tmp_path, [clip], lambda *a: None, llm=llm)  # nothing to render, nothing to ask
+    assert len(llm.prompts) == 1 and renders == [1]
+
+    monkeypatch.setattr(settings, "inserts_auto", True)  # auto: approved → the rendered short goes stale
+    clip.inserts, clip.inserts_checked, clip.file = [], False, "short_1.mp4"
+    orchestrator.produce(tmp_path, [clip], lambda *a: None, llm=llm)
+    assert clip.inserts[0].approved and renders == [1, 1]
+
+
+def test_suggest_endpoint(tmp_path, monkeypatch):
+    import json as _json
+
+    from app.jobs import GPU_LOCK
+
+    monkeypatch.setattr(settings, "data_dir", tmp_path)
+    from app.main import create_app
+
+    steps, _ = _fake_steps(tmp_path)
+    llm = CardLLM({"cards": [{"id": 1, "worth": 9, "label": "startups fail"}, {"id": 3, "worth": 7, "label": "x"}]})
+    with TestClient(create_app(steps=steps, llm_factory=lambda: llm)) as c:
+        jid = c.post("/api/jobs", json={"url": "https://youtube.com/watch?v=x", "num_clips": 1}).json()["id"]
+        _wait_status(c, jid, "review")
+        _, segs = _stat_clip(start=20.0)  # clip 1 is 20-35 s
+        (tmp_path / "jobs" / jid / "transcript.json").write_text(_json.dumps([s.model_dump() for s in segs]))
+        mine = {"t": 33.0, "value": 3, "suffix": "x", "custom": True, "approved": True}
+        c.patch(f"/api/jobs/{jid}/clips/1", json={"inserts": [mine]})
+
+        with GPU_LOCK:
+            assert c.post(f"/api/jobs/{jid}/clips/1/inserts/suggest").status_code == 409
+        r = c.post(f"/api/jobs/{jid}/clips/1/inserts/suggest")
+        assert r.status_code == 200
+        got = r.json()["clips"][0]
+        assert [(i["value"], i["approved"], i["custom"]) for i in got["inserts"]] == [
+            (40, False, False), (2, False, False), (3, True, True)]
+        assert got["inserts_checked"] is True and got["inserts"][1]["label"] == "last year"
+
+        # fixing the misheard "40%" drops that suggestion, keeps the rest
+        r = c.patch(f"/api/jobs/{jid}/words", json={"seg": 0, "i": 1, "word": " 45%"})
+        assert r.status_code == 200
+        assert [i["value"] for i in r.json()["clips"][0]["inserts"]] == [2, 3]
+
+
+def test_whisper_number_pieces_are_joined_and_indices_stay_on_the_words():
+    pieces = [" had", " 99", ".99", "%", " of", " 10,", " 15", " years"]  # as Whisper wrote them
+    ws = [Word(start=i * 0.3, end=i * 0.3 + 0.25, word=t) for i, t in enumerate(pieces)]
+    a, b, c = find(ws)
+    assert (a.text(), a.start, a.end, a.spoken) == ("99.99%", 1, 4, "99.99%")
+    assert (b.text(), b.start, b.end, c.text()) == ("10", 5, 6, "15")  # "10, 15": two numbers, not 1,015
+
+
+def test_number_repeated_in_the_label_is_dropped():
+    clip, segs = _stat_clip()
+    got = inserts.suggest(clip, segs, CardLLM({"cards": [{"id": 1, "worth": 9, "label": "40% of startups fail"}]}))
+    assert got[0].label == "of startups fail"

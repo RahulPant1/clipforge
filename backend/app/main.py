@@ -51,6 +51,7 @@ from .pipeline import (
     discover,
     emoji,
     hinglish,
+    inserts,
     quote,
     sfx,
     transcript_edit,
@@ -348,9 +349,12 @@ def create_app(pipeline=None, start_worker: bool = True, llm_factory=OllamaClien
     # ---------------------------------------------------------------- caption fixes + vocabulary
 
     def mark_stale(job_id: str, spans: list[tuple[float, float]]) -> Job:
-        """Rendered shorts whose range covers a changed word have outdated captions burned in."""
+        """Rendered shorts whose range covers a changed word have outdated captions burned in. Suggested stat cards
+        on a changed word are dropped (the number may be different now); approved ones are yours and stay."""
         job = store.get(job_id)
         for c in job.clips:
+            if inserts.forget_changed(c.model_copy(deep=True), spans):  # only write when one goes
+                job = store.update_clip(job_id, c.index, lambda x: inserts.forget_changed(x, spans))
             if c.file and not c.stale and any(s < c.end and e > c.start for s, e in spans):
                 job = store.update_clip(job_id, c.index, lambda x: setattr(x, "stale", True))
         return job
@@ -606,6 +610,35 @@ def create_app(pipeline=None, start_worker: bool = True, llm_factory=OllamaClien
                 raise HTTPException(502, f"Gemma failed: {e}") from e
             try:  # onto the job as it is now (see regenerate_post), still holding GPU_LOCK
                 return store.update_clip(job_id, index, lambda c: setattr(c, "variants", variants))
+            except KeyError:
+                raise HTTPException(404, "clip not found") from None
+        finally:
+            GPU_LOCK.release()
+
+    @app.post("/api/jobs/{job_id}/clips/{index}/inserts/suggest", response_model=Job)
+    def suggest_inserts(job_id: str, index: int) -> Job:
+        """Gemma picks which spoken numbers get a stat card (and labels them). Suggestions replace the old ones;
+        approved and hand-made cards stay. Never approves: you look at them first."""
+        editable(job_id)
+        _, clip = clip_of(job_id, index)
+        if not GPU_LOCK.acquire(timeout=2):
+            raise HTTPException(409, "GPU is busy with a job — try again when it finishes")
+        d = store.dir(job_id)
+        try:
+            try:
+                segs = [Segment(**x) for x in json.loads((d / "transcript.json").read_text())]
+                new = inserts.suggest(clip, segs, llm_factory())
+            except Exception as e:
+                if store.get(job_id) is None:
+                    raise HTTPException(404, "job was deleted meanwhile") from e
+                raise HTTPException(502, f"stat cards failed: {e}") from e
+
+            def apply(c: Clip) -> None:  # onto the job as it is now, still holding GPU_LOCK
+                c.inserts = inserts.merge(c, new)
+                c.inserts_checked = True
+
+            try:
+                return store.update_clip(job_id, index, apply)
             except KeyError:
                 raise HTTPException(404, "clip not found") from None
         finally:

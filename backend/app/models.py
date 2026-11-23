@@ -149,6 +149,7 @@ class Clip(BaseModel):
     quote_cards: list[str] = []  # short_N.quote.png (1:1), short_N.quote45.png (4:5) once made
     quote_version: int = 0  # bumps on every quote card render (cache-busting)
     inserts: list[Insert] = Field([], max_length=8)  # stat cards etc. (only approved ones are burned in)
+    inserts_checked: bool = False  # cards already suggested (produce doesn't ask Gemma again)
     visual: str = ""  # no-speech clips: what the vision model saw on screen (feeds the posts instead of speech)
     options: RenderOptions = RenderOptions()
     stale: bool = False  # edited after rendering -> needs re-render

@@ -139,13 +139,21 @@ backend/                FastAPI + pipeline (Python 3.11, conda env "clipforge")
     numbers.py          spoken numbers → Num (value, decimals, prefix ₹$€£, suffix % x K M " lakh" " crore", grouping
                         western|indian): digits, English/Hinglish number words, Devanagari digits, magnitudes; skips
                         years, ranges (both halves), fractions, clock times, ordinals, bare numbers < 10. Display keeps
-                        how it was said ("2.5 lakh"); Num.text(v) formats count-up frames the same way
+                        how it was said ("2.5 lakh"); Num.text(v) formats count-up frames the same way. find() glues
+                        Whisper's space-less pieces first (" 99" ".99" "%" → 99.99%); indices stay on the real words
     inserts.py          motion-graphics cards (template stat_counter). clip.inserts = Insert (SOURCE t, value/prefix/
                         suffix from numbers.py — never model text, label, position auto|upper|lower, approved, custom).
                         candidates() (struck words excluded, unit/size/keyword score) + rule_label(); schedule() =
                         approved only → timing() in OUTPUT time via plan.remap (LEAD before the number, holds to the
                         sentence end, INSERT_MIN/MAX_SECONDS; trimmed-out / struck → none), ≤ INSERTS_MAX, ≥ GAP apart.
-                        placement(): above the bottom captions (under middle ones), top in split; box scales with h
+                        placement(): above the bottom captions (under middle ones), top in split; box scales with h.
+                        suggest(): Gemma sees candidates by id → {id, worth 1-10, label}; < INSERT_MIN_WORTH dropped,
+                        number stripped from the label (without_number), label_ok() = every word said in that sentence
+                        else rule_label; Gemma failing → rule picks (score ≥ 3). merge() keeps approved/custom cards.
+                        produce writing stage (same Gemma load as posts) for clips without inserts_checked
+                        (INSERTS_SUGGEST; INSERTS_AUTO approves + marks a rendered short stale); POST
+                        /clips/{i}/inserts/suggest (GPU_LOCK, 409, never approves). Transcript word edits drop
+                        suggestions on the changed words (forget_changed in mark_stale)
     insert_render.py    InsertSpec (JSON contract, also for a future Blender renderer) → InsertRenderer protocol →
                         RGBA PNG frames cached in inserts/short_N/<hash>/ (hash = spec + renderer name/version; pruned
                         per render). PillowRenderer.stat_counter: count-up (ease-out) + label on a dark card, brand
@@ -381,8 +389,7 @@ Keep it local: no cloud stock/B-roll/TTS APIs.
 22. [x] L. Several title/hook variants to choose from.
 23. [x] N. Batch: several links / a playlist / a channel / Find-videos picks as a queue of jobs; watched folder.
 24. [ ] Motion-graphics inserts (stat_counter). [x] phases 1-2: numbers.py, inserts.py, insert_render.py (Pillow),
-        render overlay, Clip.inserts via PATCH. [ ] 3: Gemma picks + labels candidates by id (label words must be in
-        the sentence, else rule_label), produce writing stage + POST /clips/{i}/inserts/suggest (GPU_LOCK),
-        INSERTS_SUGGEST/INSERTS_AUTO. [ ] 4: InsertEditor.jsx in Shorts step. [ ] later: Blender renderer (Windows
+        render overlay, Clip.inserts via PATCH. [x] 3: Gemma picks + labels (checked on real jobs with gemma4: skips
+        ages / "ten years later", keeps 70% / 99%; ~1 s per clip warm). [ ] 4: InsertEditor.jsx in Shorts step. [ ] later: Blender renderer (Windows
         blender.exe via wslpath) behind the same InsertRenderer protocol.
 (M = Hinglish/bilingual captions → item 10; O = calendar + auto-publish → items 9 and 11.)

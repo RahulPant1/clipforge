@@ -205,14 +205,33 @@ def parse(words: list[Word], i: int) -> Num | None:
     return num
 
 
+def glue(words: list[Word]) -> tuple[list[Word], list[int]]:
+    """Whisper splits some numbers into pieces with no space before them (" 99", ".99", "%"): pieces that continue
+    a number are joined to it. Returns the joined words and, for each, the index of its first original word."""
+    out: list[Word] = []
+    first: list[int] = []
+    for i, w in enumerate(words):
+        prev = out[-1].word.rstrip() if out else ""
+        if prev[-1:].isdigit() and not w.word[:1].isspace() and w.word[:1] in ".,%0123456789":
+            out[-1] = out[-1].model_copy(update={"word": out[-1].word + w.word, "end": w.end})
+        else:
+            out.append(w)
+            first.append(i)
+    return out, first
+
+
 def find(words: list[Word]) -> list[Num]:
-    """Every number in `words`, left to right, without overlaps."""
+    """Every number in `words`, left to right, without overlaps. start/end index `words` (not the glued pieces)."""
+    joined, first = glue(words)
     out, i = [], 0
-    while i < len(words):
-        n = parse(words, i)
+    while i < len(joined):
+        n = parse(joined, i)
         if n:
+            i = n.end  # next joined word
+            a, b = first[n.start], first[n.end] if n.end < len(first) else len(words)
+            n.start, n.end = a, b
+            n.spoken = "".join(w.word for w in words[a:b]).strip()
             out.append(n)
-            i = n.end
         else:
             i += 1
     return out

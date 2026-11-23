@@ -16,7 +16,7 @@ from pathlib import Path
 
 from ..config import settings
 from ..models import Clip, Segment, Stage
-from . import hinglish, transcript_edit
+from . import hinglish, inserts, transcript_edit
 from .content import ContentContext, clip_text, generate_all, load_meta, write_posts_md
 from .cover import make_cover
 from .download import download
@@ -120,9 +120,13 @@ def produce(job_dir: Path, clips: list[Clip], report: Reporter, llm: LLM | None 
         raise RuntimeError("No clips approved — approve at least one clip first.")
 
     need_posts = [c for c in todo if not c.content] if settings.content_enabled else []
-    if need_posts:
+    need_cards = [c for c in todo if not c.inserts_checked] if settings.inserts_suggest else []
+    if need_posts or need_cards:
         meta, history = load_meta(job_dir), get_history()
-        try:
+        try:  # one Gemma load for posts and stat cards
+            for i, clip in enumerate(need_cards):
+                report(Stage.writing, 0.0, f"Short {clip.index}: stat cards ({i + 1}/{len(need_cards)})")
+                suggest_cards(clip, segs, llm)
             for i, clip in enumerate(need_posts):
                 ctx = ContentContext(clip=clip, text=clip_text(segs, clip), video_title=meta.get("title", ""),
                                      channel=meta.get("channel", ""), url=meta.get("url", ""))
@@ -150,6 +154,19 @@ def produce(job_dir: Path, clips: list[Clip], report: Reporter, llm: LLM | None 
             cover_for(video, clip, job_dir)
     report(Stage.done, 1.0, f"{sum(1 for c in todo if c.file)} shorts ready")
     return clips
+
+
+def suggest_cards(clip: Clip, segs: list[Segment], llm: LLM) -> None:
+    """Stat card suggestions for one clip (INSERTS_AUTO: approved, and a rendered short goes stale). Never raises."""
+    try:
+        new = inserts.suggest(clip, segs, llm, approve=settings.inserts_auto)
+    except Exception:
+        log.exception("stat cards failed for clip %s", clip.index)
+        return
+    clip.inserts = inserts.merge(clip, new)
+    clip.inserts_checked = True
+    if clip.file and any(i.approved for i in new):
+        clip.stale = True
 
 
 def cover_for(video: Path, clip: Clip, job_dir: Path) -> None:

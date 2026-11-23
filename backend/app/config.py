@@ -139,7 +139,10 @@ class Settings(BaseSettings):
     extra_aspects: str = ""
     # Inserts (inserts.py): motion-graphics cards burned in when a number is spoken (stat_counter). Only approved
     # ones render; drawn by INSERT_RENDERER (pillow; a Blender renderer can plug into insert_render.py later).
-    inserts_max: int = 2  # per short, ≥ INSERT_GAP s apart
+    inserts_suggest: bool = True  # produce: Gemma picks which spoken numbers get a card (suggestions, not approved)
+    inserts_auto: bool = False  # …and approves them, so they're burned in without a look
+    insert_min_worth: int = 6  # Gemma's 1-10 "worth a card" below this → no suggestion
+    inserts_max: int = 2  # per short, ≥ 3 s apart
     insert_renderer: str = "pillow"
     insert_count_seconds: float = 0.8  # the count-up; then it holds until the sentence ends
     insert_min_seconds: float = 1.8

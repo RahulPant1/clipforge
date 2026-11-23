@@ -47,6 +47,11 @@ YouTube URL / file
 - **No-speech videos** (music, gameplay, sport, nature): when hardly anything is said, clips come from the
   loudest, busiest moments (loudness, motion, scene cuts), and Gemma *looks* at keyframes to score and title
   them; credits and title screens are marked down. Those shorts render without captions or jump cuts
+- **🗣 Your voice:** record yourself a few times (in the browser or upload), and ClipForge learns your voice from
+  all the takes — no training: it averages your voice over every recording and uses the clearest one for pace and
+  tone, and leaves out takes that don't sound like you. Then type anything and hear it in your voice. Runs only
+  when you ask (Qwen3-TTS, Apache 2.0, in its own environment — `bash scripts/setup_tts.sh`); clone your own voice
+  only. English and 9 other languages; Hindi isn't supported yet
 - **Sees what's on screen:** for videos that are more than a talking head (screen recordings, slides, demos,
   b-roll), Gemma looks at one frame per scene and describes it, then picks clips from what is said *and* what is
   shown — a demo or a result on screen counts too. The Transcript step shows those scenes between the lines and
@@ -126,6 +131,7 @@ YouTube URL / file
 git clone <your-repo> clipforge && cd clipforge
 bash scripts/setup_wsl.sh      # ffmpeg, deno, conda env, pip/npm deps, pulls Gemma
 bash scripts/dev.sh            # API :8000 + UI :5173
+bash scripts/setup_tts.sh      # optional: 🗣 Your voice (own env, ~3 GB + ~4 GB model on first use)
 ```
 Open http://localhost:5173 (works from the Windows browser too).
 
@@ -177,6 +183,8 @@ Copy `backend/.env.example` → `backend/.env`. Key options:
 | `CAPTION_PRESET` | `classic` | Caption look: `classic` (uses the `CAPTION_*` colours/font), `punch`, `clean`, `boxed`, `neon` or one of yours |
 | `CAPTION_POSITION` | `bottom` | `bottom` or `middle` (two-speaker stacks always use the seam) |
 | `CAPTION_FONT` | `Arial` | Any installed font, e.g. `Montserrat ExtraBold`. On WSL, Windows fonts are picked up automatically (copied once into `data/fonts`) |
+| `TTS_MODEL` | `Qwen/Qwen3-TTS-12Hz-1.7B-Base` | Voice cloning model (`…0.6B-Base` for less GPU memory) |
+| `TTS_PYTHON` | – | Python of the TTS env (default `~/miniconda3/envs/clipforge-tts/bin/python`) |
 | `SCENE_INDEX` | `auto` | Describe what's on screen per scene for clip selection: `auto` (skip talking heads), `on`, `off` |
 | `REFRAME_NO_FACE` | `fit` | Shots without a face: `fit` (whole frame over a blurred copy) or `crop` (centre crop) |
 | `HINGLISH_DEFAULT` | `true` | New jobs: Hindi speech written in Latin letters (Hinglish); per job on the New job form |

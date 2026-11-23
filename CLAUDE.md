@@ -128,6 +128,15 @@ backend/                FastAPI + pipeline (Python 3.11, conda env "clipforge")
                         (same names, any format) to replace. options.sfx / options.music; SFX_DEFAULT / MUSIC_DEFAULT
     voice.py            brand voice: your posts per platform (data/brand_voice.json, all jobs) → voice_block()
                         few-shot examples in PROMPT (≤5 per platform, borrows 2 from others if none); notes → Voice:
+    tts.py              🗣 Your voice (Qwen3-TTS voice cloning, NO training): data/voices/<id>/ voice.json + recordings/
+                        rec_N.wav (24 kHz mono, -20 LUFS, silence trimmed; takes > 20 s split at sentence ends via
+                        Whisper words) + prompt.pt. Recordings scored (SNR, Whisper logprob, 5-15 s, clipping). build =
+                        worker averages the speaker embeddings of every used take (outliers < MIN_SIMILARITY 0.75 left
+                        out, ≥ 3 takes) + the best take's audio codes/words as the delivery reference (ICL);
+                        speak = generate_voice_clone(voice_clone_prompt=[item]). Runs in its OWN env (clipforge-tts,
+                        Python 3.12, scripts/setup_tts.sh) via backend/tts/qwen_worker.py — one process per build/
+                        speak, exits → VRAM free; never imported by ClipForge. API /api/voices… (gpu_work: GPU_LOCK +
+                        Gemma unloaded, 409 busy); VoiceLab.jsx. Tests fake run_worker / transcribe_many
     history.py          variety engine: least-recently-used angle rotation + recent openers to avoid
                         (persisted in data/content_history.json across jobs)
     carousel.py         Instagram carousel PNGs (1080x1350, Pillow)
@@ -327,6 +336,10 @@ publish: PATCH post {status, url}: posted_at set on → posted (cleared when it 
 - yt-dlp needs Deno (JS runtime) + `yt-dlp-ejs` (challenge solver, comes with `yt-dlp[default]` in requirements)
   and is updated often: `pip install -U "yt-dlp[default]"` first when downloads break.
   Bot check → export cookies.txt from browser, set `YTDLP_COOKIES` in backend/.env.
+- TTS env (clipforge-tts): qwen-tts pulls torch 2.15+cu132, which SEGFAULTS on CUDA init with this WSL driver
+  (592.82) → setup_tts.sh pins torch/torchaudio 2.9 cu128. The worker drops LD_LIBRARY_PATH (ClipForge's CUDA 12
+  Whisper wheels must not leak in). Full fine-tuning (finetuning/sft_12hz.py) is all-parameter AdamW: 1.7B needs
+  ~14 GB → not on 8 GB; the user chose cloning without training anyway.
 - NVENC: `ENCODER=h264_nvenc` only if `ffmpeg -encoders | grep nvenc` shows it.
 - Thinking models (gemma4): `think` is per phase — `CONTENT_THINK=false` (~2.5x faster posts, no quality loss
   measured), `SELECT_THINK` unset (gemma4 without reasoning ignores the 20-59 s rule). Only sent when set;
@@ -420,6 +433,10 @@ For a later discussion (not planned yet):
 27. [ ] ComfyUI as an optional local generator over its HTTP API (workflow JSON in, frames out), behind GPU_LOCK and
         unloaded after use like Gemma (8 GB VRAM: SDXL-class images fine, video models slow): B-roll stills/loops when
         your folder has no match (item 19 / G), stylised cover backgrounds, upscaling. Not ClipForge-as-ComfyUI-nodes.
+29. [x] Your voice: Qwen3-TTS cloning from several recordings (tts.py). Measured: 1.7B Base peak 4.5 GB VRAM, ~2 s
+        to generate 1 s of speech, model load ~20 s warm; Whisper hears the exact words, speaker similarity 0.99 on a
+        synthetic test voice. Hindi isn't one of its 10 languages. [ ] next: use it — spoken hook intro on a short,
+        then Script → Short (scenes → voice-over → stills + motion / template cards → existing captions/render).
 28. [x] Scene index (from the "Video Intelligence v1" review, Nov 2026) — built, see scenes.py. Slim scope only: scene cuts for every video
         (nospeech.analyse already finds them) → ≤ 1 keyframe per scene / ~20-30 s → vision Gemma description →
         scenes.json (start, end, frame, description, transcript text). Main use: scene lines in the SELECTION prompt

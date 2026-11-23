@@ -33,6 +33,7 @@ from .models import (
     Post,
     PostEdit,
     QuoteEdit,
+    RecordingEdit,
     RenderOptions,
     ReplaceWords,
     Retry,
@@ -40,8 +41,11 @@ from .models import (
     Segment,
     SmartJudge,
     SmartTopic,
+    SpeakRequest,
     Stage,
     Vocabulary,
+    VoiceBuild,
+    VoiceCreate,
     WordEdit,
 )
 from .pipeline import (
@@ -56,6 +60,7 @@ from .pipeline import (
     scenes,
     sfx,
     transcript_edit,
+    tts,
     vocabulary,
     voice,
     waveform,
@@ -197,6 +202,101 @@ def create_app(pipeline=None, start_worker: bool = True, llm_factory=OllamaClien
     @app.put("/api/brand-voice")
     def put_brand_voice(body: BrandVoice) -> dict:
         return voice_info(voice.save(voice.clean(body, list(ANGLES))))
+
+    # ---------------------------------------------------------------- your voice (tts.py: Qwen3-TTS cloning)
+    tts_state: dict = {}
+
+    @app.get("/api/tts/status")
+    def tts_status(refresh: bool = False) -> dict:
+        """Is the TTS env installed and can it use the GPU? (checked once, then cached; ?refresh=true re-checks)"""
+        if refresh or "v" not in tts_state:
+            tts_state["v"] = tts.status()
+        return tts_state["v"]
+
+    def gpu_work(fn):
+        """Run fn() holding GPU_LOCK with Gemma unloaded (8 GB: Whisper / TTS need the room). 409 while busy."""
+        if not GPU_LOCK.acquire(timeout=2):
+            raise HTTPException(409, "GPU is busy with a job — try again when it finishes")
+        try:
+            try:
+                llm_factory().unload()
+            except Exception:
+                pass  # Ollama not running: nothing to unload
+            return fn()
+        except KeyError:
+            raise HTTPException(404, "not found") from None
+        except ValueError as e:
+            raise HTTPException(400, str(e)) from None
+        except RuntimeError as e:
+            raise HTTPException(502, str(e)) from None
+        finally:
+            GPU_LOCK.release()
+
+    def voice_or_404(vid: str) -> dict:
+        try:
+            return tts.load(vid)
+        except (KeyError, ValueError):
+            raise HTTPException(404, "voice not found") from None
+
+    @app.get("/api/voices")
+    def list_voices() -> dict:
+        return {"voices": tts.all_voices(), "styles": list(tts.STYLES), "max_recordings": tts.MAX_RECORDINGS,
+                "min_similarity": tts.MIN_SIMILARITY, "model": settings.tts_model}
+
+    @app.post("/api/voices", status_code=201)
+    def create_voice(body: VoiceCreate) -> dict:
+        return tts.create(body.name)
+
+    @app.delete("/api/voices/{vid}")
+    def delete_voice(vid: str) -> dict:
+        voice_or_404(vid)
+        tts.delete(vid)
+        return {"ok": True}
+
+    @app.post("/api/voices/{vid}/recordings")
+    def add_voice_recordings(vid: str, files: list[UploadFile] = File(...), style: str = Form("")) -> dict:
+        """Your recordings (any audio/video, several at once): cleaned, split if long, transcribed by Whisper."""
+        voice_or_404(vid)
+        data = [(f.filename or "audio", f.file.read(tts.MAX_UPLOAD + 1)) for f in files[:20]]
+        if any(len(b) > tts.MAX_UPLOAD for _, b in data):
+            raise HTTPException(413, f"each file must be under {tts.MAX_UPLOAD // 2**20} MB")
+        return gpu_work(lambda: tts.add_recordings(vid, data, style))
+
+    @app.patch("/api/voices/{vid}/recordings/{file}")
+    def edit_voice_recording(vid: str, file: str, body: RecordingEdit) -> dict:
+        voice_or_404(vid)
+        try:
+            return tts.edit_recording(vid, file, body.model_dump(exclude_none=True))
+        except KeyError:
+            raise HTTPException(404, "recording not found") from None
+
+    @app.delete("/api/voices/{vid}/recordings/{file}")
+    def delete_voice_recording(vid: str, file: str) -> dict:
+        voice_or_404(vid)
+        return tts.remove_recording(vid, file)
+
+    @app.post("/api/voices/{vid}/build")
+    def build_voice(vid: str, body: VoiceBuild | None = None) -> dict:
+        """Your voice from every used recording (averaged speaker embedding + the best clip's delivery)."""
+        voice_or_404(vid)
+        return gpu_work(lambda: tts.build(vid, (body.style if body else "") or ""))
+
+    @app.post("/api/voices/{vid}/speak")
+    def speak_voice(vid: str, body: SpeakRequest) -> dict:
+        """Any text in your voice → a wav in the voice's samples (first call downloads the model, ~4 GB)."""
+        voice_or_404(vid)
+        out = gpu_work(lambda: tts.speak(vid, [body.text], body.language or None))
+        return {**out[0], "voice": tts.load(vid)}
+
+    @app.get("/api/voices/{vid}/audio/{kind}/{name}")
+    def voice_audio(vid: str, kind: str, name: str):
+        if kind not in ("recordings", "samples") or not SAFE_NAME.match(name):
+            raise HTTPException(404, "not found")
+        voice_or_404(vid)
+        f = tts.voice_dir(vid) / kind / name
+        if not f.is_file():
+            raise HTTPException(404, "not found")
+        return FileResponse(f, media_type="audio/wav")
 
     @app.get("/api/brand-voice/suggestions")
     def brand_voice_suggestions() -> dict[str, list[str]]:

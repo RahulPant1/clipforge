@@ -3,6 +3,7 @@ import { api } from './api.js'
 import History from './components/History.jsx'
 import BrandKit from './components/BrandKit.jsx'
 import BrandVoice from './components/BrandVoice.jsx'
+import VoiceLab from './components/VoiceLab.jsx'
 import HealthBadge from './components/HealthBadge.jsx'
 import JobList from './components/JobList.jsx'
 import NewJob from './components/NewJob.jsx'
@@ -11,6 +12,7 @@ import { isBusy } from './util.js'
 
 const VOICE = 'brand-voice'
 const KIT = 'brand-kit'
+const SPEECH = 'your-voice'
 
 export default function App() {
   const [jobs, setJobs] = useState([])
@@ -103,12 +105,17 @@ export default function App() {
           <button className={`voicebtn ${selectedId === KIT ? 'on' : ''}`} onClick={() => setSelectedId(KIT)}>
             🎨 Brand kit
           </button>
+          <button className={`voicebtn ${selectedId === SPEECH ? 'on' : ''}`} onClick={() => setSelectedId(SPEECH)}>
+            🗣 Your voice
+          </button>
           <History />
           <JobList jobs={jobs} selectedId={selectedId} onSelect={setSelectedId} onDelete={onDelete} />
         </aside>
         <section className="detail">
           {selectedId === VOICE ? (
             <BrandVoice />
+          ) : selectedId === SPEECH ? (
+            <VoiceLab />
           ) : selectedId === KIT ? (
             <BrandKit />
           ) : selected ? (

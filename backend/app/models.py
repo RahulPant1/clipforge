@@ -302,3 +302,22 @@ class ReplaceWords(BaseModel):
 
 class Vocabulary(BaseModel):
     terms: list[str] = []
+
+
+class VoiceCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=60)
+
+
+class RecordingEdit(BaseModel):
+    text: str | None = Field(None, max_length=600)  # what is said in it (fix Whisper's transcript)
+    style: str | None = None
+    use: bool | None = None  # include in the voice
+
+
+class VoiceBuild(BaseModel):
+    style: str = ""  # prefer a recording tagged with this style as the delivery reference
+
+
+class SpeakRequest(BaseModel):
+    text: str = Field(min_length=1, max_length=2000)
+    language: str = Field("", max_length=20)  # "" = the voice's / TTS_LANGUAGE

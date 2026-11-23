@@ -26,6 +26,21 @@ export const api = {
     fd.append('file', file)
     return req('/brand-kit/logo', { method: 'POST', body: fd })
   },
+  ttsStatus: (refresh) => req(`/tts/status${refresh ? '?refresh=true' : ''}`),
+  voices: () => req('/voices'),
+  createVoice: (name) => req('/voices', json('POST', { name })),
+  deleteVoice: (id) => req(`/voices/${id}`, { method: 'DELETE' }),
+  addRecordings: (id, files, style) => {
+    const fd = new FormData()
+    for (const f of files) fd.append('files', f, f.name || 'recording.webm')
+    fd.append('style', style || '')
+    return req(`/voices/${id}/recordings`, { method: 'POST', body: fd })
+  },
+  editRecording: (id, file, changes) => req(`/voices/${id}/recordings/${file}`, json('PATCH', changes)),
+  deleteRecording: (id, file) => req(`/voices/${id}/recordings/${file}`, { method: 'DELETE' }),
+  buildVoice: (id, style) => req(`/voices/${id}/build`, json('POST', { style: style || '' })),
+  speak: (id, text, language) => req(`/voices/${id}/speak`, json('POST', { text, language: language || '' })),
+  voiceAudio: (id, kind, name) => `/api/voices/${id}/audio/${kind}/${name}`,
   removeLogo: () => req('/brand-kit/logo', { method: 'DELETE' }),
   logoUrl: (v) => `/api/brand-kit/logo.png?v=${v}`,
   endCardUrl: (v) => `/api/brand-kit/end-card.png?v=${v}`,

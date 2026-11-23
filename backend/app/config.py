@@ -145,6 +145,13 @@ class Settings(BaseSettings):
     scene_max: int = 160  # keyframes per video at most (longer spans instead)
     scene_skip_cuts_per_min: float = 2.0  # auto: fewer cuts a minute than this…
     scene_skip_face_share: float = 0.75  # …and a face in at least this share of frames → talking head, skipped
+    # Your voice (tts.py): Qwen3-TTS voice cloning in its own env, started only when a voice is built / speaks
+    tts_python: str = ""  # python of the TTS env ("" = ~/miniconda3/envs/clipforge-tts/bin/python)
+    tts_model: str = "Qwen/Qwen3-TTS-12Hz-1.7B-Base"  # or Qwen/Qwen3-TTS-12Hz-0.6B-Base (less VRAM)
+    tts_attn: str = "sdpa"  # sdpa (built in) | flash_attention_2 (needs flash-attn in the TTS env)
+    tts_language: str = "Auto"  # English, Chinese, ... (10 languages; no Hindi) or Auto
+    tts_timeout: float = 900.0  # s per worker run (the first one downloads the model)
+    tts_max_new_tokens: int = 2048  # ≈ 2.7 min of speech per line at 12.5 codes/s
     # Inserts (inserts.py): motion-graphics cards burned in when a number is spoken (stat_counter). Only approved
     # ones render; drawn by INSERT_RENDERER (pillow; a Blender renderer can plug into insert_render.py later).
     inserts_suggest: bool = True  # produce: Gemma picks which spoken numbers get a card (suggestions, not approved)

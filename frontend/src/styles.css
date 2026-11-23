@@ -526,3 +526,21 @@ aside { min-width: 0; }  /* a long History path must shrink (ellipsis), not wide
 .tline.scene .ttext { color: var(--muted); font-style: italic; }
 .tline.scene .skind { font-style: normal; font-size: 11px; text-transform: uppercase; letter-spacing: .04em; margin-right: 4px; }
 .scene-toggle { display: flex; align-items: center; gap: 6px; margin: 4px 0 8px; cursor: pointer; }
+
+/* 🗣 Your voice (VoiceLab) */
+.voicelab .vl-head { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.voicelab .vl-step { display: flex; flex-direction: column; gap: 8px; }
+.voicelab .vl-script blockquote { margin: 4px 0; padding: 10px 12px; border-left: 3px solid var(--accent); background: var(--bg);
+  border-radius: 6px; font-size: 16px; line-height: 1.45; }
+.voicelab .rec-on { background: var(--accent); color: #fff; border-color: var(--accent); }
+.voicelab .vrecs { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.voicelab .vrec { display: grid; grid-template-columns: minmax(160px, 220px) 1fr auto; gap: 8px; align-items: start;
+  padding: 8px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg); }
+.voicelab .vrec.off { opacity: .55; }
+.voicelab .vrec.outlier { border-color: var(--warn, #e0a030); }
+.voicelab .vrec audio, .voicelab .vl-sample audio { width: 100%; height: 34px; }
+.voicelab .vrec textarea { width: 100%; resize: vertical; }
+.voicelab .vrec-meta { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 4px; }
+.voicelab .vrec-ctl { display: flex; flex-direction: column; gap: 4px; align-items: flex-end; }
+.voicelab .vl-sample { display: flex; flex-direction: column; gap: 2px; margin-top: 6px; }
+@media (max-width: 700px) { .voicelab .vrec { grid-template-columns: 1fr; } .voicelab .vrec-ctl { flex-direction: row; } }

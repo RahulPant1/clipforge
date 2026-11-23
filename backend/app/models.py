@@ -1,9 +1,11 @@
 """Pydantic schemas shared by the API, job store and pipeline."""
+import math
+import uuid
 from datetime import UTC, datetime
 from enum import Enum
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class JobStatus(str, Enum):
@@ -85,6 +87,31 @@ class RenderOptions(BaseModel):
     aspects: list[Literal["4:5", "1:1"]] | None = None  # feed versions next to the 9:16 (None = EXTRA_ASPECTS)
 
 
+class Insert(BaseModel):
+    """A motion-graphics card burned into the short (inserts.py). stat_counter: a number counting up to `value`
+    with a label, shown when the number is spoken. The number comes from the transcript (numbers.py), never a model."""
+    id: str = Field(default_factory=lambda: uuid.uuid4().hex[:8], pattern=r"^[0-9a-z]{1,16}$")
+    template: Literal["stat_counter"] = "stat_counter"
+    t: float = Field(ge=0)  # SOURCE second the number starts being said (custom: where you put it)
+    spoken: str = Field("", max_length=80)  # the words as transcribed ("fifty percent")
+    value: float
+    decimals: int = Field(0, ge=0, le=3)
+    prefix: str = Field("", max_length=4)  # ₹ $ € £
+    suffix: str = Field("", max_length=12)  # % · x · K · M · " lakh" · " crore"
+    grouping: Literal["western", "indian", "none"] = "western"
+    label: str = Field("", max_length=40)
+    position: Literal["auto", "upper", "lower"] = "auto"
+    approved: bool = False  # only approved inserts are rendered
+    custom: bool = False  # you added it (not tied to a spoken number)
+
+    @field_validator("value")
+    @classmethod
+    def _finite(cls, v: float) -> float:
+        if not math.isfinite(v) or abs(v) >= 1e15:
+            raise ValueError("value must be a finite number")
+        return v
+
+
 class HookVariant(BaseModel):
     style: str  # hooks.STYLES key (question, bold_claim, …) or "other"
     title: str
@@ -121,6 +148,7 @@ class Clip(BaseModel):
     quote_custom: bool = False  # you wrote the quote: kept as is (a picked one is re-picked if a trim drops it)
     quote_cards: list[str] = []  # short_N.quote.png (1:1), short_N.quote45.png (4:5) once made
     quote_version: int = 0  # bumps on every quote card render (cache-busting)
+    inserts: list[Insert] = Field([], max_length=8)  # stat cards etc. (only approved ones are burned in)
     visual: str = ""  # no-speech clips: what the vision model saw on screen (feeds the posts instead of speech)
     options: RenderOptions = RenderOptions()
     stale: bool = False  # edited after rendering -> needs re-render
@@ -177,6 +205,7 @@ class ClipEdit(BaseModel):
     keywords: list[str] | None = None
     approved: bool | None = None
     removed: list[tuple[float, float]] | None = None  # struck word ranges, replaces the list ([] restores all)
+    inserts: list[Insert] | None = Field(None, max_length=8)  # replaces the list
     options: RenderOptions | None = None
 
 

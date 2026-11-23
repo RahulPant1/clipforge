@@ -137,6 +137,13 @@ class Settings(BaseSettings):
     # "1:1" (X, LinkedIn) — own face-tracked crop (wider: more of the scene), captions/hook/logo re-placed.
     # Comma list for new shorts, e.g. EXTRA_ASPECTS=4:5 ; each short can switch them in the Shorts step.
     extra_aspects: str = ""
+    # Inserts (inserts.py): motion-graphics cards burned in when a number is spoken (stat_counter). Only approved
+    # ones render; drawn by INSERT_RENDERER (pillow; a Blender renderer can plug into insert_render.py later).
+    inserts_max: int = 2  # per short, ≥ INSERT_GAP s apart
+    insert_renderer: str = "pillow"
+    insert_count_seconds: float = 0.8  # the count-up; then it holds until the sentence ends
+    insert_min_seconds: float = 1.8
+    insert_max_seconds: float = 3.5
     # Hook title card: clip.hook as big text for the first seconds (top of frame; captions are at the bottom)
     hook_overlay: bool = True  # per-clip override in the Shorts step
     hook_seconds: float = 3.0

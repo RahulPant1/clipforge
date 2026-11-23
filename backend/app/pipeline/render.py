@@ -6,7 +6,7 @@ from pathlib import Path
 
 from ..config import settings
 from ..models import BrandKit, Clip, RenderOptions, Segment
-from . import brand, emoji, sfx
+from . import brand, emoji, insert_render, inserts, sfx
 from .captions import _text as caption_text
 from .captions import build_ass, build_hook_ass, build_srt, chunk_words, text_scale
 from .fonts import font_for, fontsdir_option
@@ -64,19 +64,31 @@ def render_clip(video: Path, clip: Clip, segs: list[Segment], job_dir: Path) -> 
     card = brand.end_card_seconds(kit, o, plan.duration)
     total = plan.duration + card
     # Sound design: effects pre-mixed on one track (sfx.py), shared by every format
+    timed = inserts.schedule(clip, plan, segs)  # stat cards: output-time windows, same in every format
     want_fx = settings.sfx_default if o.sfx is None else o.sfx
-    fx = sfx.write_track(sfx.events(plan, clip.keywords), total, job_dir / f"{name}.sfx.wav") if want_fx else None
+    evts = sorted([*sfx.events(plan, clip.keywords), *((t.start, "pop") for t in timed)]) if want_fx else []
+    fx = sfx.write_track(evts, total, job_dir / f"{name}.sfx.wav") if want_fx else None
     if not fx:
         (job_dir / f"{name}.sfx.wav").unlink(missing_ok=True)
 
-    rf = _encode(video, clip, plan, job_dir, name, ASPECTS["9:16"][0], kit, card, fx)
+    errors: list[str] = []
+    used: set[str] = set()  # insert frame folders this render uses (the rest are pruned)
+    try:
+        rf = _encode(video, clip, plan, job_dir, name, ASPECTS["9:16"][0], kit, card, fx, timed, used, errors)
+    except RuntimeError as e:
+        if not timed:
+            raise
+        log.warning("%s failed with stat cards, rendering without: %s", name, e)  # a card never costs the short
+        errors.append(f"stat cards left out: {e}"[:200])
+        timed = []
+        rf = _encode(video, clip, plan, job_dir, name, ASPECTS["9:16"][0], kit, card, fx, timed, used, errors)
     clip.reframe = rf.mode
     clip.fit_seconds = round(clip.duration if rf.mode == "fit" else sum(b - a for a, b in rf.fit), 1)
     subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-ss", "1", "-i", f"{name}.mp4",
                     "-frames:v", "1", "-vf", "scale=360:-1", f"{name}.jpg"],
                    cwd=job_dir, capture_output=True)
 
-    errors, formats = [], []
+    formats = []
     wanted = extra_aspects(o)
     for aspect in FEED:
         base = f"{name}{ASPECTS[aspect][1]}"
@@ -85,24 +97,26 @@ def render_clip(video: Path, clip: Clip, segs: list[Segment], job_dir: Path) -> 
                 (job_dir / f"{base}{ext}").unlink(missing_ok=True)
             continue
         try:
-            _encode(video, clip, plan, job_dir, base, ASPECTS[aspect][0], kit, card, fx)
+            _encode(video, clip, plan, job_dir, base, ASPECTS[aspect][0], kit, card, fx, timed, used, errors)
             formats.append(aspect)
         except Exception as e:  # the 9:16 is done and fine; say what's missing
             log.warning("%s %s version failed: %s", name, aspect, e)
             (job_dir / f"{base}.mp4").unlink(missing_ok=True)
             errors.append(f"{aspect} version failed: {e}")
 
+    insert_render.prune(job_dir / "inserts" / name, used)
     clip.out_duration = round(total, 2)
     clip.formats = formats
     clip.brand_rev = kit.rev if brand.in_use(kit) else -1
     clip.version += 1
     clip.stale = False
-    clip.render_error = "; ".join(errors)[:500] or None
+    clip.render_error = "; ".join(dict.fromkeys(errors))[:500] or None
     return f"{name}.mp4"
 
 
 def _encode(video: Path, clip: Clip, plan: CutPlan, job_dir: Path, name: str, size: tuple[int, int],
-            kit: BrandKit, card: float, fx: Path | None) -> ReframePlan:
+            kit: BrandKit, card: float, fx: Path | None, timed: list[inserts.Timed] | None = None,
+            used: set[str] | None = None, errors: list[str] | None = None) -> ReframePlan:
     """One output file `name`.mp4 on a `size` canvas (1080 wide). Returns how it was framed."""
     w, h = size
     o = clip.options
@@ -163,18 +177,34 @@ def _encode(video: Path, clip: Clip, plan: CutPlan, job_dir: Path, name: str, si
     total = plan.duration + card
     inputs: list[Path] = []  # extra inputs after the source: images, music, effects track
 
-    def add(p: Path, loop: bool = False) -> int:
+    def add(p: Path, loop: bool = False, opts: tuple[str, ...] = ()) -> int:
         nonlocal cmd
-        cmd += [*(["-stream_loop", "-1"] if loop else []), "-i", str(p.resolve())]
+        cmd += [*(["-stream_loop", "-1"] if loop else []), *opts, "-i", str(p.resolve())]
         inputs.append(p)
         return len(inputs)
 
     want_emoji = settings.caption_emoji if o.emoji is None else o.emoji
     placed = place_emoji(clip, plan, preset, cap_font, middle, size, captions=bool(subs),
                          hook=bool(hook_ass)) if want_emoji else []
+    timed = timed or []
+    placed = [e for e in placed if not any(e.start < t.end and t.start < e.end for t in timed)]  # card's moment
     pngs = [(e, emoji.png(e.emoji, e.px)) for e in placed]  # None: no font / not drawable → left out
     placed = [e for e, f in pngs if f]
     emoji_in = [add(f) for _, f in pngs if f]
+    layers = []
+    for t in timed:  # stat cards: frames drawn once per spec (cached), placed clear of face / hook / captions
+        try:
+            spec = insert_render.make_spec(t.insert, t.end - t.start, inserts.box_size(h), brand.accent(kit), font)
+            fr = insert_render.frames(spec, job_dir / "inserts" / f"short_{clip.index}")
+            x, y = inserts.placement(t.insert, size, split=middle, caption_position=o.caption_position,
+                                     captions=bool(subs))
+            layers.append(inserts.Layer(add(fr.pattern, opts=("-framerate", str(fr.fps))), x, y, t.start, t.end))
+            if used is not None:
+                used.add(fr.folder.name)
+        except Exception as e:  # one card failing never fails the short
+            log.warning("%s: stat card %s failed: %s", name, t.insert.id, e)
+            if errors is not None:
+                errors.append(f"stat card failed: {e}"[:200])
     logo = brand.watermark(kit, o)
     card_png = brand.end_card_png(kit, job_dir / f"{name}.end.png", height=h) if card else None
     logo_in = add(logo) if logo else None
@@ -184,12 +214,15 @@ def _encode(video: Path, clip: Clip, plan: CutPlan, job_dir: Path, name: str, si
     fx_in = add(fx) if fx else None
 
     graphs, maps = [], []
-    if logo_in or card_in or placed:  # images need their own inputs → filter_complex instead of -vf
+    if logo_in or card_in or placed or layers:  # images need their own inputs → filter_complex instead of -vf
         logo_from = min(settings.hook_seconds, plan.duration) if hook_ass else 0.0  # the hook card owns the top
         graphs.append(f"[0:v]{','.join(vf)}[b]")
         base = "b"
+        if layers:  # stat cards: over captions + hook card, under emoji / logo / end card
+            g, base = inserts.graph(base, layers)
+            graphs.append(g)
         if placed:  # over captions + hook card, under the logo / end card
-            g, base = emoji.graph("b", placed, emoji_in[0])
+            g, base = emoji.graph(base, placed, emoji_in[0])
             graphs.append(g)
         graphs.append(brand.overlay_graph(base, logo_input=logo_in, kit=kit, card_input=card_in, start=logo_from,
                                           end=plan.duration, card_from=plan.duration, height=h))

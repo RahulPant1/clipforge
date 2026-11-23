@@ -136,7 +136,24 @@ backend/                FastAPI + pipeline (Python 3.11, conda env "clipforge")
                         (top layout only). render.place_emoji() mirrors the ASS placement (margins, measured wrap);
                         overlays go after captions/hook, before logo/end card. options.emoji / CAPTION_EMOJI. Tests:
                         conftest blocks _download; test_emoji_crop fakes font_path/_render
-    waveform.py         Pick timeline: loudness 0-100 at 20/s from one chunked ffmpeg PCM pass → waveform.json
+    numbers.py          spoken numbers → Num (value, decimals, prefix ₹$€£, suffix % x K M " lakh" " crore", grouping
+                        western|indian): digits, English/Hinglish number words, Devanagari digits, magnitudes; skips
+                        years, ranges (both halves), fractions, clock times, ordinals, bare numbers < 10. Display keeps
+                        how it was said ("2.5 lakh"); Num.text(v) formats count-up frames the same way
+    inserts.py          motion-graphics cards (template stat_counter). clip.inserts = Insert (SOURCE t, value/prefix/
+                        suffix from numbers.py — never model text, label, position auto|upper|lower, approved, custom).
+                        candidates() (struck words excluded, unit/size/keyword score) + rule_label(); schedule() =
+                        approved only → timing() in OUTPUT time via plan.remap (LEAD before the number, holds to the
+                        sentence end, INSERT_MIN/MAX_SECONDS; trimmed-out / struck → none), ≤ INSERTS_MAX, ≥ GAP apart.
+                        placement(): above the bottom captions (under middle ones), top in split; box scales with h
+    insert_render.py    InsertSpec (JSON contract, also for a future Blender renderer) → InsertRenderer protocol →
+                        RGBA PNG frames cached in inserts/short_N/<hash>/ (hash = spec + renderer name/version; pruned
+                        per render). PillowRenderer.stat_counter: count-up (ease-out) + label on a dark card, brand
+                        accent, pop-in/fade, held frames hard-linked. render.py: frames input (-framerate) → setpts
+                        shift → overlay enable=between (after captions/hook, before emoji/logo); caption emoji hidden
+                        while a card shows; pop sfx at its start; a failing card → short without it + render_error.
+                        Approved inserts are burned in (edit → stale). Tests fake the renderer (RENDERERS["pillow"])
+: loudness 0-100 at 20/s from one chunked ffmpeg PCM pass → waveform.json
     export.py           export pack zip (shorts, srt, posts, carousels, titles.csv)
     render.py           plan_cuts + plan_reframe → captions → ffmpeg
                         (fps → sendcmd+crop@track → select → scale/pad → ass; audio: asplit/atrim/concat) + thumbnail
@@ -363,4 +380,9 @@ Keep it local: no cloud stock/B-roll/TTS APIs.
 21. [x] I. Multi-aspect export: 1:1 and 4:5 alongside 9:16 (own face-tracked crop, captions re-placed).
 22. [x] L. Several title/hook variants to choose from.
 23. [x] N. Batch: several links / a playlist / a channel / Find-videos picks as a queue of jobs; watched folder.
+24. [ ] Motion-graphics inserts (stat_counter). [x] phases 1-2: numbers.py, inserts.py, insert_render.py (Pillow),
+        render overlay, Clip.inserts via PATCH. [ ] 3: Gemma picks + labels candidates by id (label words must be in
+        the sentence, else rule_label), produce writing stage + POST /clips/{i}/inserts/suggest (GPU_LOCK),
+        INSERTS_SUGGEST/INSERTS_AUTO. [ ] 4: InsertEditor.jsx in Shorts step. [ ] later: Blender renderer (Windows
+        blender.exe via wslpath) behind the same InsertRenderer protocol.
 (M = Hinglish/bilingual captions → item 10; O = calendar + auto-publish → items 9 and 11.)

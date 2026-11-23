@@ -48,11 +48,12 @@ YouTube URL / file
 - **No-speech videos** (music, gameplay, sport, nature): when hardly anything is said, clips come from the
   loudest, busiest moments (loudness, motion, scene cuts), and Gemma *looks* at keyframes to score and title
   them; credits and title screens are marked down. Those shorts render without captions or jump cuts
-- **🗣 Your voice:** record yourself a few times (in the browser or upload), and ClipForge learns your voice from
-  all the takes — no training: it averages your voice over every recording and uses the clearest one for pace and
-  tone, and leaves out takes that don't sound like you. Then type anything and hear it in your voice. Runs only
-  when you ask (Qwen3-TTS, Apache 2.0, in its own environment — `bash scripts/setup_tts.sh`); clone your own voice
-  only. English and 9 other languages; Hindi isn't supported yet
+- **🗣 Voice Library:** several voice profiles — yours, or anyone who agreed (a consent tick when you create one).
+  Record or import takes, fix their words, build. Each build is a new **version** with its own test sample, so you
+  can add recordings later and **compare** v1 against v2 on the same sentence. It's reference-based cloning, not
+  training: the voice is averaged over your takes (ones that don't sound like the rest are left out) and the
+  clearest take sets the pace and tone; the model itself never changes. Runs only when you ask (Qwen3-TTS, Apache
+  2.0, in its own environment — `bash scripts/setup_tts.sh`). English and 9 other languages; no Hindi yet
 - **Clip judge:** every candidate is checked like an editor would — does it start mid-thought or lean on something
   said before it, does it stop before its payoff, does the cut change what the speaker meant — and gets a verdict
   (ready / trim / needs context / reject) with the evidence and a one-click **Apply fix** that moves the edges to
@@ -211,16 +212,22 @@ Copy `backend/.env.example` → `backend/.env`. Key options:
 | `LIBRARY_DIR` | `data/library` | Where the history folders and spreadsheet go |
 | `YTDLP_COOKIES` | – | cookies.txt path if YouTube asks for bot check |
 
-### Your voice (voice cloning)
+### Voice Library (voice cloning)
 One-time: `bash scripts/setup_tts.sh` (its own conda env, ~10 GB with PyTorch; the 1.7B model, ~4 GB, downloads on
-the first build). Then **🗣 Your voice** in the sidebar:
+the first build). Then **🗣 Voice Library** in the sidebar → **+ New voice** (name, description, consent):
 1. **Record** 6–10 takes of 5–15 s in different moods (1–2 minutes in all): quiet room, mic 15–20 cm away, your
    normal voice. Read the suggested lines or upload audio; long takes are split at sentence ends.
 2. **Check** each take: fix words Whisper misheard (the voice uses them), untick noisy ones. Quality is scored
    from clarity, Whisper's confidence and length.
-3. **Build** (~30 s once the model is there): your voice averaged over every take; takes that don't sound like the
-   rest are left out; the best take sets the pace and tone.
-4. **Try it**: type anything, hear it in your voice. Sounds off → add or replace takes and rebuild.
+3. **Build a version** (~30-50 s once the model is there): the voice averaged over every take; takes that don't
+   sound like the rest are left out; the best take sets the pace and tone. Each build is kept (v1, v2, …) with a
+   test sample.
+4. **Try it / compare**: type anything and hear it in any version; **Compare** plays the same line in two versions.
+   Sounds off → add or replace takes and build again.
+
+**Cloning vs fine-tuning:** a build makes a *reference voice prompt* (an averaged speaker embedding plus one
+reference take) that is cached and reused — the Qwen3-TTS model is not trained or modified. Real fine-tuning of the
+1.7B model needs ~14 GB of GPU memory, which an 8 GB card doesn't have.
 
 It runs only when you ask (one process per build or line, then the GPU is free again) and takes ~4.5 GB of GPU
 memory. Measured on an RTX 4060 laptop: ~2 s to make 1 s of speech, plus ~20 s to load the model each time.

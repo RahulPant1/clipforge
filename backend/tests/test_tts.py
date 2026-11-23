@@ -79,8 +79,10 @@ def test_pick_best_prefers_the_asked_style():
 
 @needs_ffmpeg
 def test_recordings_are_cleaned_split_transcribed_and_scored(tmp_path, fake_whisper):
-    v = tts.create("My Voice")
-    assert v["id"] == "my-voice" and tts.create("My Voice")["id"].startswith("my-voice-")  # unique
+    v = tts.create("My Voice", consent=True)
+    assert v["id"] == "my-voice" and tts.create("My Voice", consent=True)["id"].startswith("my-voice-")  # unique
+    with pytest.raises(ValueError, match="permission"):
+        tts.create("Someone else")
     short = _tone(tmp_path / "a.wav", 8.0)
     long = _tone(tmp_path / "b.wav", 50.0)
     v = tts.add_recordings("my-voice", [("a.wav", short), ("b.wav", long)], style="calm")
@@ -118,19 +120,24 @@ class FakeWorker:
             n = len(job["recordings"])
             sims = self.sims or [0.95] * n
             open(job["out"], "wb").write(b"prompt")
-            return {"ok": True, "similarity": sims, "used": [i for i, s in enumerate(sims)
-                                                              if s >= job["min_similarity"]], "peak_vram_mb": 5000}
+            sample = None
+            if job.get("sample"):
+                open(job["sample"]["out"], "wb").write(b"RIFF")
+                sample = {"out": job["sample"]["out"], "seconds": 2.5, "took": 3.0}
+            med, gap = sorted(sims)[n // 2], job["outlier_gap"]
+            return {"ok": True, "similarity": sims, "used": [i for i, s in enumerate(sims) if n < 3 or s >= med - gap],
+                    "peak_vram_mb": 5000, "sample": sample}
         if job["cmd"] == "speak":
             items = []
             for it in job["items"]:
                 open(it["out"], "wb").write(b"RIFF")
-                items.append({"out": it["out"], "seconds": 3.2, "took": 4.0})
+                items.append({"out": it["out"], "seconds": 3.2, "took": 4.0, "prompt": it.get("prompt")})
             return {"ok": True, "items": items, "sample_rate": 24000}
         return {"ok": True, "cuda_ok": True, "torch": "2.9", "cuda": "12.8", "gpu": "RTX"}
 
 
 def _voice_with(recs: list[dict]) -> str:
-    v = tts.create("Me")
+    v = tts.create("Me", consent=True)
     v["recordings"] = [{"file": f"rec_{i}.wav", "text": f"line {i}", "use": True, "style": "", "seconds": 8,
                         "score": 60, **r} for i, r in enumerate(recs, 1)]
     tts.save(v)
@@ -138,18 +145,18 @@ def _voice_with(recs: list[dict]) -> str:
 
 
 def test_build_uses_the_best_take_and_flags_outliers(monkeypatch):
-    worker = FakeWorker(sims=[0.93, 0.95, 0.52, 0.91])
+    worker = FakeWorker(sims=[0.993, 0.995, 0.970, 0.991])  # measured: own takes ~0.99, a foreign one 0.970
     monkeypatch.setattr(tts, "run_worker", worker)
     vid = _voice_with([{}, {"score": 88}, {}, {"use": False}, {"score": 70}])
     v = tts.build(vid)
     job = worker.jobs[0]
     assert job["cmd"] == "build" and len(job["recordings"]) == 4 and job["best"] == 1  # unused take not sent
-    assert job["min_similarity"] == tts.MIN_SIMILARITY and job["model"] == settings.tts_model
+    assert job["outlier_gap"] == tts.OUTLIER_GAP and job["model"] == settings.tts_model
     assert v["built"]["best"] == "rec_2.wav" and v["built"]["used"] == 3
     flagged = {r["file"]: r.get("outlier") for r in v["recordings"]}
     assert flagged["rec_3.wav"] is True and flagged["rec_1.wav"] is False
     v = tts.edit_recording(vid, "rec_1.wav", {"text": "changed"})
-    assert v["built"] is None  # recordings changed → build again
+    assert v["dirty"] is True and v["built"]["version"] == 1  # changed since v1 — v1 stays usable
 
 
 def test_speak_builds_first_and_writes_samples(monkeypatch):
@@ -193,7 +200,12 @@ def test_voice_api(tmp_path, monkeypatch, fake_whisper):
     from .conftest import SchemaFakeLLM
 
     with TestClient(create_app(start_worker=False, llm_factory=SchemaFakeLLM)) as c:
-        vid = c.post("/api/voices", json={"name": "Rahul"}).json()["id"]
+        assert c.post("/api/voices", json={"name": "Rahul"}).status_code == 400  # no consent
+        new = {"name": "Rahul", "description": "Me, normal voice", "consent": True}
+        vid = c.post("/api/voices", json=new).json()["id"]
+        r = c.patch(f"/api/voices/{vid}", json={"name": "Rahul (calm)", "language": "English"})
+        assert r.json()["name"] == "Rahul (calm)" and r.json()["description"] == "Me, normal voice"
+        assert c.patch(f"/api/voices/{vid}", json={"language": "Klingon"}).status_code == 400
         audio = _tone(tmp_path / "take.wav", 7.0)
         with GPU_LOCK:
             busy = c.post(f"/api/voices/{vid}/recordings", files=[("files", ("take.wav", audio, "audio/wav"))])
@@ -214,3 +226,71 @@ def test_voice_api(tmp_path, monkeypatch, fake_whisper):
         assert c.get("/api/voices/nope/audio/samples/x.wav").status_code == 404
         assert c.delete(f"/api/voices/{vid}").json() == {"ok": True}
         assert json.loads(json.dumps(c.get("/api/voices").json()))["voices"] == []
+
+
+def test_every_build_is_a_version_with_its_own_sample_and_they_can_be_compared(monkeypatch):
+    worker = FakeWorker()
+    monkeypatch.setattr(tts, "run_worker", worker)
+    vid = _voice_with([{}, {"score": 80}])
+    v1 = tts.build(vid, sample_text="Testing one two.")
+    b1 = v1["builds"][0]
+    d = tts.voice_dir(vid)
+    assert (b1["version"], b1["prompt"], b1["sample"], b1["files"]) == (1, "prompts/v1.pt", "v1.wav",
+                                                                        ["rec_1.wav", "rec_2.wav"])
+    assert b1["kind"] == "reference voice prompt" and (d / "samples" / "v1.wav").exists() and not v1["dirty"]
+    assert worker.jobs[0]["sample"]["text"] == "Testing one two."
+    tts.edit_recording(vid, "rec_2.wav", {"use": False})
+    v2 = tts.build(vid)
+    assert [b["version"] for b in v2["builds"]] == [1, 2] and v2["builds"][1]["files"] == ["rec_1.wav"]
+    assert (d / "prompts" / "v1.pt").exists()  # the old version stays
+
+    tts.speak(vid, ["Hello."], version=1)
+    assert worker.jobs[-1]["prompt"].endswith("prompts/v1.pt")
+    tts.speak(vid, ["Hello."])
+    assert worker.jobs[-1]["prompt"].endswith("prompts/v2.pt")  # newest by default
+    out = tts.compare(vid, "Same line.", [1, 2])
+    job = worker.jobs[-1]
+    assert len(worker.jobs) == 5 and [i["prompt"].rsplit("/", 1)[1] for i in job["items"]] == ["v1.pt", "v2.pt"]
+    assert [o["version"] for o in out] == [1, 2] and all((d / "samples" / o["file"]).exists() for o in out)
+    with pytest.raises(KeyError):
+        tts.compare(vid, "x", [1, 7])
+
+
+def test_old_versions_beyond_the_limit_lose_their_prompt(monkeypatch):
+    monkeypatch.setattr(tts, "run_worker", FakeWorker())
+    monkeypatch.setattr(tts, "MAX_VERSIONS", 2)
+    vid = _voice_with([{}])
+    for _ in range(3):
+        v = tts.build(vid)
+    assert [b["prompt"] for b in v["builds"]] == [None, "prompts/v2.pt", "prompts/v3.pt"]
+    assert not (tts.voice_dir(vid) / "prompts" / "v1.pt").exists()
+    with pytest.raises(KeyError):
+        tts.prompt_for(v, 1)
+
+
+def test_voices_from_before_versions_keep_working(monkeypatch):
+    worker = FakeWorker()
+    monkeypatch.setattr(tts, "run_worker", worker)
+    d = tts.root() / "old"
+    d.mkdir(parents=True)
+    (d / "prompt.pt").write_bytes(b"p")
+    (d / "voice.json").write_text(json.dumps({"id": "old", "name": "Old", "created": 1.0, "language": "Auto",
+                                              "recordings": [{"file": "rec_1.wav", "text": "hi", "use": True}],
+                                              "built": {"at": 2.0, "model": "m", "best": "rec_1.wav", "used": 1}}))
+    v = tts.load("old")
+    assert v["builds"][0]["version"] == 1 and v["builds"][0]["prompt"] == "prompt.pt" and v["dirty"] is False
+    tts.speak("old", ["Still works."])
+    assert worker.jobs[-1]["prompt"].endswith("old/prompt.pt")
+    assert tts.build("old")["builds"][-1]["version"] == 2
+
+
+def test_a_build_whose_record_was_cleared_is_kept_as_v1():
+    d = tts.root() / "mine"
+    d.mkdir(parents=True)
+    (d / "prompt.pt").write_bytes(b"p")
+    (d / "voice.json").write_text(json.dumps({"id": "mine", "name": "Mine", "created": 1.0, "language": "Auto",
+                                              "recordings": [{"file": "rec_1.wav", "text": "hi", "use": True}],
+                                              "built": None}))  # built, then a take was edited (old code)
+    v = tts.load("mine")
+    assert [b["version"] for b in v["builds"]] == [1] and v["built"]["prompt"] == "prompt.pt" and v["dirty"]
+    assert tts.prompt_for(v).name == "prompt.pt"

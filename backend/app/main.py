@@ -24,6 +24,7 @@ from .models import (
     Clip,
     ClipAdd,
     ClipEdit,
+    CompareRequest,
     CoverEdit,
     Insert,
     Job,
@@ -47,6 +48,7 @@ from .models import (
     Vocabulary,
     VoiceBuild,
     VoiceCreate,
+    VoiceUpdate,
     WordEdit,
 )
 from .pipeline import (
@@ -244,11 +246,24 @@ def create_app(pipeline=None, start_worker: bool = True, llm_factory=OllamaClien
     @app.get("/api/voices")
     def list_voices() -> dict:
         return {"voices": tts.all_voices(), "styles": list(tts.STYLES), "max_recordings": tts.MAX_RECORDINGS,
-                "min_similarity": tts.MIN_SIMILARITY, "model": settings.tts_model}
+                "outlier_gap": tts.OUTLIER_GAP, "model": settings.tts_model, "languages": list(tts.LANGUAGES),
+                "sample_text": settings.tts_sample_text}
 
     @app.post("/api/voices", status_code=201)
     def create_voice(body: VoiceCreate) -> dict:
-        return tts.create(body.name)
+        try:
+            return tts.create(body.name, body.description, body.consent)
+        except ValueError as e:
+            raise HTTPException(400, str(e)) from None
+
+    @app.patch("/api/voices/{vid}")
+    def update_voice(vid: str, body: VoiceUpdate) -> dict:
+        """Rename / describe / set the default language (no rebuild needed)."""
+        voice_or_404(vid)
+        try:
+            return tts.update_profile(vid, body.model_dump(exclude_none=True))
+        except ValueError as e:
+            raise HTTPException(400, str(e)) from None
 
     @app.delete("/api/voices/{vid}")
     def delete_voice(vid: str) -> dict:
@@ -282,14 +297,21 @@ def create_app(pipeline=None, start_worker: bool = True, llm_factory=OllamaClien
     def build_voice(vid: str, body: VoiceBuild | None = None) -> dict:
         """Your voice from every used recording (averaged speaker embedding + the best clip's delivery)."""
         voice_or_404(vid)
-        return gpu_work(lambda: tts.build(vid, (body.style if body else "") or ""))
+        return gpu_work(lambda: tts.build(vid, (body.style if body else "") or "",
+                                          (body.sample_text if body else "") or None))
 
     @app.post("/api/voices/{vid}/speak")
     def speak_voice(vid: str, body: SpeakRequest) -> dict:
         """Any text in your voice → a wav in the voice's samples (first call downloads the model, ~4 GB)."""
         voice_or_404(vid)
-        out = gpu_work(lambda: tts.speak(vid, [body.text], body.language or None))
+        out = gpu_work(lambda: tts.speak(vid, [body.text], body.language or None, version=body.version))
         return {**out[0], "voice": tts.load(vid)}
+
+    @app.post("/api/voices/{vid}/compare")
+    def compare_voice(vid: str, body: CompareRequest) -> dict:
+        """The same sentence in two versions of the voice (one model load) — hear what a rebuild changed."""
+        voice_or_404(vid)
+        return {"items": gpu_work(lambda: tts.compare(vid, body.text, body.versions, body.language or None))}
 
     @app.get("/api/voices/{vid}/audio/{kind}/{name}")
     def voice_audio(vid: str, kind: str, name: str):

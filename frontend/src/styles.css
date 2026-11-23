@@ -581,3 +581,13 @@ aside { min-width: 0; }  /* a long History path must shrink (ellipsis), not wide
 .tline.scene .sthumb { float: left; width: 96px; aspect-ratio: 16 / 9; object-fit: cover; border-radius: 4px;
   margin: 2px 8px 2px 0; cursor: pointer; background: #000; }
 .tline.scene .ttext::after { content: ""; display: block; clear: both; }
+.voicelab .vl-new, .voicelab .vl-profile { display: flex; flex-direction: column; gap: 8px; }
+.voicelab .vl-name { font-size: 18px; font-weight: 700; }
+.voicelab .vl-meta { display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: center; }
+.voicelab .row-btns .grow { flex: 1; min-width: 200px; }
+.voicelab .vl-versions { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.voicelab .vl-versions li { display: grid; grid-template-columns: 40px 1fr minmax(180px, 260px); gap: 8px; align-items: center; }
+.voicelab .vl-versions li.gone { opacity: .5; }
+.voicelab .vl-versions audio, .voicelab .vl-pair audio { width: 100%; height: 34px; }
+.voicelab .vl-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+@media (max-width: 700px) { .voicelab .vl-versions li, .voicelab .vl-pair { grid-template-columns: 1fr; } }

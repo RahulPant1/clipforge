@@ -4,11 +4,13 @@ voice is built or speaks, then exits so the GPU is free again. Never imports Cli
     <tts python> qwen_worker.py job.json      → prints one JSON line (the result) on stdout; logs go to stderr
 
 Jobs:
-  {"cmd": "build", "model": ..., "recordings": [{"audio": wav, "text": transcript}, ...], "best": i, "out": prompt.pt}
+  {"cmd": "build", "model": ..., "recordings": [{"audio": wav, "text": transcript}, ...], "best": i, "out": prompt.pt,
+   "sample": {"text", "language", "out"}}   (sample optional: a test line in the new voice, same model load)
       One clone prompt per recording → their speaker embeddings averaged (your voice, steadier than any one clip)
       → saved with the best clip's audio codes + transcript (its delivery: pace, tone). Returns each clip's cosine
       similarity to the average (a low one = noise / another voice in that recording).
-  {"cmd": "speak", "model": ..., "prompt": prompt.pt, "items": [{"text", "language", "out"}], "gen": {...}}
+  {"cmd": "speak", "model": ..., "prompt": prompt.pt, "items": [{"text", "language", "out", "prompt"?}], "gen": {...}}
+      (an item's own "prompt" = another voice version — A/B comparisons in one model load)
       Every line in the voice; one model load for all of them. Writes 24 kHz mono wavs.
   {"cmd": "check"}  → torch / CUDA / package versions (no model load)
 """
@@ -42,35 +44,56 @@ def build(job: dict) -> dict:
                                             x_vector_only_mode=False)
     embs = torch.stack([it.ref_spk_embedding.float() for it in items])
     unit = torch.nn.functional.normalize(embs, dim=-1)
-    mean_dir = torch.nn.functional.normalize(unit.mean(0), dim=0)
-    sims = (unit @ mean_dir).tolist()
-    keep = [i for i, s in enumerate(sims) if s >= job.get("min_similarity", 0.0)] or list(range(len(items)))
+    n = len(items)
+    # each take against the average of the OTHER takes (with itself in the mean an odd one hides); speaker
+    # embeddings sit close together (two different voices measured 0.945), so the rule is relative: a take more
+    # than outlier_gap below the median of the profile is someone/something else (a foreign take: 0.970 vs 0.99)
+    sims = []
+    for i in range(n):
+        others = unit[[k for k in range(n) if k != i]] if n > 1 else unit
+        sims.append(float(unit[i] @ torch.nn.functional.normalize(others.mean(0), dim=0)))
+    med = sorted(sims)[n // 2]
+    gap = job.get("outlier_gap")
+    keep = [i for i, s in enumerate(sims) if gap is None or n < 3 or s >= med - gap] or list(range(n))
     avg = embs[keep].mean(0)  # mean of the raw vectors keeps their typical norm
     best = items[job.get("best", 0)]
     voice = VoiceClonePromptItem(ref_code=best.ref_code, ref_spk_embedding=avg.to(best.ref_spk_embedding.dtype),
                                  x_vector_only_mode=False, icl_mode=True, ref_text=best.ref_text)
     torch.save({"version": 1, "model": job["model"], "item": voice.__dict__, "used": keep}, job["out"])
-    return {"similarity": [round(s, 4) for s in sims], "used": keep,
+    sample = say(model, voice, job["sample"], job.get("gen", {})) if job.get("sample") else None
+    return {"similarity": [round(s, 4) for s in sims], "median": round(med, 4), "used": keep, "sample": sample,
             "peak_vram_mb": round(torch.cuda.max_memory_allocated() / 2**20)}
 
 
-def speak(job: dict) -> dict:
+def say(model, item, it: dict, gen: dict) -> dict:
     import soundfile as sf
+
+    t = time.time()
+    wavs, sr = model.generate_voice_clone(text=it["text"], language=it.get("language") or "Auto",
+                                          voice_clone_prompt=[item], **gen)
+    sf.write(it["out"], wavs[0], sr)
+    res = {"out": it["out"], "seconds": round(len(wavs[0]) / sr, 2), "took": round(time.time() - t, 2), "sr": sr}
+    log(f"{it['out']}: {res['seconds']} s of speech in {res['took']} s")
+    return res
+
+
+def speak(job: dict) -> dict:
     import torch
     from qwen_tts.inference.qwen3_tts_model import VoiceClonePromptItem
 
-    saved = torch.load(job["prompt"], map_location="cpu", weights_only=False)
-    model = load(job.get("model") or saved["model"], job.get("attn", "sdpa"))
-    item = VoiceClonePromptItem(**saved["item"])
-    out = []
-    for it in job["items"]:  # one at a time: long batches cost VRAM on 8 GB
-        t = time.time()
-        wavs, sr = model.generate_voice_clone(text=it["text"], language=it.get("language") or "Auto",
-                                              voice_clone_prompt=[item], **job.get("gen", {}))
-        sf.write(it["out"], wavs[0], sr)
-        out.append({"out": it["out"], "seconds": round(len(wavs[0]) / sr, 2), "took": round(time.time() - t, 2)})
-        log(f"{it['out']}: {out[-1]['seconds']} s of speech in {out[-1]['took']} s")
-    return {"items": out, "sample_rate": sr, "peak_vram_mb": round(torch.cuda.max_memory_allocated() / 2**20)}
+    prompts: dict[str, object] = {}
+
+    def voice(path: str):
+        if path not in prompts:
+            saved = torch.load(path, map_location="cpu", weights_only=False)
+            prompts[path] = VoiceClonePromptItem(**saved["item"])
+        return prompts[path]
+
+    model = load(job["model"], job.get("attn", "sdpa"))
+    out = [say(model, voice(it.get("prompt") or job["prompt"]), it, job.get("gen", {}))  # one at a time: 8 GB
+           for it in job["items"]]
+    return {"items": out, "sample_rate": out[-1]["sr"] if out else None,
+            "peak_vram_mb": round(torch.cuda.max_memory_allocated() / 2**20)}
 
 
 def check(job: dict) -> dict:

@@ -28,7 +28,8 @@ export const api = {
   },
   ttsStatus: (refresh) => req(`/tts/status${refresh ? '?refresh=true' : ''}`),
   voices: () => req('/voices'),
-  createVoice: (name) => req('/voices', json('POST', { name })),
+  createVoice: (name, description, consent) => req('/voices', json('POST', { name, description, consent })),
+  updateVoice: (id, changes) => req(`/voices/${id}`, json('PATCH', changes)),
   deleteVoice: (id) => req(`/voices/${id}`, { method: 'DELETE' }),
   addRecordings: (id, files, style) => {
     const fd = new FormData()
@@ -38,8 +39,12 @@ export const api = {
   },
   editRecording: (id, file, changes) => req(`/voices/${id}/recordings/${file}`, json('PATCH', changes)),
   deleteRecording: (id, file) => req(`/voices/${id}/recordings/${file}`, { method: 'DELETE' }),
-  buildVoice: (id, style) => req(`/voices/${id}/build`, json('POST', { style: style || '' })),
-  speak: (id, text, language) => req(`/voices/${id}/speak`, json('POST', { text, language: language || '' })),
+  buildVoice: (id, style, sampleText) =>
+    req(`/voices/${id}/build`, json('POST', { style: style || '', sample_text: sampleText || '' })),
+  speak: (id, text, language, version) =>
+    req(`/voices/${id}/speak`, json('POST', { text, language: language || '', version: version ?? null })),
+  compareVoice: (id, text, versions, language) =>
+    req(`/voices/${id}/compare`, json('POST', { text, versions, language: language || '' })),
   voiceAudio: (id, kind, name) => `/api/voices/${id}/audio/${kind}/${name}`,
   removeLogo: () => req('/brand-kit/logo', { method: 'DELETE' }),
   logoUrl: (v) => `/api/brand-kit/logo.png?v=${v}`,

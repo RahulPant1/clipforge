@@ -160,6 +160,7 @@ class Settings(BaseSettings):
     tts_language: str = "Auto"  # English, Chinese, ... (10 languages; no Hindi) or Auto
     tts_timeout: float = 900.0  # s per worker run (the first one downloads the model)
     tts_max_new_tokens: int = 2048  # ≈ 2.7 min of speech per line at 12.5 codes/s
+    tts_sample_text: str = "Here is a quick test of this voice. If it sounds right, the new version worked."
     # Inserts (inserts.py): motion-graphics cards burned in when a number is spoken (stat_counter). Only approved
     # ones render; drawn by INSERT_RENDERER (pillow; a Blender renderer can plug into insert_render.py later).
     inserts_suggest: bool = True  # produce: Gemma picks which spoken numbers get a card (suggestions, not approved)

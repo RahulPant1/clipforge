@@ -339,6 +339,14 @@ class Vocabulary(BaseModel):
 
 class VoiceCreate(BaseModel):
     name: str = Field(min_length=1, max_length=60)
+    description: str = Field("", max_length=300)
+    consent: bool = False  # it's your voice, or its owner agreed to it being cloned
+
+
+class VoiceUpdate(BaseModel):
+    name: str | None = Field(None, min_length=1, max_length=60)
+    description: str | None = Field(None, max_length=300)
+    language: str | None = None
 
 
 class RecordingEdit(BaseModel):
@@ -349,11 +357,19 @@ class RecordingEdit(BaseModel):
 
 class VoiceBuild(BaseModel):
     style: str = ""  # prefer a recording tagged with this style as the delivery reference
+    sample_text: str = Field("", max_length=300)  # the test sentence for this version ("" = TTS_SAMPLE_TEXT)
 
 
 class SpeakRequest(BaseModel):
     text: str = Field(min_length=1, max_length=2000)
     language: str = Field("", max_length=20)  # "" = the voice's / TTS_LANGUAGE
+    version: int | None = None  # None = the newest
+
+
+class CompareRequest(BaseModel):
+    text: str = Field(min_length=1, max_length=600)
+    versions: list[int] = Field(min_length=2, max_length=3)
+    language: str = Field("", max_length=20)
 
 
 class Chapter(BaseModel):

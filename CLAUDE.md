@@ -146,11 +146,16 @@ backend/                FastAPI + pipeline (Python 3.11, conda env "clipforge")
                         (same names, any format) to replace. options.sfx / options.music; SFX_DEFAULT / MUSIC_DEFAULT
     voice.py            brand voice: your posts per platform (data/brand_voice.json, all jobs) → voice_block()
                         few-shot examples in PROMPT (≤5 per platform, borrows 2 from others if none); notes → Voice:
-    tts.py              🗣 Your voice (Qwen3-TTS voice cloning, NO training): data/voices/<id>/ voice.json + recordings/
-                        rec_N.wav (24 kHz mono, -20 LUFS, silence trimmed; takes > 20 s split at sentence ends via
-                        Whisper words) + prompt.pt. Recordings scored (SNR, Whisper logprob, 5-15 s, clipping). build =
-                        worker averages the speaker embeddings of every used take (outliers < MIN_SIMILARITY 0.75 left
-                        out, ≥ 3 takes) + the best take's audio codes/words as the delivery reference (ICL);
+    tts.py              🗣 Voice Library (Qwen3-TTS reference cloning, NO training — never call a build "training"):
+                        data/voices/<id>/ voice.json (name, description, consent_at, created/updated, builds, dirty) +
+                        recordings/rec_N.wav (24 kHz mono, -20 LUFS, trimmed; takes > 20 s split at sentence ends) +
+                        prompts/vN.pt + samples/vN.wav. create() needs consent. Every build = a new VERSION (prompt +
+                        test sample in ONE worker load; MAX_VERSIONS kept); edits only set dirty. compare() = one
+                        load, a prompt per item. migrate(): old voices (prompt.pt, maybe built=None after an edit)
+                        → v1. Outliers: each take vs the mean of the OTHER takes; left out when > OUTLIER_GAP 0.015
+                        below the profile median (measured: own takes 0.98-0.99, a foreign take 0.948, two different
+                        voices 0.945 — a fixed 0.75 cut-off never fired). build = averaged embedding of the kept takes
+                        + the best take's audio codes/words as the delivery reference (ICL);
                         speak = generate_voice_clone(voice_clone_prompt=[item]). Runs in its OWN env (clipforge-tts,
                         Python 3.12, scripts/setup_tts.sh) via backend/tts/qwen_worker.py — one process per build/
                         speak, exits → VRAM free; never imported by ClipForge. API /api/voices… (gpu_work: GPU_LOCK +

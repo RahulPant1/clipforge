@@ -106,7 +106,7 @@ export default function App() {
             🎨 Brand kit
           </button>
           <button className={`voicebtn ${selectedId === SPEECH ? 'on' : ''}`} onClick={() => setSelectedId(SPEECH)}>
-            🗣 Your voice
+            🗣 Voice Library
           </button>
           <History />
           <JobList jobs={jobs} selectedId={selectedId} onSelect={setSelectedId} onDelete={onDelete} />

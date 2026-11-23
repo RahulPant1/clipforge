@@ -57,7 +57,7 @@ function Recorder({ disabled, onDone }) {
   )
 }
 
-function RecordingRow({ v, r, busy, run, minSim }) {
+function RecordingRow({ v, r, busy, run }) {
   const [text, setText] = useState(r.text)
   useEffect(() => setText(r.text), [r.text])
   const edit = (ch) => run(() => api.editRecording(v.id, r.file, ch))
@@ -75,7 +75,7 @@ function RecordingRow({ v, r, busy, run, minSim }) {
           <span title="Loud vs quiet parts: under ~25 dB the room is noisy">SNR {r.snr_db} dB</span>
           {r.similarity != null && (
             <span className={r.outlier ? 'warn' : ''}
-                  title={`How much it sounds like your other recordings (under ${minSim} is left out)`}>
+                  title="How close it sounds to your other recordings — a take clearly below the rest is left out of the voice">
               match {Math.round(r.similarity * 100)}%{r.outlier ? ' — left out' : ''}
             </span>
           )}
@@ -98,24 +98,147 @@ function RecordingRow({ v, r, busy, run, minSim }) {
   )
 }
 
-// 🗣 Your voice: record yourself a few times → ClipForge learns the voice (no training: averaged speaker embedding of
-// every recording + the best one's delivery) → type anything and hear it in your voice. Runs only when you ask.
+const when = (t) => (t ? new Date(t * 1000).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' }) : '—')
+
+function NewVoice({ busy, onCreate, onCancel }) {
+  const [name, setName] = useState('')
+  const [desc, setDesc] = useState('')
+  const [consent, setConsent] = useState(false)
+  return (
+    <div className="card vl-new">
+      <h3>New voice</h3>
+      <input placeholder="Name, e.g. My voice, Calm narrator" maxLength={60} value={name} onChange={(e) => setName(e.target.value)} />
+      <input placeholder="Description (optional), e.g. my normal speaking voice, headset mic" maxLength={300}
+             value={desc} onChange={(e) => setDesc(e.target.value)} />
+      <label className="small"><input type="checkbox" checked={consent} onChange={(e) => setConsent(e.target.checked)} />{' '}
+        This is my voice, or its owner agreed to it being cloned</label>
+      <div className="row-btns">
+        <button className="primary" disabled={busy || !name.trim() || !consent} onClick={() => onCreate(name, desc)}>Create</button>
+        <button className="btn ghost" onClick={onCancel}>Cancel</button>
+      </div>
+    </div>
+  )
+}
+
+function Profile({ v, busy, run, languages }) {
+  const [name, setName] = useState(v.name)
+  const [desc, setDesc] = useState(v.description || '')
+  useEffect(() => { setName(v.name); setDesc(v.description || '') }, [v.id, v.name, v.description])
+  const save = (ch) => run(() => api.updateVoice(v.id, ch))
+  return (
+    <div className="card vl-profile">
+      <input className="vl-name" value={name} maxLength={60} disabled={busy} aria-label="Voice name"
+             onChange={(e) => setName(e.target.value)} onBlur={() => name.trim() && name !== v.name && save({ name })} />
+      <input value={desc} maxLength={300} disabled={busy} placeholder="Add a description" aria-label="Description"
+             onChange={(e) => setDesc(e.target.value)} onBlur={() => desc !== (v.description || '') && save({ description: desc })} />
+      <div className="vl-meta muted small">
+        <span>Created {when(v.created)}</span>
+        <span>Updated {when(v.updated)}</span>
+        <span>{v.built ? <>Current: <b>v{v.built.version}</b> · {v.built.model}</> : 'Not built yet'}</span>
+        {v.dirty && v.built && <span className="warn">Recordings changed since v{v.built.version} — build again for a new version</span>}
+        <label>Language{' '}
+          <select value={v.language || 'Auto'} disabled={busy} onChange={(e) => save({ language: e.target.value })}>
+            {languages.map((l) => <option key={l}>{l}</option>)}
+          </select>
+        </label>
+      </div>
+    </div>
+  )
+}
+
+function Versions({ v, busy, run, sampleText }) {
+  const [text, setText] = useState('')
+  const builds = [...(v.builds || [])].reverse()
+  const live = builds.filter((b) => b.prompt)
+  const [a, setA] = useState(null)
+  const [b, setB] = useState(null)
+  const [line, setLine] = useState(sampleText)
+  const [pair, setPair] = useState(null)
+  const va = a ?? live[1]?.version
+  const vb = b ?? live[0]?.version
+  const compare = async () => {
+    const r = await run(() => api.compareVoice(v.id, line, [va, vb]), `Speaking v${va} and v${vb}…`)
+    if (r?.items) setPair({ text: line, items: r.items })
+  }
+  return (
+    <>
+      <div className="card vl-step">
+        <h3>2 · Build a version</h3>
+        <p className="muted small">Averages the voice over every used recording and takes the best one's pace and tone
+          as the reference — a <b>reference voice prompt</b>, cached for reuse. The model itself is not trained or
+          changed. Each build is kept as a new version with a test sample, so you can hear what new recordings did.</p>
+        <div className="row-btns">
+          <button className="btn" disabled={busy || !v.recordings.some((r) => r.use)}
+                  onClick={() => run(() => api.buildVoice(v.id, '', text), 'Building a new version…')}>
+            {v.built ? `Build v${v.built.version + 1}` : 'Build v1'}
+          </button>
+          <input className="grow" value={text} maxLength={300} placeholder={`Test sentence (default: “${sampleText}”)`}
+                 onChange={(e) => setText(e.target.value)} />
+        </div>
+        {builds.length > 0 && (
+          <ul className="vl-versions">
+            {builds.map((x) => (
+              <li key={x.version} className={x.prompt ? '' : 'gone'}>
+                <b>v{x.version}</b>
+                <span className="muted small">{when(x.at)} · {x.used} recording{x.used === 1 ? '' : 's'}
+                  {x.best && <> · reference {x.best}</>}{!x.prompt && ' · removed (too old)'}</span>
+                {x.sample
+                  ? <audio controls preload="none" src={api.voiceAudio(v.id, 'samples', x.sample)} />
+                  : <span className="muted small">no sample</span>}
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+
+      {live.length >= 2 && (
+        <div className="card vl-step">
+          <h3>Compare versions</h3>
+          <div className="row-btns">
+            <select value={va} onChange={(e) => setA(Number(e.target.value))}>
+              {live.map((x) => <option key={x.version} value={x.version}>v{x.version}</option>)}
+            </select>
+            <span className="muted">vs</span>
+            <select value={vb} onChange={(e) => setB(Number(e.target.value))}>
+              {live.map((x) => <option key={x.version} value={x.version}>v{x.version}</option>)}
+            </select>
+            <input className="grow" value={line} maxLength={600} onChange={(e) => setLine(e.target.value)} />
+            <button className="btn" disabled={busy || va === vb || !line.trim()} onClick={compare}>▶ Compare</button>
+          </div>
+          {pair && (
+            <div className="vl-pair">
+              {pair.items.map((it) => (
+                <div key={it.file}><b>v{it.version}</b> <span className="muted small">{it.seconds} s</span>
+                  <audio controls src={api.voiceAudio(v.id, 'samples', it.file)} /></div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+    </>
+  )
+}
+
+// 🗣 Voice Library: several voice profiles (yours, or others with consent). Recordings → a versioned reference voice
+// prompt (no training) → type anything and hear it in that voice. Runs on the GPU only when asked.
 export default function VoiceLab() {
   const [status, setStatus] = useState(null)
   const [list, setList] = useState(null)
   const [vid, setVid] = useState(null)
-  const [busy, setBusy] = useState('') // what's running, shown on the button
+  const [creating, setCreating] = useState(false)
+  const [busy, setBusy] = useState('') // what's running, shown next to the buttons
   const [err, setErr] = useState('')
   const [style, setStyle] = useState('')
   const [line, setLine] = useState(0)
   const [say, setSay] = useState('Here is the one habit that changed how I work. Try it for a week.')
   const [lang, setLang] = useState('Auto')
+  const [ver, setVer] = useState('') // '' = newest
   const [samples, setSamples] = useState([])
   const fileRef = useRef(null)
 
   const reload = () => api.voices().then((r) => {
     setList(r)
-    setVid((cur) => cur ?? r.voices[0]?.id ?? null)
+    setVid((cur) => (cur && r.voices.some((x) => x.id === cur) ? cur : r.voices[0]?.id ?? null))
   })
   useEffect(() => {
     reload().catch((e) => setErr(e.message))
@@ -123,7 +246,7 @@ export default function VoiceLab() {
   }, [])
 
   const v = list?.voices.find((x) => x.id === vid)
-  const run = async (fn, label = 'saving') => {
+  const run = async (fn, label = 'Saving…') => {
     setErr('')
     setBusy(label)
     try {
@@ -139,9 +262,9 @@ export default function VoiceLab() {
   const add = (files) => files.length && run(() => api.addRecordings(v.id, files, style || SCRIPT[line]?.style),
     'Cleaning + transcribing…').then(() => setLine((l) => (l + 1) % SCRIPT.length))
   const speak = async () => {
-    const r = await run(() => api.speak(v.id, say, lang === 'Auto' ? '' : lang),
-      v.built ? 'Speaking…' : 'Building your voice, then speaking…')
-    if (r?.file) setSamples((s) => [{ ...r, text: say }, ...s].slice(0, 8))
+    const r = await run(() => api.speak(v.id, say, lang === 'Auto' ? '' : lang, ver === '' ? null : Number(ver)),
+      v.built ? 'Speaking…' : 'Building v1, then speaking…')
+    if (r?.file) setSamples((s) => [{ ...r, text: say, version: ver || r.voice?.built?.version }, ...s].slice(0, 8))
   }
 
   if (!list) return <div className="voice-wrap">{err ? <div className="banner error">{err}</div> : 'Loading…'}</div>
@@ -151,41 +274,47 @@ export default function VoiceLab() {
   return (
     <div className="voice-wrap voicelab">
       <div>
-        <h2>🗣 Your voice</h2>
-        <p className="muted">Record yourself a few times — ClipForge learns your voice from all of them (no training)
-          and can then say anything in it. Runs on your GPU only when you ask; it never leaves your laptop. Use your
-          own voice only.</p>
+        <h2>🗣 Voice Library</h2>
+        <p className="muted">Voices made from recordings — yours, or anyone who agreed. Each voice is a reference-based
+          clone (no training): add recordings, build a new version, test and compare. Everything stays on your laptop
+          and the GPU is only used while it speaks. Audio made here is AI-generated — label it as such when you publish.</p>
       </div>
 
-      {status && !status.installed && (
-        <div className="banner error">Voice engine not ready: {status.reason}</div>
-      )}
+      {status && !status.installed && <div className="banner error">Voice engine not ready: {status.reason}</div>}
       {status?.installed && (
-        <p className="muted small">Engine: {status.model} on {status.gpu}. The first build downloads the model (~4 GB).
-          English and 9 other languages; Hindi isn't one of them, so Hinglish lines may sound off — try it.</p>
+        <p className="muted small">Engine: {status.model} on {status.gpu}. English and 9 other languages; Hindi isn't one
+          of them, so Hinglish lines may sound off.</p>
       )}
       {err && <div className="banner error">{err}</div>}
 
       <div className="vl-head">
-        <select value={vid || ''} onChange={(e) => setVid(e.target.value)} disabled={!list.voices.length}>
-          {list.voices.map((x) => <option key={x.id} value={x.id}>{x.name}</option>)}
-          {!list.voices.length && <option value="">No voice yet</option>}
+        <select value={vid || ''} onChange={(e) => { setVid(e.target.value); setSamples([]); setVer('') }}
+                disabled={!list.voices.length} aria-label="Voice">
+          {list.voices.map((x) => <option key={x.id} value={x.id}>{x.name}{x.built ? ` (v${x.built.version})` : ''}</option>)}
+          {!list.voices.length && <option value="">No voices yet</option>}
         </select>
-        <button className="btn" disabled={!!busy} onClick={() => {
-          const name = window.prompt('Name this voice', list.voices.length ? 'My voice 2' : 'My voice')
-          if (name) run(() => api.createVoice(name)).then((x) => x && setVid(x.id))
-        }}>+ New voice</button>
+        <button className="btn" disabled={!!busy} onClick={() => setCreating(true)}>+ New voice</button>
         {v && <button className="btn ghost" disabled={!!busy}
-                      onClick={() => window.confirm(`Delete “${v.name}” and its recordings?`)
+                      onClick={() => window.confirm(`Delete “${v.name}”, its recordings and all versions?`)
                         && run(() => api.deleteVoice(v.id)).then(() => setVid(null))}>Delete</button>}
+        {busy && <span className="muted small">{busy}</span>}
       </div>
+
+      {creating && (
+        <NewVoice busy={!!busy} onCancel={() => setCreating(false)}
+                  onCreate={(name, desc) => run(() => api.createVoice(name, desc, true)).then((x) => {
+                    if (x) { setVid(x.id); setCreating(false) }
+                  })} />
+      )}
 
       {v && (
         <>
+          <Profile v={v} busy={!!busy} run={run} languages={list.languages || ['Auto']} />
+
           <div className="card vl-step">
-            <h3>1 · Record ({used.length} used · {Math.round(total)} s)</h3>
-            <p className="muted small">Quiet room, phone or headset mic 15–20 cm away, your normal speaking voice. Aim
-              for 6–10 takes of 5–15 s in different moods (1–2 minutes in all). Long takes are fine: they're split at
+            <h3>1 · Recordings ({used.length} used · {Math.round(total)} s)</h3>
+            <p className="muted small">Quiet room, mic 15–20 cm away, a normal speaking voice. 6–10 takes of 5–15 s in
+              different moods (1–2 minutes in all). Add more any time, then build a new version. Long takes are split at
               sentence ends.</p>
             <div className="vl-script">
               <span className="muted small">Read this ({SCRIPT[line].style}):</span>
@@ -194,54 +323,47 @@ export default function VoiceLab() {
             </div>
             <div className="row-btns">
               <Recorder disabled={!!busy} onDone={(f) => add([f])} />
-              <button className="btn ghost" disabled={!!busy} onClick={() => fileRef.current?.click()}>⬆ Upload audio</button>
+              <button className="btn ghost" disabled={!!busy} onClick={() => fileRef.current?.click()}>⬆ Import audio</button>
               <input ref={fileRef} type="file" accept="audio/*,video/*" multiple hidden
                      onChange={(e) => { add([...e.target.files]); e.target.value = '' }} />
               <select value={style} onChange={(e) => setStyle(e.target.value)} title="Tag the next takes">
                 <option value="">style: as the line</option>
                 {list.styles.filter(Boolean).map((s) => <option key={s} value={s}>{s}</option>)}
               </select>
-              {busy && <span className="muted small">{busy}</span>}
             </div>
             {v.recordings.length > 0 && (
               <ul className="vrecs">
                 {v.recordings.map((r) => (
-                  <RecordingRow key={r.file} v={v} r={r} busy={!!busy} run={run} minSim={list.min_similarity} />
+                  <RecordingRow key={r.file} v={v} r={r} busy={!!busy} run={run} />
                 ))}
               </ul>
             )}
           </div>
 
-          <div className="card vl-step">
-            <h3>2 · Build</h3>
-            <p className="muted small">Averages your voice over every used recording and takes the best one's delivery
-              as the reference. Recordings that don't sound like the rest are left out.</p>
-            <div className="row-btns">
-              <button className="btn" disabled={!!busy || !used.length} onClick={() => run(() => api.buildVoice(v.id), 'Building your voice…')}>
-                {v.built ? '↻ Rebuild' : 'Build my voice'}
-              </button>
-              {v.built
-                ? <span className="muted small">Built from {v.built.used} recording(s) in {v.built.seconds} s
-                    {v.built.peak_vram_mb ? ` · ${(v.built.peak_vram_mb / 1024).toFixed(1)} GB GPU` : ''}</span>
-                : used.length > 0 && <span className="muted small">Not built yet (or recordings changed)</span>}
-            </div>
-          </div>
+          <Versions key={v.id} v={v} busy={!!busy} run={run} sampleText={list.sample_text || ''} />
 
           <div className="card vl-step">
             <h3>3 · Try it</h3>
             <textarea rows={3} value={say} maxLength={2000} onChange={(e) => setSay(e.target.value)} />
             <div className="row-btns">
+              <select value={ver} onChange={(e) => setVer(e.target.value)} title="Which version speaks">
+                <option value="">newest version</option>
+                {[...(v.builds || [])].reverse().filter((b) => b.prompt).map((b) => (
+                  <option key={b.version} value={b.version}>v{b.version}</option>
+                ))}
+              </select>
               <select value={lang} onChange={(e) => setLang(e.target.value)}>
-                {LANGS.map((l) => <option key={l}>{l}</option>)}
+                {(list.languages || LANGS).map((l) => <option key={l}>{l}</option>)}
               </select>
               <button className="primary" disabled={!!busy || !used.length || !say.trim()} onClick={speak}>
-                ▶ Say it in my voice
+                ▶ Say it in this voice
               </button>
             </div>
             {samples.map((s) => (
               <div key={s.file} className="vl-sample">
                 <audio controls autoPlay={s === samples[0]} src={api.voiceAudio(v.id, 'samples', s.file)} />
-                <span className="muted small">{s.seconds} s of speech in {s.took} s — “{s.text.slice(0, 80)}”</span>
+                <span className="muted small">🤖 AI voice{s.version ? ` v${s.version}` : ''} · {s.seconds} s of speech in
+                  {' '}{s.took} s — “{s.text.slice(0, 80)}”</span>
               </div>
             ))}
           </div>

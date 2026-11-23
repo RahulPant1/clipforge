@@ -406,3 +406,11 @@ For a later discussion (not planned yet):
 27. [ ] ComfyUI as an optional local generator over its HTTP API (workflow JSON in, frames out), behind GPU_LOCK and
         unloaded after use like Gemma (8 GB VRAM: SDXL-class images fine, video models slow): B-roll stills/loops when
         your folder has no match (item 19 / G), stylised cover backgrounds, upscaling. Not ClipForge-as-ComfyUI-nodes.
+28. [ ] Scene index (from the "Video Intelligence v1" review, Nov 2026). Slim scope only: scene cuts for every video
+        (nospeech.analyse already finds them) → ≤ 1 keyframe per scene / ~20-30 s → vision Gemma description →
+        scenes.json (start, end, frame, description, transcript text). Main use: scene lines in the SELECTION prompt
+        so visual payoffs (demos, screens, before/after) get picked; then descriptions in transcript search, B-roll
+        matching (G), cover / shown-whole hints. Auto-skip vision for single-camera talking heads (few cuts/min, face
+        in most samples) so it costs nothing there. ~5 s per frame on gemma4 → ~10-20 min per hour of video
+        (estimate). Prove with app.eval on a tutorial-style video before keeping it. Dropped: embedding-based search
+        (another model in 8 GB VRAM), video Q&A (different product). Contact sheet = optional debug view.

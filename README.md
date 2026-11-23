@@ -17,15 +17,27 @@ YouTube URL / file
 ## How you work with it (6 steps)
 | Step | What you do |
 |---|---|
-| **1 Source** | Paste a YouTube link or upload. Pick *Review each step* (default) or *Fully automatic*. If it fails: fix the cause, then **↻ Retry** |
+| **1 Source** | Paste a YouTube link or upload — or **Find videos** on a topic, or queue a **Batch** (several links, a playlist, a channel). Pick *Review each step* (default) or *Fully automatic*. If it fails: fix the cause, then **↻ Retry** |
 | **2 Transcript** | Read/search the transcript, click timestamps to play, mark start/end to **add your own clip** |
 | **3 Pick clips** | Gemma gives 2× the clips you asked for. Watch each, **trim with ±1s/±0.2s**, fix title/hook/keywords, **approve** → *Create shorts & posts* |
-| **4 Shorts** | Watch the vertical shorts. Toggle jump cuts / punch-in zoom / hook title / framing (auto, face, 2-up, talker, centre) / caption style per short → **re-render just that one** |
+| **4 Shorts** | Watch the vertical shorts. Per short: jump cuts, punch-in zoom, hook title, framing (or drag the crop by hand), caption look, emoji, **stat cards**, logo/end card, sound fx and music, 4:5 / 1:1 feed versions, cover and quote cards → **re-render just that one** |
 | **5 Posts** | Per-platform tabs. Edit copy inline (X threads post-by-post with 280 counters), 🎲 **New angle**, mark **Approved** |
-| **6 Publish** | Checklist of every short × platform: copy, post, click to mark **posted**. Download the full pack |
+| **6 Publish** | Checklist of every short × platform: file links, one copy button per upload-form field, paste the live link to mark **posted**. Download the full pack |
 
 ## Features
 - Paste a YouTube link **or** upload a video
+- **Find videos:** search YouTube for a topic without an API key — long-form only, optional Creative Commons
+  filter. Each result is scored 0–100 from its captions (how much of it is about your topic, with the best
+  moments' timestamps); videos you already did are flagged. Optional **smart search**: Gemma adds 3 more angles
+  to the query (one in Hinglish) and rates the top results from their captions
+- **Batch:** paste several links, a playlist or a channel → one job per video, queued in order (private/live
+  skipped). Tick results in Find videos to queue them too
+- **Watched folder** (`WATCH_DIR`, off by default): drop a video in and it becomes a job once the file stops
+  growing. Your files are only copied, never moved or deleted
+- **History:** every video gets a readable folder (shorts, covers, captions, posts) plus a spreadsheet of all
+  videos and shorts (`data/library/ClipForge history.xlsx`); the New job form warns when you've done a video before
+- **Hinglish:** Hindi speech is written in Latin letters (`kismat`, `samajhna`) for captions, `.srt` and posts;
+  switch back to Devanagari any time. Hindi and other Indic text is drawn with a font that has the letters
 - Whisper transcription with word-level timing, cached per job
 - Gemma ranks moments by hook strength / self-containedness, writes title + hook + virality score
 - Cuts snapped to sentence boundaries, overlaps removed, clips capped at 59 s (Content ID safe zone)
@@ -36,7 +48,10 @@ YouTube URL / file
   loudest, busiest moments (loudness, motion, scene cuts), and Gemma *looks* at keyframes to score and title
   them; credits and title screens are marked down. Those shorts render without captions or jump cuts
 - **Face tracking:** crop follows the speaker like a camera operator — steady when they're still,
-  smooth pans when they move, instant snap on camera cuts; centre crop fallback
+  smooth pans when they move, instant snap on camera cuts; leaves room in the direction they look.
+  Shots with no face (slides, screen, b-roll) are shown whole over a blurred copy instead of a blind centre crop
+- **Adjust the crop by hand:** ✋ drag where the crop sits at any moment of the short — it holds until your next
+  key, or glides there
 - **Two-speaker layouts:** podcast-style shots (two people side by side) become two stacked close-ups with
   captions on the seam — or a single close-up that **cuts to whoever is talking** (mouth movement per face;
   short "mm-hm"s don't steal the shot)
@@ -46,6 +61,19 @@ YouTube URL / file
   Boxed (text on a dark box) and Neon (glow) — per short, with bottom/middle placement; add your own in
   `backend/data/caption_presets.json`
 - **Hook title card:** Gemma's hook shown big at the top for the first 3 s (editable in the Pick step)
+- **Colour emoji:** an emoji above a caption line when a word has one (money 💰, gym 🏋️ — or type one into the
+  transcript), and the hook's emoji above the title card (open-source Noto Color Emoji, downloaded once)
+- **Stat cards:** when a striking number is said ("40% of startups fail", "₹2.5 crore"), it counts up on a card
+  with a short label at that moment. Numbers are read from the transcript — digits, words ("fifty percent"),
+  Hinglish ("das hazaar"), lakh/crore — never made up by the model; Gemma only picks which ones are worth a card
+  and labels them with words from the same sentence. Suggestions appear on the Shorts card: **Show** the ones
+  you want, edit the label or timing, or add your own
+- **Brand kit** (🎨): your logo in a corner, an end card with a call to action after the last word, and your
+  brand colour on covers, quote cards, carousels and (optionally) the active caption word
+- **Sound design:** optional whoosh on jump cuts and pop on keywords, plus background music from your own folder
+  (`data/sounds/music`) that ducks automatically whenever someone speaks
+- **Feed versions:** 4:5 (Instagram feed, LinkedIn) and 1:1 (X) renders next to each 9:16 short — their own
+  wider face-tracked crop, captions and logo re-placed, same cuts
 - Vertical 1080×1920 render + thumbnails + `.srt` export for YouTube upload
 - **Content Studio:** for every short, Gemma writes platform-native posts —
   YouTube (title, description, tags, pinned comment), Instagram (caption + **carousel images**),
@@ -63,8 +91,11 @@ YouTube URL / file
   (question, bold claim, curiosity gap, POV, mistake…) from what's actually said; click one to use it
 - **Choose who to follow:** on a Shorts card, pick a face found in the clip — the crop tracks only that person
   (podcasts where Auto follows the wrong one)
-- **Reel cover:** every short gets a 1080x1920 cover — the sharpest frame of the speaker facing the camera with the
-  cover text, kept inside Instagram's grid crop. Change the text or pick another frame; included in the export pack
+- **Reel cover:** every short gets a 1080x1920 cover — the speaker cut out with a white outline on a blurred,
+  brand-tinted copy of the frame (or the plain frame), with the cover text kept inside Instagram's grid crop.
+  Change the text, style or frame; included in the export pack
+- **Quote cards:** a line actually said in the clip, set big next to the speaker — 1:1 for X, 4:5 for LinkedIn
+  and Instagram. Picked automatically (never written by the model), or type your own
 - **Fix captions:** click any word Whisper misheard to correct it, or replace a word or phrase everywhere
   ("open ai" → "OpenAI"); captions, `.srt` and posts all use the fix. **Names & terms** on the New job form
   (remembered for all jobs) help Whisper spell your name, brands and jargon right from the start
@@ -83,6 +114,8 @@ YouTube URL / file
   (Ubuntu 22.04), 8.0/8.0.1 (Ubuntu 26.04), 8.1 and 9.0
 - [Ollama](https://ollama.com) with a Gemma model (`gemma3:4b` default). Thinking models like `gemma4` work too —
   set `CONTENT_THINK=false` for ~2.5× faster post writing
+- Downloaded once on first use (no account needed): the YuNet face model, the speaker cut-out model for covers
+  (~170 MB, runs on the CPU) and, if you turn on emoji, the Noto Color Emoji font (~11 MB)
 
 ## Quick start
 ```bash
@@ -140,6 +173,19 @@ Copy `backend/.env.example` → `backend/.env`. Key options:
 | `CAPTION_PRESET` | `classic` | Caption look: `classic` (uses the `CAPTION_*` colours/font), `punch`, `clean`, `boxed`, `neon` or one of yours |
 | `CAPTION_POSITION` | `bottom` | `bottom` or `middle` (two-speaker stacks always use the seam) |
 | `CAPTION_FONT` | `Arial` | Any installed font, e.g. `Montserrat ExtraBold`. On WSL, Windows fonts are picked up automatically (copied once into `data/fonts`) |
+| `REFRAME_NO_FACE` | `fit` | Shots without a face: `fit` (whole frame over a blurred copy) or `crop` (centre crop) |
+| `HINGLISH_DEFAULT` | `true` | New jobs: Hindi speech written in Latin letters (Hinglish); per job on the New job form |
+| `CAPTION_EMOJI` | `false` | Colour emoji above caption lines (per-short toggle in the UI) |
+| `INSERTS_SUGGEST` | `true` | Gemma suggests stat cards for spoken numbers while writing posts (not shown until you pick **Show**) |
+| `INSERTS_AUTO` | `false` | Show suggested stat cards without asking |
+| `INSERTS_MAX` | `2` | Stat cards per short (at least 3 s apart) |
+| `EXTRA_ASPECTS` | – | Feed versions for new shorts, e.g. `4:5,1:1` (per-short in the UI) |
+| `SFX_DEFAULT` | `false` | Whoosh on cuts + pop on keywords for new shorts |
+| `MUSIC_DEFAULT` | – | A file in `data/sounds/music` for new shorts; ducked under the voice |
+| `COVER_STYLE` | `cutout` | Reel cover: `cutout` (speaker cut out) or `frame` |
+| `QUOTE_CARDS` | `true` | Make 1:1 and 4:5 quote card images next to each short |
+| `WATCH_DIR` | – | Folder to watch for new videos (off when unset); `WATCH_CLIPS`, `WATCH_MODE`, `WATCH_TOPIC` set the job |
+| `LIBRARY_DIR` | `data/library` | Where the history folders and spreadsheet go |
 | `YTDLP_COOKIES` | – | cookies.txt path if YouTube asks for bot check |
 
 ### Ollama on Windows, app in WSL

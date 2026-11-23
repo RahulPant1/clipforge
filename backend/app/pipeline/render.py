@@ -5,7 +5,7 @@ from pathlib import Path
 
 from ..config import settings
 from ..models import Clip, Segment
-from . import brand
+from . import brand, sfx
 from .captions import build_ass, build_hook_ass, build_srt
 from .fonts import font_for, fontsdir_option
 from .jumpcut import audio_cut_graph, audio_silences, plan_cuts, video_select_expr, zoom_graph
@@ -90,21 +90,51 @@ def render_clip(video: Path, clip: Clip, segs: list[Segment], job_dir: Path) -> 
 
     cmd = ["ffmpeg", "-y", "-loglevel", "error",
            "-ss", f"{clip.start:.3f}", "-t", f"{clip.duration:.3f}", "-i", str(video.resolve())]
+    total = plan.duration + card
+    inputs: list[Path] = []  # extra inputs after the source: images, music, effects track
+
+    def add(p: Path, loop: bool = False) -> int:
+        nonlocal cmd
+        cmd += [*(["-stream_loop", "-1"] if loop else []), "-i", str(p.resolve())]
+        inputs.append(p)
+        return len(inputs)
+
     logo = brand.watermark(kit, o)
     card_png = brand.end_card_png(kit, job_dir / f"{name}.end.png") if card else None
-    if logo or card_png:  # images need their own inputs → filter_complex instead of -vf
-        inputs = [p for p in (logo, card_png) if p]
-        for p in inputs:
-            cmd += ["-i", str(p.resolve())]
+    logo_in = add(logo) if logo else None
+    card_in = add(card_png) if card_png else None
+    # Sound design: music ducked under the voice, effects on one pre-mixed track (sfx.py)
+    music = sfx.music_path(settings.music_default if o.music is None else o.music)
+    want_fx = settings.sfx_default if o.sfx is None else o.sfx
+    fx = sfx.write_track(sfx.events(plan, clip.keywords), total, job_dir / f"{name}.sfx.wav") if want_fx else None
+    music_in = add(music, loop=True) if music else None
+    fx_in = add(fx) if fx else None
+    if not fx:
+        (job_dir / f"{name}.sfx.wav").unlink(missing_ok=True)
+
+    graphs, maps = [], []
+    if logo_in or card_in:  # images need their own inputs → filter_complex instead of -vf
         logo_from = min(settings.hook_seconds, plan.duration) if hook_ass else 0.0  # the hook card owns the top
-        graph = brand.overlay_graph("b", logo_input=1 if logo else None, kit=kit,
-                                    card_input=inputs.index(card_png) + 1 if card_png else None,
-                                    start=logo_from, end=plan.duration, card_from=plan.duration)
-        cmd += ["-filter_complex", f"[0:v]{','.join(vf)}[b];{graph}", "-map", "[v]", "-map", "0:a?"]
+        graphs += [f"[0:v]{','.join(vf)}[b]",
+                   brand.overlay_graph("b", logo_input=logo_in, kit=kit, card_input=card_in, start=logo_from,
+                                       end=plan.duration, card_from=plan.duration)]
+        maps += ["-map", "[v]"]
+    if music_in or fx_in:
+        graphs.append(sfx.audio_graph(af, music_in, fx_in, total))
+        maps += ["-map", "[aout]"]
+    if graphs:
+        if "[v]" not in maps:
+            graphs.insert(0, f"[0:v]{','.join(vf)}[v]")
+            maps = ["-map", "[v]", *maps]
+        if "[aout]" not in maps:
+            maps += ["-map", "0:a?"]
+        cmd += ["-filter_complex", ";".join(graphs), *maps]
+        if af and "[aout]" not in maps:
+            cmd += ["-af", ",".join(af)]
     else:
         cmd += ["-vf", ",".join(vf)]
-    if af:
-        cmd += ["-af", ",".join(af)]
+        if af:
+            cmd += ["-af", ",".join(af)]
     cmd += [*_encoder_args(), "-c:a", "aac", "-b:a", "160k", "-movflags", "+faststart", f"{name}.mp4"]
 
     res = subprocess.run(cmd, cwd=job_dir, capture_output=True, text=True)

@@ -93,6 +93,15 @@ def accent(kit: BrandKit | None = None) -> str:
     return kit.accent if kit.enabled and kit.accent else settings.carousel_accent
 
 
+def pop_colour(kit: BrandKit | None = None) -> tuple[int, int, int]:
+    """Highlight colour for cover text: the brand colour when the kit sets one, else the classic yellow."""
+    kit = kit or load()
+    if kit.enabled and kit.accent:
+        c = kit.accent.lstrip("#")
+        return int(c[0:2], 16), int(c[2:4], 16), int(c[4:6], 16)
+    return 255, 214, 10
+
+
 def handle(kit: BrandKit | None = None) -> str:
     kit = kit or load()
     return kit.handle if kit.enabled and kit.handle else settings.brand_handle

@@ -96,10 +96,17 @@ backend/                FastAPI + pipeline (Python 3.11, conda env "clipforge")
                         top-left/right at TOP_Y=120, shown from the end of the hook card to the last word),
                         end_card_seconds() (≤ end_seconds, never past max_clip_seconds; < 1 s → none) → freeze_tail()
                         (tpad clone + blur/darken, before captions) + end_card_png() overlay + apad; overlay_graph()
-                        switches render to -filter_complex (-map [v] -map 0:a?). accent()/handle() feed covers, quote
+                        switches render to -filter_complex (-map [v] -map 0:a?). accent()/handle()/pop_colour() feed covers, quote
                         cards, carousels, post CTAs (fallback CAROUSEL_ACCENT/BRAND_HANDLE); accent_captions → preset
                         active colour. `rev` bumps on burned-in changes; clip.brand_rev → "re-render" hint (never stale).
                         No kit file = off: shorts render exactly as before. Per short: options.watermark / end_card
+    sfx.py              Sound design: events(plan, keywords) = whoosh on cuts (removed gap ≥ WHOOSH_MIN_GAP, ≥ 2.5 s
+                        apart) + pop on keyword words (≥ 2 s apart, ≤ 6), all OUTPUT time → write_track() pre-mixes
+                        them into short_N.sfx.wav (one extra input). Music = data/sounds/music/<file> (-stream_loop,
+                        trimmed/faded, loudnorm to MUSIC_LUFS -30, sidechaincompress keyed by the voice ≈ 7-10 dB duck). audio_graph()
+                        moves audio into -filter_complex → [aout]; every branch aformat'ed to 48 kHz stereo fltp
+                        (sidechaincompress refuses mixed formats). Starter whoosh/pop.wav made by numpy; drop your own
+                        (same names, any format) to replace. options.sfx / options.music; SFX_DEFAULT / MUSIC_DEFAULT
     voice.py            brand voice: your posts per platform (data/brand_voice.json, all jobs) → voice_block()
                         few-shot examples in PROMPT (≤5 per platform, borrows 2 from others if none); notes → Voice:
     history.py          variety engine: least-recently-used angle rotation + recent openers to avoid
@@ -330,7 +337,7 @@ Keep it local: no cloud stock/B-roll/TTS APIs.
 13. [x] C. Prompt-based clipping: optional "topic" on a new job ("salary negotiation") steers the selection prompt.
 14. [x] B. Text-based cutting (Descript-style): strike words in the transcript to remove them — extra removed
         ranges into `plan_cuts` (same keep-interval engine as jump cuts).
-15. [ ] E. Sound design: whoosh on cuts, pop on keywords, background music auto-ducked under speech
+15. [x] E. Sound design: whoosh on cuts, pop on keywords, background music auto-ducked under speech
         (ffmpeg sidechaincompress) from a local sound folder.
 16. [x] K. Reel/Shorts cover image: `cover_text` (already generated) on the best frame (Pillow).
 17. [x] D. Reframe override: pick which face to follow (Shorts step). [ ] still open: crop keyframes dragged by hand.

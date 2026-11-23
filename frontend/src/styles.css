@@ -481,3 +481,5 @@ aside { min-width: 0; }  /* a long History path must shrink (ellipsis), not wide
   .kit-previews { flex-direction: row; position: static; }
   .kit-previews > div { flex: 1; }
 }
+.opt select { max-width: 60%; font-size: 12px; padding: 3px 6px; background: var(--panel); color: var(--text);
+  border: 1px solid var(--line); border-radius: 8px; }

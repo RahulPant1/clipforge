@@ -18,6 +18,7 @@ export const api = {
   health: () => req('/health'),
   captionPresets: () => req('/caption-presets'),
   brandVoice: () => req('/brand-voice'),
+  sounds: () => req('/sounds'),
   brandKit: () => req('/brand-kit'),
   saveBrandKit: (kit) => req('/brand-kit', json('PUT', kit)),
   uploadLogo: (file) => {

@@ -149,8 +149,9 @@ def draw_cover(frame, x: float | None, text: str, out: Path, font_family: str | 
         font, lines, size = _fit(draw, text, font_for(text, font_family))  # Hindi etc. → a font that has it
         lh = int(size * 1.08)
         y = TEXT_BOTTOM - lh * len(lines)
+        pop = brand.pop_colour()
         for i, line in enumerate(lines):
-            fill = (255, 214, 10) if i == len(lines) - 1 and len(lines) > 1 else (255, 255, 255)  # last line pops
+            fill = pop if i == len(lines) - 1 and len(lines) > 1 else (255, 255, 255)  # last line pops
             draw.text((W // 2, y + i * lh), line, font=font, fill=fill, anchor="ma",
                       stroke_width=max(4, size // 14), stroke_fill=(0, 0, 0))
     img.save(out, "JPEG", quality=90)
@@ -200,8 +201,9 @@ def draw_cutout_cover(frame, x: float | None, text: str, out: Path, font_family:
     img.alpha_composite(canvas, (px, max(py, bottom - pad)))
     if text:
         draw = ImageDraw.Draw(img)
+        pop = brand.pop_colour()
         for i, line in enumerate(lines):
-            fill = (255, 214, 10) if i == len(lines) - 1 and len(lines) > 1 else (255, 255, 255)
+            fill = pop if i == len(lines) - 1 and len(lines) > 1 else (255, 255, 255)
             draw.text((W // 2, top + i * lh), line, font=font, fill=fill, anchor="ma",
                       stroke_width=max(4, size // 14), stroke_fill=(0, 0, 0))
     img.convert("RGB").save(out, "JPEG", quality=90)

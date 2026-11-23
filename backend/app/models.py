@@ -70,6 +70,8 @@ class RenderOptions(BaseModel):
     follow: float | None = None  # follow THIS person: face centre x (0..1 of source width) picked in the UI
     watermark: bool | None = None  # brand kit logo in the corner (None = on when the kit has a logo)
     end_card: bool | None = None  # brand kit end card after the last word (None = the kit's setting)
+    sfx: bool | None = None  # whoosh on cuts + pop on keywords (None = SFX_DEFAULT)
+    music: str | None = None  # track in data/sounds/music ("" = none, None = MUSIC_DEFAULT)
 
 
 class HookVariant(BaseModel):

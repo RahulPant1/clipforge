@@ -131,3 +131,9 @@ def test_render_burns_in_the_logo_and_appends_the_end_card(tmp_path, segs):
                                  end_card=False)
     render_clip(src, clip, segs, tmp_path)
     assert clip.out_duration == 4.0 and logo(frame(3.5))[0] < 120
+
+
+def test_cover_highlight_follows_the_brand_colour():
+    assert brand.pop_colour() == (255, 214, 10)  # no kit: the classic yellow
+    brand.save(BrandKit(accent="#20c997"))
+    assert brand.pop_colour() == (32, 201, 151)

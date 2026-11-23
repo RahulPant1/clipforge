@@ -180,7 +180,7 @@ function QuotePanel({ job, clip, busy, act }) {
   )
 }
 
-function ShortCard({ job, clip, busy, act, presets, kit }) {
+function ShortCard({ job, clip, busy, act, presets, kit, sounds }) {
   const o = clip.options || {}
   const setOpt = (k, v) => act(() => api.editClip(job.id, clip.index, { options: { ...o, [k]: v } })).catch(() => {})
   const src = clip.file && api.fileUrl(job.id, clip.file, clip.version)
@@ -261,6 +261,26 @@ function ShortCard({ job, clip, busy, act, presets, kit }) {
           </>
         )}
 
+        {sounds && (
+          <>
+            <Seg label="Sound fx" value={o.sfx ?? sounds.sfx_default} disabled={busy}
+                 options={[[false, 'Off'], [true, 'Whoosh + pop']]} onChange={(v) => setOpt('sfx', v)} />
+            <label className="opt">
+              <span className="muted">Music</span>
+              <select value={o.music ?? sounds.music_default} disabled={busy}
+                      onChange={(e) => setOpt('music', e.target.value)}
+                      title={sounds.music.length ? 'Quieter whenever someone speaks' : `Add tracks to ${sounds.folder}`}>
+                <option value="">None</option>
+                {sounds.music.map((m) => <option key={m} value={m}>{m.replace(/\.[^.]+$/, '')}</option>)}
+                {o.music && !sounds.music.includes(o.music) && <option value={o.music}>{o.music} (missing)</option>}
+              </select>
+            </label>
+            {!sounds.music.length && (
+              <p className="muted small">No music yet — drop royalty-free tracks into <code>{sounds.folder}</code>.</p>
+            )}
+          </>
+        )}
+
         <CoverPanel job={job} clip={clip} busy={busy} act={act}
                     defaultText={clip.content?.instagram?.extra?.cover_text || clip.hook} />
         <QuotePanel job={job} clip={clip} busy={busy} act={act} />
@@ -295,9 +315,11 @@ export default function ShortsStep({ job, busy, act, go }) {
   const stale = clips.filter((c) => c.stale).length
   const [presets, setPresets] = useState(null)
   const [kit, setKit] = useState(null)
+  const [sounds, setSounds] = useState(null)
   useEffect(() => {
     api.captionPresets().then(setPresets).catch(() => setPresets(null))
     api.brandKit().then(setKit).catch(() => setKit(null))
+    api.sounds().then(setSounds).catch(() => setSounds(null))
   }, [])
   return (
     <div>
@@ -312,7 +334,7 @@ export default function ShortsStep({ job, busy, act, go }) {
       </div>
       <div className="shorts-grid">
         {clips.map((c) => (
-          <ShortCard key={c.index} job={job} clip={c} busy={busy} act={act} presets={presets} kit={kit} />
+          <ShortCard key={c.index} job={job} clip={c} busy={busy} act={act} presets={presets} kit={kit} sounds={sounds} />
         ))}
       </div>
       <div className="footer-bar">

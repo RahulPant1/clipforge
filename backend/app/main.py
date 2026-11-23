@@ -43,7 +43,7 @@ from .models import (
     Vocabulary,
     WordEdit,
 )
-from .pipeline import batch, brand, cover, discover, hinglish, quote, transcript_edit, vocabulary, voice, waveform
+from .pipeline import batch, brand, cover, discover, hinglish, quote, sfx, transcript_edit, vocabulary, voice, waveform
 from .pipeline.content import ANGLES, NAMES, ContentContext, clip_text, generate_post, load_meta, write_posts_md
 from .pipeline.export import build_pack
 from .pipeline.history import get_history
@@ -146,6 +146,14 @@ def create_app(pipeline=None, start_worker: bool = True, llm_factory=OllamaClien
         kit = brand.load()
         brand.end_card_png(kit.model_copy(update={"enabled": True}), out)
         return FileResponse(out, media_type="image/png", headers={"Cache-Control": "no-cache"})
+
+    @app.get("/api/sounds")
+    def sounds() -> dict:
+        """Sound design choices for the Shorts step: music tracks in data/sounds/music and the defaults."""
+        sfx.music_dir().mkdir(parents=True, exist_ok=True)  # so there's a folder to drop tracks into
+        return {"music": sfx.music_tracks(), "folder": windows_path(sfx.music_dir().resolve()),
+                "sfx_default": settings.sfx_default,
+                "music_default": settings.music_default if sfx.music_path(settings.music_default) else ""}
 
     @app.get("/api/caption-presets")
     def caption_presets() -> dict:

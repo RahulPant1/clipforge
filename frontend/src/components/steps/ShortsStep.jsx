@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { api } from '../../api.js'
-import { fmt } from '../../util.js'
+import { FEED, feedFile, fmt } from '../../util.js'
 
 function Seg({ label, value, options, onChange, disabled }) {
   return (
@@ -183,8 +183,15 @@ function QuotePanel({ job, clip, busy, act }) {
 function ShortCard({ job, clip, busy, act, presets, kit, sounds }) {
   const o = clip.options || {}
   const setOpt = (k, v) => act(() => api.editClip(job.id, clip.index, { options: { ...o, [k]: v } })).catch(() => {})
-  const src = clip.file && api.fileUrl(job.id, clip.file, clip.version)
+  const formats = (clip.formats || []).filter((a) => FEED[a])
+  const [view, setView] = useState('9:16')
+  const shown = view !== '9:16' && formats.includes(view) ? view : '9:16'
+  const file = clip.file && (shown === '9:16' ? clip.file : feedFile(clip.index, shown))
+  const src = file && api.fileUrl(job.id, file, clip.version)
   const poster = clip.file && api.fileUrl(job.id, clip.file.replace('.mp4', '.jpg'), clip.version)
+  const aspects = o.aspects ?? presets?.aspects ?? []
+  const toggleAspect = (a) => setOpt('aspects', (presets?.feed_aspects || Object.keys(FEED))
+    .filter((x) => (x === a ? !aspects.includes(a) : aspects.includes(x))))
   const noCaptions = (o.caption_style ?? presets?.style) === 'none'
   const kitOn = kit?.enabled && (kit.logo || kit.end_card)
   // rendered with another version of the brand kit (or before it existed) → offer a re-render
@@ -192,8 +199,17 @@ function ShortCard({ job, clip, busy, act, presets, kit, sounds }) {
 
   return (
     <div className={`short ${clip.stale ? 'is-stale' : ''}`}>
+      {formats.length > 0 && (
+        <div className="seg sm aspect-tabs">
+          {['9:16', ...formats].map((a) => (
+            <button key={a} className={shown === a ? 'on' : ''} onClick={() => setView(a)}
+                    title={a === '9:16' ? 'Shorts, Reels, TikTok' : FEED[a].use}>{a}</button>
+          ))}
+        </div>
+      )}
       {src ? (
-        <video key={src} src={src} poster={poster} controls preload="none" />
+        <video key={src} src={src} poster={shown === '9:16' ? poster : undefined} controls preload="none"
+               style={shown === '9:16' ? undefined : { aspectRatio: FEED[shown].ratio }} />
       ) : (
         <div className="placeholder">Not rendered yet</div>
       )}
@@ -281,6 +297,20 @@ function ShortCard({ job, clip, busy, act, presets, kit, sounds }) {
           </>
         )}
 
+        <div className="opt">
+          <span className="muted" title="Same short, framed wider for feeds. Each one adds a render.">Feed versions</span>
+          <div className="seg sm">
+            {(presets?.feed_aspects || Object.keys(FEED)).map((a) => (
+              <button key={a} disabled={busy} className={aspects.includes(a) ? 'on' : ''} onClick={() => toggleAspect(a)}
+                      title={FEED[a].use}>{a}</button>
+            ))}
+          </div>
+        </div>
+        {aspects.length > 0 && (
+          <p className="muted small">{aspects.map((a) => `${a} for ${FEED[a].use}`).join(' · ')}. Its own crop (more of
+            the scene), captions and logo, same cuts.</p>
+        )}
+
         <CoverPanel job={job} clip={clip} busy={busy} act={act}
                     defaultText={clip.content?.instagram?.extra?.cover_text || clip.hook} />
         <QuotePanel job={job} clip={clip} busy={busy} act={act} />
@@ -295,7 +325,7 @@ function ShortCard({ job, clip, busy, act, presets, kit, sounds }) {
           )}
           {src && (
             <>
-              <a className="btn" href={src} download={`short_${clip.index}.mp4`}>Download</a>
+              <a className="btn" href={src} download={file}>Download{formats.length > 0 ? ` ${shown}` : ''}</a>
               <a className="btn ghost" href={api.fileUrl(job.id, `short_${clip.index}.srt`)} download>.srt</a>
             </>
           )}

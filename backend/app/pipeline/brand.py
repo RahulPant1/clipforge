@@ -139,23 +139,26 @@ def logo_width(kit: BrandKit) -> int:
     return max(32, round(W * kit.size / 100)) // 2 * 2
 
 
-def end_card_png(kit: BrandKit, out: Path) -> Path:
-    """Transparent overlay for the end card: logo centred, end text below it, handle in the brand colour."""
+def end_card_png(kit: BrandKit, out: Path, height: int = H) -> Path:
+    """Transparent overlay for the end card: logo centred, end text below it, handle in the brand colour.
+    height = canvas height (1920 for 9:16; 1350 / 1080 for the 4:5 / 1:1 feed versions)."""
     from PIL import Image, ImageDraw
 
     from .carousel import _font, _hex, wrap
     from .fonts import font_for, strip_emoji
 
-    img = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    img = Image.new("RGBA", (W, height), (0, 0, 0, 0))
     d = ImageDraw.Draw(img)
-    y = 640
+    k = height / H  # vertical layout scales; text sizes stay (the width is always 1080)
+    y = round(640 * k)
     if kit.logo and logo_path().is_file():
         logo = Image.open(logo_path()).convert("RGBA")
-        logo.thumbnail((440, 440))
-        img.alpha_composite(logo, ((W - logo.width) // 2, y - logo.height // 2))
-        y += logo.height // 2 + 80
+        side = round(440 * min(1, k * 1.15))
+        logo.thumbnail((side, side))
+        img.alpha_composite(logo, ((W - logo.width) // 2, max(y - logo.height // 2, 40)))
+        y = max(y - logo.height // 2, 40) + logo.height + round(80 * k)
     else:
-        y = 820
+        y = round(820 * k)
     text = strip_emoji(kit.end_text)
     if text:
         f = _font(84, font_for(text, None))
@@ -173,7 +176,7 @@ def end_card_png(kit: BrandKit, out: Path) -> Path:
 
 
 def overlay_graph(base: str, *, logo_input: int | None, kit: BrandKit, card_input: int | None, start: float,
-                  end: float, card_from: float) -> str:
+                  end: float, card_from: float, height: int = H) -> str:
     """filter_complex tail: [base] → logo in its corner from `start` until `end` → end card from `card_from` → [v].
 
     start = after the hook card when the logo sits at the top (they'd overlap); end = where the end card begins.
@@ -183,7 +186,8 @@ def overlay_graph(base: str, *, logo_input: int | None, kit: BrandKit, card_inpu
         x = MARGIN_X if kit.position == "top-left" else f"W-w-{MARGIN_X}"
         parts.append(f"[{logo_input}:v]scale={logo_width(kit)}:-1,format=rgba,"
                      f"colorchannelmixer=aa={kit.opacity:.2f}[lg]")
-        parts.append(f"[{cur}][lg]overlay={x}:{TOP_Y}:enable='between(t,{start:.3f},{end:.3f})'[wm]")
+        top = round(TOP_Y * height / H)  # feed versions have no Shorts top bar to clear
+        parts.append(f"[{cur}][lg]overlay={x}:{top}:enable='between(t,{start:.3f},{end:.3f})'[wm]")
         cur = "wm"
     if card_input is not None:
         parts.append(f"[{card_input}:v]format=rgba[ec]")

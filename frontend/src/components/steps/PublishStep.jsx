@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { api } from '../../api.js'
-import { PLATFORMS } from '../../util.js'
+import { PLATFORMS, feedFile } from '../../util.js'
 import { CopyBtn } from '../PostEditor.jsx'
 
 const NEXT = { draft: 'approved', approved: 'posted', posted: 'draft' }
@@ -37,6 +37,8 @@ function Files({ job, c }) {
   return (
     <span className="pub-files">
       ⬇ {dl(c.file, 'video', `short_${c.index}.mp4`)}
+      {c.formats?.length > 0 && <> ({c.formats.map((a, i) => (
+        <span key={a}>{i > 0 && ' '}{dl(feedFile(c.index, a), a)}</span>))} for feeds)</>}
       {c.cover && <> · {dl(c.cover, 'cover')}</>}
       {' · '}{dl(`short_${c.index}.srt`, 'captions')}
       {ig?.carousel?.length > 0 && <> · carousel {ig.carousel.map((f, i) => <span key={f}>{dl(f, i + 1)} </span>)}</>}

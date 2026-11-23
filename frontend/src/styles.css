@@ -204,6 +204,7 @@ input:focus, textarea:focus { outline: none; border-color: #4a5164; }
 .short.is-stale { border-color: #6b5420; }
 .short video, .placeholder { width: 100%; aspect-ratio: 9 / 16; background: #000; display: block; }
 .placeholder { display: grid; place-items: center; color: var(--muted); }
+.short .aspect-tabs { margin: 8px 12px 0; align-self: flex-start; }
 .placeholder.sm { aspect-ratio: 9 / 16; width: 70px; font-size: 10px; border-radius: 6px; text-align: center; }
 .clip-body { padding: 12px; display: flex; flex-direction: column; gap: 8px; }
 .clip-head { display: flex; justify-content: space-between; gap: 8px; align-items: start; }

@@ -67,16 +67,17 @@ def keyword_set(keywords: list[str], words: list[Word]) -> set[str]:
 
 
 def _ass_header(preset: CaptionPreset, position: str | None = None, middle: bool = False,
-                font: str | None = None) -> str:
-    """Style from the preset; middle=True (two-speaker stack) puts captions on the seam whatever the position."""
-    align, margin_v = placement("middle" if middle else position)
+                font: str | None = None, height: int = 1920) -> str:
+    """Style from the preset; middle=True (two-speaker stack) puts captions on the seam whatever the position.
+    height = canvas height (1920 for 9:16, 1350 for 4:5, 1080 for 1:1; width is always 1080)."""
+    align, margin_v = placement("middle" if middle else position, height)
     p = preset
     border = 3 if p.box else 1
     back = "&H00000000" if p.box else "&H96000000"  # shadow colour (unused with a box)
     return f"""[Script Info]
 ScriptType: v4.00+
 PlayResX: 1080
-PlayResY: 1920
+PlayResY: {height}
 WrapStyle: 0
 ScaledBorderAndShadow: yes
 
@@ -120,7 +121,7 @@ def _line(chunk: Chunk, active: int, keywords: set[str], pop: bool, preset: Capt
 
 def build_ass(words: list[Word], keywords: list[str], n: int | None = None, middle: bool = False,
               preset: CaptionPreset | None = None, position: str | None = None, animate: bool = True,
-              font: str | None = None) -> str:
+              font: str | None = None, height: int = 1920) -> str:
     """Karaoke captions (animate=True: one event per word, active word + keywords coloured) or, animate=False,
     one plain line per chunk in the preset's look (the "simple" caption style)."""
     p = preset or get_preset()
@@ -144,7 +145,7 @@ def build_ass(words: list[Word], keywords: list[str], n: int | None = None, midd
         if 0 < nxt[0] - cur[1] < 0.6:
             cur[1] = nxt[0]
     body = "\n".join(f"Dialogue: 0,{ts_ass(s)},{ts_ass(e)},Default,,0,0,0,,{t}" for s, e, t in events)
-    return _ass_header(p, position, middle, font) + body + "\n"
+    return _ass_header(p, position, middle, font, height) + body + "\n"
 
 
 # ---------------------------------------------------------------- hook title (first seconds)
@@ -154,10 +155,17 @@ def hook_text(hook: str) -> str:
     return re.sub(r"\s+", " ", strip_emoji(re.sub(r"[{}\\]", "", hook))).strip()
 
 
+def text_scale(size: int, height: int) -> int:
+    """Burned-in text size on a shorter canvas: a 4:5 / 1:1 feed post shows the whole frame smaller, so the 9:16
+    size would look oversized there (and a hook card would cover the picture). √ keeps it readable: 84% / 75%."""
+    return round(size * (height / 1920) ** 0.5)
+
+
 SEAM_HOOK_MARGIN_V = 1040  # card's bottom edge just above seam captions (centred at y=960)
 
 
-def build_hook_ass(hook: str, duration: float, seam: bool = False, font: str | None = None) -> str:
+def build_hook_ass(hook: str, duration: float, seam: bool = False, font: str | None = None,
+                   height: int = 1920) -> str:
     """Big title card for the first `hook_seconds` of the short (own file, so it works with either caption style).
 
     Top of the frame (captions live at the bottom), boxed text that pops in and fades out. Empty hook -> "".
@@ -165,16 +173,20 @@ def build_hook_ass(hook: str, duration: float, seam: bool = False, font: str | N
     speaker's chest instead, bottom edge just above the captions on the seam.
     """
     s = settings
-    align, margin_v = (2, SEAM_HOOK_MARGIN_V) if seam else (8, s.hook_margin_v)
+    if seam:  # just above the seam (y = height / 2), scaled from the 9:16 layout
+        align, margin_v = 2, height // 2 + SEAM_HOOK_MARGIN_V - 960
+    else:  # feed versions have no Shorts top bar to clear: the margin shrinks with the canvas
+        align, margin_v = 8, round(s.hook_margin_v * height / 1920)
     text = hook_text(hook)
     end = min(s.hook_seconds, duration)
+    size = text_scale(s.hook_size, height)
     if not text or end <= 0.3:
         return ""
     # BorderStyle 3 = opaque box per line; its colour is OutlineColour, Outline is the padding
     return f"""[Script Info]
 ScriptType: v4.00+
 PlayResX: 1080
-PlayResY: 1920
+PlayResY: {height}
 WrapStyle: 0
 ScaledBorderAndShadow: yes
 
@@ -182,7 +194,7 @@ ScaledBorderAndShadow: yes
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, \
 Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, \
 Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Hook,{font or s.caption_font},{s.hook_size},{s.hook_color},{s.hook_color},{s.hook_box_color},&H00000000,\
+Style: Hook,{font or s.caption_font},{size},{s.hook_color},{s.hook_color},{s.hook_box_color},&H00000000,\
 -1,0,0,0,100,100,0,0,3,18,0,{align},110,110,{margin_v},1
 
 [Events]

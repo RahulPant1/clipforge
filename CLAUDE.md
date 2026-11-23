@@ -128,6 +128,11 @@ backend/                FastAPI + pipeline (Python 3.11, conda env "clipforge")
     export.py           export pack zip (shorts, srt, posts, carousels, titles.csv)
     render.py           plan_cuts + plan_reframe → captions → ffmpeg
                         (fps → sendcmd+crop@track → select → scale/pad → ass; audio: asplit/atrim/concat) + thumbnail
+                        Feed versions (ASPECTS): options.aspects / EXTRA_ASPECTS "4:5" → short_N.45.mp4, "1:1" → .11.mp4,
+                        same cut plan + sfx track, own _encode(): plan_reframe(size=) (wider crop, 2:1 split panels;
+                        face samples cached so detection runs once), captions/hook/end card/logo get height= (PlayResY,
+                        margins scaled, text_scale √(h/1920)). A failed feed version never fails the short: left out
+                        of clip.formats + render_error. Export pack feed/, library "(4x5)", Publish links, Shorts tabs
     orchestrator.py     prepare() → [review in UI] → produce(); render_one(); run_pipeline() = auto mode.
                         `Steps` dataclass makes phases injectable (tests use fakes)
   tests/                pytest; FakeLLM in conftest; real-ffmpeg render test
@@ -344,7 +349,7 @@ Keep it local: no cloud stock/B-roll/TTS APIs.
 18. [ ] F. Colour emoji as PNG overlays (libass is monochrome) + optional auto-emoji per caption line (= roadmap 4).
 19. [ ] G. B-roll from your own folder, matched to the clip by Gemma keywords.
 20. [x] H. Brand kit: logo watermark, end card with CTA, brand colour (covers/quotes/carousels/captions).
-21. [ ] I. Multi-aspect export: 1:1 and 4:5 alongside 9:16.
+21. [x] I. Multi-aspect export: 1:1 and 4:5 alongside 9:16 (own face-tracked crop, captions re-placed).
 22. [x] L. Several title/hook variants to choose from.
 23. [x] N. Batch: several links / a playlist / a channel / Find-videos picks as a queue of jobs; watched folder.
 (M = Hinglish/bilingual captions → item 10; O = calendar + auto-publish → items 9 and 11.)

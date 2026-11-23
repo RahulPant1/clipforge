@@ -29,6 +29,8 @@ from pathlib import Path
 from .config import settings
 from .models import Job, JobStatus
 
+FEED_SUFFIX = {"4:5": ".45", "1:1": ".11"}  # = render.ASPECTS (not imported: keeps the library light)
+
 log = logging.getLogger(__name__)
 
 XLSX = "ClipForge history.xlsx"
@@ -252,6 +254,10 @@ class Library:
             base = f"Short {c.index}"
             video = f"{base} - {safe_name(c.title, 60)}.mp4"
             files[video] = job_dir / c.file
+            for a in c.formats:  # feed versions: "Short 1 - <title> (4x5).mp4"
+                feed = job_dir / f"short_{c.index}{FEED_SUFFIX.get(a, '')}.mp4"
+                if a in FEED_SUFFIX and feed.exists():
+                    files[f"{base} - {safe_name(c.title, 60)} ({a.replace(':', 'x')}).mp4"] = feed
             for src, dst in [(c.cover, f"{base} - cover.jpg"), (f"short_{c.index}.srt", f"{base} - captions.srt"),
                              (f"short_{c.index}.posts.md", f"{base} - posts.md"),
                              (f"short_{c.index}.quote.png", f"{base} - quote card 1x1.png"),

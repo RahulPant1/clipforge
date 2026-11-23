@@ -1,6 +1,7 @@
 """Pydantic schemas shared by the API, job store and pipeline."""
 from datetime import UTC, datetime
 from enum import Enum
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
@@ -72,6 +73,7 @@ class RenderOptions(BaseModel):
     end_card: bool | None = None  # brand kit end card after the last word (None = the kit's setting)
     sfx: bool | None = None  # whoosh on cuts + pop on keywords (None = SFX_DEFAULT)
     music: str | None = None  # track in data/sounds/music ("" = none, None = MUSIC_DEFAULT)
+    aspects: list[Literal["4:5", "1:1"]] | None = None  # feed versions next to the 9:16 (None = EXTRA_ASPECTS)
 
 
 class HookVariant(BaseModel):
@@ -113,6 +115,7 @@ class Clip(BaseModel):
     visual: str = ""  # no-speech clips: what the vision model saw on screen (feeds the posts instead of speech)
     options: RenderOptions = RenderOptions()
     stale: bool = False  # edited after rendering -> needs re-render
+    formats: list[str] = []  # feed versions rendered with it: "4:5" → short_N.45.mp4, "1:1" → short_N.11.mp4
     version: int = 0  # bumps on every render (cache-busting in the UI)
     render_error: str | None = None
 

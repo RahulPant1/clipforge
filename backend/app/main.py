@@ -52,6 +52,7 @@ from .pipeline.jumpcut import clean_removed
 from .pipeline.llm import OllamaClient
 from .pipeline.presets import POSITIONS, all_presets, get_preset
 from .pipeline.reframe import people
+from .pipeline.render import FEED, extra_aspects
 from .watch import Watcher
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -157,9 +158,11 @@ def create_app(pipeline=None, start_worker: bool = True, llm_factory=OllamaClien
 
     @app.get("/api/caption-presets")
     def caption_presets() -> dict:
-        """Caption looks for the Shorts step (built-in + data/caption_presets.json) and the global defaults."""
+        """Caption looks for the Shorts step (built-in + data/caption_presets.json) and the global defaults
+        (also the feed versions new shorts get: EXTRA_ASPECTS)."""
         return {"default": settings.caption_preset, "position": settings.caption_position,
                 "style": settings.caption_style, "positions": list(POSITIONS),
+                "aspects": extra_aspects(RenderOptions()), "feed_aspects": FEED,
                 "presets": [p.public() for p in all_presets().values()]}
 
     # ---------------------------------------------------------------- brand voice (all jobs)

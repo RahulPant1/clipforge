@@ -5,6 +5,7 @@ import zipfile
 from pathlib import Path
 
 from ..models import Job
+from .render import aspect_file
 
 FOLDERS = {".mp4": "shorts", ".srt": "captions", ".jpg": "thumbnails", ".png": "carousels", ".md": "posts"}
 
@@ -35,6 +36,7 @@ def build_pack(job: Job, job_dir: Path) -> Path:
     for c in job.clips:
         stem = f"short_{c.index}"
         names += [f"{stem}.mp4", f"{stem}.srt", f"{stem}.jpg", f"{stem}.cover.jpg", f"{stem}.posts.md"]
+        names += [aspect_file(c.index, a) for a in c.formats]
         names += [f for post in c.content.values() for f in post.carousel]
         names += c.quote_cards
     with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:
@@ -42,11 +44,13 @@ def build_pack(job: Job, job_dir: Path) -> Path:
             f = job_dir / n
             if f.is_file():
                 folder = ("covers" if n.endswith(".cover.jpg") else "quotes" if ".quote" in n
-                          else FOLDERS.get(f.suffix, ""))
+                          else "feed" if n.endswith((".45.mp4", ".11.mp4")) else FOLDERS.get(f.suffix, ""))
                 # mp4s are already compressed — store them as-is (much faster)
                 z.write(f, f"{folder}/{n}", zipfile.ZIP_STORED if f.suffix == ".mp4" else zipfile.ZIP_DEFLATED)
         z.writestr("titles.csv", "\ufeff" + titles_csv(job))  # BOM so Excel reads UTF-8/emoji
-        z.writestr("README.txt", "ClipForge export\n\nshorts/      vertical videos\ncaptions/    .srt to upload "
+        z.writestr("README.txt", "ClipForge export\n\nshorts/      vertical videos\n"
+                   "feed/        the same shorts for feeds: .45.mp4 = 4:5 (Instagram, LinkedIn), .11.mp4 = 1:1 (X)\n"
+                   "captions/    .srt to upload "
                    "with each short\nposts/       ready-to-paste copy for YouTube, Instagram, X, LinkedIn\n"
                    "carousels/   Instagram carousel slides (post in order)\ncovers/      reel / Shorts cover images\n"
                    "quotes/      quote cards: .quote.png 1:1 for X, .quote45.png 4:5 for LinkedIn/Instagram\n"

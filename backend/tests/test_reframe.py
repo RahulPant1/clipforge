@@ -74,7 +74,11 @@ def test_plan_filters_and_sendcmd():
     p = ReframePlan("face", 1920, 1080, 606, [(0.0, 100), (0.5, 120)])
     assert p.filters("c.cmd") == ["sendcmd=f=c.cmd", "crop@track=606:1080:100:0"]
     assert p.sendcmd() == "0.000 crop@track x 100;\n0.500 crop@track x 120;\n"
-    assert "crop='min(iw,ih*9/16)':ih" in ReframePlan("center", 1920, 1080, 606).filters(None)[0]
+    centre = ReframePlan("center", 1920, 1080, 606).filters(None)[0]
+    assert "crop='min(iw,ih*1080/1920)':'min(ih,iw*1920/1080)'" in centre
+    square = ReframePlan("split", 1920, 1080, 1080, panels=[(800, 400, 0, 0), (800, 400, 1000, 0)], size=(1080, 1080))
+    assert "scale=1080:540" in square.filters(None)[0]  # two 2:1 panels stacked = 1:1
+    assert "scale=1080:1350" in ReframePlan("fit", 1920, 1080, 864, size=(1080, 1350)).filters(None)[0]
 
 
 class NoFaces:

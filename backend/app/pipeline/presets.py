@@ -121,9 +121,11 @@ def get_preset(pid: str | None = None) -> CaptionPreset:
     return presets.get(pid) or presets["classic"]
 
 
-def placement(position: str | None) -> tuple[int, int]:
-    """(ASS Alignment, MarginV) for a caption position on the 1080x1920 canvas."""
+def placement(position: str | None, height: int = 1920) -> tuple[int, int]:
+    """(ASS Alignment, MarginV) for a caption position on a 1080-wide canvas `height` tall (1920 = 9:16).
+
+    Bottom margin scales with the height: 4:5 / 1:1 feed posts have less app UI over the bottom than Shorts."""
     position = position or settings.caption_position
     if position == "middle":  # centre of the canvas: under the chin in a tracked talking head
         return 5, 0
-    return 2, settings.caption_margin_v
+    return 2, round(settings.caption_margin_v * height / 1920)

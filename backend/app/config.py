@@ -122,7 +122,6 @@ class Settings(BaseSettings):
     caption_size: int = 78  # ASS units on a 1080x1920 canvas
     highlight_scale: int = 110  # active word size in %
     caption_margin_v: int = 420  # px from bottom; keeps text clear of the Shorts UI
-    # Hook title card: clip.hook as big text for the first seconds (top of frame; captions are at the bottom)
     # Sound design (sfx.py): whoosh on jump cuts + pop on keywords, and background music from data/sounds/music,
     # ducked under the voice. Defaults for new shorts; each short can switch them in the Shorts step.
     sfx_default: bool = False
@@ -131,6 +130,11 @@ class Settings(BaseSettings):
     sfx_pop_db: float = -12.0
     music_lufs: float = -30.0  # every track is loudness-normalised to this (speech sits ~-16), then ducked ~7-10 dB
                                # under speech — the file's own loudness doesn't matter
+    # Feed versions (render.ASPECTS): besides the 9:16 short, also render "4:5" (Instagram feed, LinkedIn) and/or
+    # "1:1" (X, LinkedIn) — own face-tracked crop (wider: more of the scene), captions/hook/logo re-placed.
+    # Comma list for new shorts, e.g. EXTRA_ASPECTS=4:5 ; each short can switch them in the Shorts step.
+    extra_aspects: str = ""
+    # Hook title card: clip.hook as big text for the first seconds (top of frame; captions are at the bottom)
     hook_overlay: bool = True  # per-clip override in the Shorts step
     hook_seconds: float = 3.0
     hook_size: int = 84  # ASS units on a 1080x1920 canvas

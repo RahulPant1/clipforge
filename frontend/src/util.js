@@ -99,3 +99,10 @@ export function waveBars(levels, rate, lo, hi, n) {
   }
   return out
 }
+
+// Feed versions rendered next to the 9:16 short (backend render.ASPECTS): file suffix, preview shape, where to post
+export const FEED = {
+  '4:5': { suffix: '.45', ratio: '4 / 5', use: 'Instagram feed, LinkedIn' },
+  '1:1': { suffix: '.11', ratio: '1 / 1', use: 'X, LinkedIn' },
+}
+export const feedFile = (index, aspect) => `short_${index}${FEED[aspect].suffix}.mp4`

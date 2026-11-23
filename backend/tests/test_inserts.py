@@ -378,7 +378,7 @@ def test_gemma_failing_falls_back_to_rule_picks(llm):
     clip, segs = _stat_clip()
     got = inserts.suggest(clip, segs, llm)
     assert [inserts.display(i) for i in got] == ["40%", "₹2 crore"]  # units; "12 cats" scores too low
-    assert got[0].label == "of startups fail in"
+    assert got[0].label == "of startups fail"  # trailing "in" trimmed
 
 
 def test_no_numbers_no_gemma_call():
@@ -481,3 +481,13 @@ def test_number_repeated_in_the_label_is_dropped():
     clip, segs = _stat_clip()
     got = inserts.suggest(clip, segs, CardLLM({"cards": [{"id": 1, "worth": 9, "label": "40% of startups fail"}]}))
     assert got[0].label == "of startups fail"
+
+
+def test_labels_allow_plurals_and_hyphens_and_rule_labels_end_cleanly():
+    clip = Clip(index=1, start=0, end=20, title="t", hook="h", score=7)
+    segs = [seg("Huberman says 99% of people need a two to five minute transition period between tasks.")]
+    c = inserts.candidates(segs, clip)[0]
+    assert inserts.rule_label(c) == "of people need"  # not "of people need a two"
+    assert inserts.label_ok("of people need transition periods", c)
+    assert inserts.label_ok("two-to-five minute transition", c)
+    assert not inserts.label_ok("of people need long breaks", c)

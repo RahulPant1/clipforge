@@ -146,3 +146,21 @@ export function upsertKey(keys, t, x, near = 0.15) {
   if (hit) return keys.map((k) => (k === hit ? { ...k, x: r(x) } : k))
   return [...keys, { t: r(t), x: r(x), pan: false }].sort((a, b) => a.t - b.t)
 }
+
+// Stat cards (inserts): the card's number text — mirrors numbers.fmt / Num.text on the backend
+export function statNumber(v, decimals = 0, grouping = 'western') {
+  if (decimals) return v.toFixed(decimals)
+  const n = Math.round(v)
+  if (n < 1000 || grouping === 'none') return String(n)
+  if (grouping === 'indian') {
+    const s = String(n)
+    let head = s.slice(0, -3)
+    const parts = []
+    while (head.length > 2) { parts.unshift(head.slice(-2)); head = head.slice(0, -2) }
+    if (head) parts.unshift(head)
+    return [...parts, s.slice(-3)].join(',')
+  }
+  return n.toLocaleString('en-US')
+}
+export const statText = (ins, v) =>
+  `${ins.prefix || ''}${statNumber(v ?? ins.value, ins.decimals, ins.grouping)}${ins.suffix || ''}`

@@ -17,10 +17,11 @@ from ..models import Clip, Insert, Segment, Word
 from .highlights import _ends_sentence
 from .jumpcut import CutPlan, clean_removed, clip_words, is_struck, norm
 from .llm import LLM
-from .numbers import Num, clean, find
+from .numbers import ONES, TENS, Num, clean, find
 
 log = logging.getLogger(__name__)
 
+NUMBER_WORDS = set(ONES) | set(TENS) | {"hundred", "thousand", "million", "billion", "lakh", "crore"}
 LEAD = 0.15  # s: the card starts just before the number is heard
 GAP = 3.0  # s between two cards' starts (output time)
 MIN_SHOWN = 1.0  # shorter than this after trims/cuts → left out
@@ -28,6 +29,8 @@ BOX = (840, 340)  # card canvas on 1080x1920; feed versions scale it with the he
                   # mid-frame — a caption-sized card would cover it)
 CAPTION_CLEAR = 230  # px above the bottom captions' margin: two caption lines + the emoji gap
 LABEL_WORDS = 4
+_DANGLING = {"a", "an", "the", "to", "of", "and", "or", "in", "on", "for", "with", "at", "by", "from", "that", "is",
+             "are", "was", "my", "your", "our", "their", "his", "her", "ka", "ki", "ke", "se", "aur"}
 _LEAD_WORDS = {"and", "but", "so", "or", "then", "because", "like", "um", "uh"}
 
 
@@ -79,6 +82,9 @@ def rule_label(c: Cand) -> str:
         words.append(raw)
         if len(words) >= LABEL_WORDS or re.search(r"[,;:]$", raw):
             break
+    while words and (clean(words[-1]).lower() in _DANGLING or re.search(r"\d", words[-1])
+                     or clean(words[-1]).lower() in NUMBER_WORDS):
+        words.pop()  # "of people need a two" → "of people need"
     return re.sub(r"[,;:.!?]+$", "", " ".join(words))[:40]
 
 
@@ -135,10 +141,16 @@ def build_prompt(cands: list[Cand]) -> str:
 def label_ok(label: str, c: Cand) -> bool:
     """Every word of the label was said in the number's sentence (case/punctuation aside), 1-6 words, and it isn't
     just the number again. This is what keeps a model-written label from adding facts."""
-    said = {norm(w) for w in c.sentence.split()}
-    got = [norm(w) for w in label.split() if norm(w)]
+    said = {_stem(x) for w in c.sentence.split() for x in w.split("-")}
+    got = [_stem(x) for w in label.split() for x in w.split("-") if norm(x)]
     number = {norm(w) for w in c.num.spoken.split()} | {norm(c.num.text())}
-    return 1 <= len(got) <= 6 and all(w in said for w in got) and not all(w in number for w in got)
+    return 1 <= len(label.split()) <= 6 and all(w in said for w in got) and not all(w in number for w in got)
+
+
+def _stem(word: str) -> str:
+    """Case, punctuation and a plural s aside ("minute" / "minutes"): still a word that was said."""
+    w = norm(word)
+    return w[:-1] if len(w) > 3 and w.endswith("s") else w
 
 
 def without_number(label: str, c: Cand) -> str:

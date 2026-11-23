@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { api } from '../../api.js'
 import CropEditor from '../CropEditor.jsx'
+import InsertEditor from '../InsertEditor.jsx'
 import { FEED, feedFile, fmt } from '../../util.js'
 
 function Seg({ label, value, options, onChange, disabled }) {
@@ -327,6 +328,11 @@ function ShortCard({ job, clip, busy, act, presets, kit, sounds }) {
         {aspects.length > 0 && (
           <p className="muted small">{aspects.map((a) => `${a} for ${FEED[a].use}`).join(' · ')}. Its own crop (more of
             the scene), captions and logo, same cuts.</p>
+        )}
+
+        {!clip.visual && ( /* no-speech clips have no spoken numbers */
+          <InsertEditor job={job} clip={clip} busy={busy} act={act}
+                        accent={kit?.enabled && kit.accent ? kit.accent : undefined} />
         )}
 
         <CoverPanel job={job} clip={clip} busy={busy} act={act}

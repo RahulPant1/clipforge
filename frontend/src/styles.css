@@ -505,3 +505,18 @@ aside { min-width: 0; }  /* a long History path must shrink (ellipsis), not wide
 .crop-bar, .crop-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .crop-actions .grow { flex: 1; }
 .mono { font-variant-numeric: tabular-nums; }
+
+/* Stat cards (InsertEditor) */
+.stats .stat-list { list-style: none; margin: 6px 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.stat-row { display: flex; gap: 10px; align-items: flex-start; padding: 8px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg); }
+.stat-row.on { border-color: var(--accent); }
+.stat-preview { flex: 0 0 auto; min-width: 96px; max-width: 140px; display: flex; flex-direction: column; align-items: center; gap: 2px;
+  background: #0c0c10cc; border: 2px solid var(--stat, var(--accent)); border-radius: 10px; padding: 6px 8px; cursor: pointer; }
+.stat-preview b { color: var(--stat, var(--accent)); font-size: 20px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.stat-preview small { color: #fff; font-size: 10px; text-align: center; line-height: 1.2; overflow-wrap: anywhere; }
+.stat-ctl { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 5px; }
+.stat-ctl input { width: 100%; min-width: 0; }
+.stat-line { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; justify-content: space-between; }
+.stat-num { display: grid; grid-template-columns: 3.5em 1fr 5em; gap: 4px; }
+.nudge { display: inline-flex; gap: 2px; }
+.nudge .btn { padding: 2px 8px; }

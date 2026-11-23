@@ -176,6 +176,7 @@ backend/                FastAPI + pipeline (Python 3.11, conda env "clipforge")
 frontend/               React 18 + Vite (JSX, no TS). /api proxied to :8000
   src/components/Workspace.jsx   6-step stepper: Source → Transcript → Pick clips → Shorts → Posts → Publish
   src/components/steps/*.jsx     one file per step; PostEditor.jsx = per-platform editor (used by Posts)
+  src/components/InsertEditor.jsx  stat cards per short (Shorts step): PATCH clip {inserts} with the whole list
   src/util.js                    stepStates()/defaultStep() decide which steps unlock and where a job opens;
                                  timeline maths (timelineWindow/snapTime/moveEdge/waveBars) for Timeline.jsx
 scripts/setup_wsl.sh    one-time setup;  scripts/dev.sh  runs API + UI
@@ -390,6 +391,18 @@ Keep it local: no cloud stock/B-roll/TTS APIs.
 23. [x] N. Batch: several links / a playlist / a channel / Find-videos picks as a queue of jobs; watched folder.
 24. [ ] Motion-graphics inserts (stat_counter). [x] phases 1-2: numbers.py, inserts.py, insert_render.py (Pillow),
         render overlay, Clip.inserts via PATCH. [x] 3: Gemma picks + labels (checked on real jobs with gemma4: skips
-        ages / "ten years later", keeps 70% / 99%; ~1 s per clip warm). [ ] 4: InsertEditor.jsx in Shorts step. [ ] later: Blender renderer (Windows
+        ages / "ten years later", keeps 70% / 99%; ~1 s per clip warm). [x] 4: InsertEditor.jsx in the Shorts step
+        (count-up preview, label, Show/Suggested, Auto/Top/Low, ±0.2 s, your own card; statText() in util.js mirrors
+        numbers.fmt). [ ] later: Blender renderer (Windows
         blender.exe via wslpath) behind the same InsertRenderer protocol.
 (M = Hinglish/bilingual captions → item 10; O = calendar + auto-publish → items 9 and 11.)
+
+For a later discussion (not planned yet):
+25. [ ] Motion graphics with Blender: a BlenderRenderer for 3D / richer card templates behind the same InsertRenderer
+        protocol (Windows blender.exe via wslpath; check headless GPU first; templates pinned to one Blender version).
+26. [ ] Desktop app. Cheap version first: FastAPI serves frontend/dist (no Vite) + a Windows shortcut that starts the
+        backend in WSL and opens `msedge --app=http://localhost:8000`. Installable app for others = Windows-native
+        backend (no WSL), installer with GPU check, first-run model downloads, yt-dlp self-update, then a Tauri shell.
+27. [ ] ComfyUI as an optional local generator over its HTTP API (workflow JSON in, frames out), behind GPU_LOCK and
+        unloaded after use like Gemma (8 GB VRAM: SDXL-class images fine, video models slow): B-roll stills/loops when
+        your folder has no match (item 19 / G), stylised cover backgrounds, upscaling. Not ClipForge-as-ComfyUI-nodes.

@@ -156,6 +156,12 @@ function Candidate({ job, clip, others, transcript, wave, total, busy, act, relo
           )}
           {clip.custom && <span className="chip">your clip</span>}
           {clip.removed?.length > 0 && <span className="chip" title="Struck in the transcript">✂ words cut</span>}
+          {clip.inserts?.length > 0 && (
+            <span className="chip" title="Stat cards: a spoken number counts up on screen — edit them in the Shorts step">
+              📊 {clip.inserts.filter((i) => i.approved).length || clip.inserts.length}{' '}
+              {clip.inserts.some((i) => i.approved) ? 'shown' : 'suggested'}
+            </span>
+          )}
           {clip.stale && <span className="chip warnchip">changed — re-render needed</span>}
           {clip.file && !clip.stale && <span className="chip">rendered</span>}
           <button

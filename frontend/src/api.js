@@ -53,8 +53,9 @@ export const api = {
   createBatch: (urls, num_clips, mode, topic = '', hinglish = true, info = {}) =>
     req('/jobs/batch', json('POST', { urls, num_clips, mode, topic, hinglish, info })),
   batchExpand: (text) => req('/batch/expand', json('POST', { text })),
-  uploadJob: (file, num_clips, mode, topic = '', hinglish = true) => {
+  uploadJob: (file, num_clips, mode, topic = '', hinglish = true, purpose = 'create') => {
     const fd = new FormData()
+    fd.append('purpose', purpose)
     fd.append('file', file)
     fd.append('num_clips', num_clips)
     fd.append('mode', mode)
@@ -78,6 +79,9 @@ export const api = {
   editClip: (id, index, changes) => req(`/jobs/${id}/clips/${index}`, json('PATCH', changes)),
   addClip: (id, clip) => req(`/jobs/${id}/clips`, json('POST', clip)),
   produce: (id) => req(`/jobs/${id}/produce`, { method: 'POST' }),
+  learnNotes: (id) => req(`/jobs/${id}/learn`),
+  makeLearn: (id) => req(`/jobs/${id}/learn`, { method: 'POST' }),
+  reviewClip: (id, index) => req(`/jobs/${id}/clips/${index}/review`, { method: 'POST' }),
   hookVariants: (id, index) => req(`/jobs/${id}/clips/${index}/hooks`, { method: 'POST' }),
   scenes: (id) => req(`/jobs/${id}/scenes`),
   suggestInserts: (id, index) => req(`/jobs/${id}/clips/${index}/inserts/suggest`, { method: 'POST' }),

@@ -99,6 +99,10 @@ export default function TranscriptStep({ job, busy, act, go, transcript, reloadT
         <ScriptSwitch job={job} busy={busy} act={act} reloadTranscript={reloadTranscript} />
         <div className="tlist-head">
           <h3>Transcript</h3>
+          {!job.learn && (
+            <button className="btn sm ghost" disabled={busy} title="Summary, chapters, key concepts, notes and a quiz"
+                    onClick={() => act(() => api.makeLearn(job.id)).catch(() => {})}>📚 Make study notes</button>
+          )}
           <input className="search" placeholder={sceneCount ? 'Search what is said or shown…' : 'Search…'} value={q}
                  onChange={(e) => setQ(e.target.value)} />
         </div>
@@ -120,7 +124,13 @@ export default function TranscriptStep({ job, busy, act, go, transcript, reloadT
             return (
               <div key={`sc${i}`} className="tline scene">
                 <button className="ts" onClick={() => seek(s.t ?? s.start)} title="Play this scene">{fmt(s.start)}</button>
-                <span className="ttext"><span className="skind">🎬 {s.kind.replace('_', ' ')}</span> {s.text}</span>
+                <span className="ttext">
+                  {s.k != null && (
+                    <img className="sthumb" loading="lazy" alt="" src={`/api/jobs/${job.id}/scenes/${s.k}.jpg`}
+                         onClick={() => seek(s.t ?? s.start)} onError={(e) => { e.currentTarget.style.display = 'none' }} />
+                  )}
+                  <span className="skind">🎬 {s.kind.replace('_', ' ')}</span> {s.text}
+                </span>
                 <span className="tact">
                   <button onClick={() => setSel((x) => ({ ...x, start: s.start }))} title="Start clip at this scene">⇤ start</button>
                 </span>

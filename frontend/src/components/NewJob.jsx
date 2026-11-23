@@ -41,6 +41,7 @@ export default function NewJob({ onCreated, onOpen }) {
   const [file, setFile] = useState(null)
   const [numClips, setNumClips] = useState(5)
   const [mode, setMode] = useState('review')
+  const [purpose, setPurpose] = useState('create') // create = shorts + posts; learn = study notes
   const [topic, setTopic] = useState('') // optional: only moments about this
   const [hinglish, setHinglish] = useState(true) // Hindi speech → captions in Latin letters
   const [busy, setBusy] = useState(false)
@@ -86,9 +87,11 @@ export default function NewJob({ onCreated, onOpen }) {
       }
       const job =
         kind === 'url'
-          ? await api.createJob(url.trim(), numClips, mode, t, hinglish,
-            picked?.url === url.trim() ? { title: picked.title.slice(0, 300), channel: picked.channel.slice(0, 200) } : {})
-          : await api.uploadJob(file, numClips, mode, t, hinglish)
+          ? await api.createJob(url.trim(), numClips, mode, t, hinglish, {
+            purpose,
+            ...(picked?.url === url.trim() ? { title: picked.title.slice(0, 300), channel: picked.channel.slice(0, 200) } : {}),
+          })
+          : await api.uploadJob(file, numClips, mode, t, hinglish, purpose)
       onCreated(job)
     } catch (e) {
       setErr(e.message)
@@ -154,6 +157,21 @@ export default function NewJob({ onCreated, onOpen }) {
         )}
         {kind === 'url' && <SeenBefore matches={seen} onOpen={onOpen} />}
 
+        {kind !== 'batch' && (
+          <div className="seg purpose" role="radiogroup" aria-label="What is this video for?">
+            <button type="button" className={purpose === 'create' ? 'on' : ''} onClick={() => setPurpose('create')}>
+              🎬 Make shorts
+            </button>
+            <button type="button" className={purpose === 'learn' ? 'on' : ''} onClick={() => setPurpose('learn')}>
+              📚 Learn from it
+            </button>
+          </div>
+        )}
+        {purpose === 'learn' && kind !== 'batch' ? (
+          <p className="hint">Study notes instead of shorts: a summary, chapters, key concepts and timestamped notes,
+            a quiz, a hands-on exercise and what to learn next — every point linked to where it's said. About a
+            minute per 10 minutes of video after the transcript.</p>
+        ) : (<>
         <label className="row">
           Shorts you want
           <input type="number" min="1" max="20" value={numClips} onChange={(e) => setNumClips(Number(e.target.value))} />
@@ -200,6 +218,7 @@ export default function NewJob({ onCreated, onOpen }) {
             </div>
           </label>
         </div>
+        </>)}
 
         <button className="primary" disabled={!ready || busy}>
           {busy ? 'Starting…' : kind === 'batch'

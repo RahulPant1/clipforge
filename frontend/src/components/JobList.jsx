@@ -28,7 +28,7 @@ export default function JobList({ jobs, selectedId, onSelect, onDelete }) {
           <div key={j.id} className={`job ${j.id === selectedId ? 'sel' : ''}`} onClick={() => onSelect(j.id)}>
             <div className="job-top">
               <span className={`pill ${j.status}`}>{LABEL[j.status]}</span>
-              <span className="src" title={j.source}>{j.title || shortSource(j.source)}</span>
+              <span className="src" title={j.source}>{j.purpose === 'learn' && '📚 '}{j.title || shortSource(j.source)}</span>
               <button
                 className="x"
                 title={place >= 0 ? 'Remove from the queue' : isBusy(j) ? 'Wait for this job to finish before deleting it'

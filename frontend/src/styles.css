@@ -544,3 +544,40 @@ aside { min-width: 0; }  /* a long History path must shrink (ellipsis), not wide
 .voicelab .vrec-ctl { display: flex; flex-direction: column; gap: 4px; align-items: flex-end; }
 .voicelab .vl-sample { display: flex; flex-direction: column; gap: 2px; margin-top: 6px; }
 @media (max-width: 700px) { .voicelab .vrec { grid-template-columns: 1fr; } .voicelab .vrec-ctl { flex-direction: row; } }
+
+/* Clip judge (Pick step) */
+.review { border: 1px solid var(--line); border-left: 3px solid var(--muted); border-radius: 8px; padding: 8px 10px;
+  display: flex; flex-direction: column; gap: 6px; font-size: 13px; }
+.review.v-ready { border-left-color: var(--good, #3fb950); }
+.review.v-trim { border-left-color: var(--info); }
+.review.v-needs_context { border-left-color: var(--warn); }
+.review.v-reject { border-left-color: var(--bad); }
+.review-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.review-head .btn { margin-left: auto; }
+.review ul { margin: 0; padding-left: 0; list-style: none; display: flex; flex-direction: column; gap: 4px; }
+.review .tag { font-size: 10px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin-right: 4px; }
+.review > .btn { align-self: flex-start; text-align: left; white-space: normal; }
+
+/* 📚 Learning mode */
+.seg.purpose { align-self: flex-start; }
+.learn { display: flex; flex-direction: column; gap: 12px; }
+.learn-top { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr); gap: 12px; align-items: start; }
+.learn-top video { width: 100%; border-radius: 10px; background: #000; }
+.learn-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 12px; }
+.learn h3 { margin-bottom: 8px; }
+.learn-h { display: flex; justify-content: space-between; align-items: center; }
+.learn-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; line-height: 1.45; }
+.learn-list .ts, .learn .ts { margin-right: 4px; }
+.learn ul:not(.learn-list) { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 6px; }
+.quiz { display: flex; flex-direction: column; gap: 14px; }
+.qz-choices { display: flex; flex-direction: column; gap: 4px; margin: 6px 0; }
+.qz-choices button { text-align: left; background: var(--bg); border: 1px solid var(--line); color: var(--text);
+  border-radius: 8px; padding: 7px 10px; cursor: pointer; }
+.qz-choices button:hover:not(:disabled) { border-color: var(--accent); }
+.qz-choices button.right { border-color: var(--good, #3fb950); background: color-mix(in srgb, var(--good, #3fb950) 15%, var(--bg)); }
+.qz-choices button.wrong { border-color: var(--bad); background: color-mix(in srgb, var(--bad) 15%, var(--bg)); }
+.qz-choices button.dim { opacity: .6; }
+@media (max-width: 800px) { .learn-top { grid-template-columns: 1fr; } }
+.tline.scene .sthumb { float: left; width: 96px; aspect-ratio: 16 / 9; object-fit: cover; border-radius: 4px;
+  margin: 2px 8px 2px 0; cursor: pointer; background: #000; }
+.tline.scene .ttext::after { content: ""; display: block; clear: both; }

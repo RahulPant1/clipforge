@@ -35,7 +35,8 @@ export function stepStates(job) {
   const hasPosts = job.clips.some((c) => Object.keys(c.content || {}).length > 0)
   return {
     source: 'ready',
-    transcript: hasClips ? 'ready' : 'locked',
+    transcript: hasClips || job.learn ? 'ready' : 'locked',
+    learn: job.learn ? 'ready' : 'locked',
     pick: hasClips ? 'ready' : 'locked',
     shorts: rendered ? 'ready' : 'locked',
     posts: hasPosts ? 'ready' : 'locked',
@@ -44,6 +45,7 @@ export function stepStates(job) {
 }
 
 export function defaultStep(job) {
+  if (job.purpose === 'learn') return job.learn ? 'learn' : 'source'
   if (!job.clips.length) return 'source'
   if (job.status === 'review') return 'pick'
   if (job.clips.some((c) => c.file)) return 'shorts'

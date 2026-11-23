@@ -32,6 +32,7 @@ from .models import (
     JobStatus,
     Post,
     PostEdit,
+    Purpose,
     QuoteEdit,
     RecordingEdit,
     RenderOptions,
@@ -56,6 +57,8 @@ from .pipeline import (
     emoji,
     hinglish,
     inserts,
+    judge,
+    learn,
     quote,
     scenes,
     sfx,
@@ -320,7 +323,7 @@ def create_app(pipeline=None, start_worker: bool = True, llm_factory=OllamaClien
             raise HTTPException(400, "url must start with http(s)://")
         hinglish = settings.hinglish_default if body.hinglish is None else body.hinglish
         job = store.create(body.url, body.num_clips, body.mode, body.topic, hinglish=hinglish, title=body.title,
-                           channel=body.channel)
+                           channel=body.channel, purpose=body.purpose)
         worker.submit(job.id, body.url)
         return job
 
@@ -354,9 +357,10 @@ def create_app(pipeline=None, start_worker: bool = True, llm_factory=OllamaClien
 
     @app.post("/api/jobs/upload", response_model=Job, status_code=201)
     def upload_job(file: UploadFile = File(...), num_clips: int = Form(5), mode: JobMode = Form(JobMode.review),
-                   topic: str = Form("", max_length=200), hinglish: bool | None = Form(None)) -> Job:
+                   topic: str = Form("", max_length=200), hinglish: bool | None = Form(None),
+                   purpose: Purpose = Form("create")) -> Job:
         job = store.create(file.filename or "upload.mp4", num_clips, mode, topic, title=Path(file.filename or "").stem,
-                           hinglish=settings.hinglish_default if hinglish is None else hinglish)
+                           hinglish=settings.hinglish_default if hinglish is None else hinglish, purpose=purpose)
         d = store.dir(job.id)
         d.mkdir(parents=True, exist_ok=True)
         dest = d / "source.mp4"
@@ -364,6 +368,23 @@ def create_app(pipeline=None, start_worker: bool = True, llm_factory=OllamaClien
             shutil.copyfileobj(file.file, f)
         worker.submit(job.id, str(dest))
         return job
+
+    @app.get("/api/jobs/{job_id}/learn")
+    def get_learn(job_id: str) -> dict:
+        """Study notes (learning mode); {"notes": null} until they're made."""
+        if not store.get(job_id):
+            raise HTTPException(404, "job not found")
+        n = learn.load(store.dir(job_id))
+        return {"notes": n.model_dump(mode="json") if n else None, "markdown": "notes.md" if n else None}
+
+    @app.post("/api/jobs/{job_id}/learn", response_model=Job)
+    def make_learn(job_id: str) -> Job:
+        """Study notes for a job whose video is already here (shorts job or a learn job again): queued."""
+        job = editable(job_id)
+        if not (store.dir(job_id) / "source.mp4").is_file():
+            raise HTTPException(400, "no video in this job yet")
+        worker.submit_learn(job.id)
+        return store.get(job_id)
 
     @app.post("/api/jobs/{job_id}/retry", response_model=Job)
     def retry_job(job_id: str, body: Retry | None = None) -> Job:
@@ -456,8 +477,21 @@ def create_app(pipeline=None, start_worker: bool = True, llm_factory=OllamaClien
         if not index:
             return {"mode": "none", "scenes": []}
         return {"mode": index.mode, "reason": index.reason, "model": index.model,
-                "scenes": [{"start": x.start, "end": x.end, "t": x.t, "kind": x.kind, "description": x.description}
-                           for x in index.described]}
+                "scenes": [{"k": k, "start": x.start, "end": x.end, "t": x.t, "kind": x.kind,
+                            "description": x.description}
+                           for k, x in enumerate(index.scenes) if x.description]}
+
+    @app.get("/api/jobs/{job_id}/scenes/{k}.jpg")
+    def scene_thumb(job_id: str, k: int):
+        """Scene k's keyframe (small JPEG) for the Transcript step."""
+        if not store.get(job_id):
+            raise HTTPException(404, "job not found")
+        d = store.dir(job_id)
+        index = scenes.load(d)
+        f = scenes.thumb(d, d / "source.mp4", index, k) if index and (d / "source.mp4").is_file() else None
+        if not f:
+            raise HTTPException(404, "no thumbnail")
+        return FileResponse(f, media_type="image/jpeg", headers={"Cache-Control": "max-age=86400"})
 
     # ---------------------------------------------------------------- caption fixes + vocabulary
 
@@ -752,6 +786,29 @@ def create_app(pipeline=None, start_worker: bool = True, llm_factory=OllamaClien
 
             try:
                 return store.update_clip(job_id, index, apply)
+            except KeyError:
+                raise HTTPException(404, "clip not found") from None
+        finally:
+            GPU_LOCK.release()
+
+    @app.post("/api/jobs/{job_id}/clips/{index}/review", response_model=Job)
+    def review_clip(job_id: str, index: int) -> Job:
+        """Clip judge on the clip as it is now (after your trims): verdict, what's missing, a suggested fix."""
+        editable(job_id)
+        _, clip = clip_of(job_id, index)
+        if not GPU_LOCK.acquire(timeout=2):
+            raise HTTPException(409, "GPU is busy with a job — try again when it finishes")
+        d = store.dir(job_id)
+        try:
+            try:
+                segs = [Segment(**x) for x in json.loads((d / "transcript.json").read_text())]
+                result = judge.review(segs, clip, llm_factory())
+            except Exception as e:
+                if store.get(job_id) is None:
+                    raise HTTPException(404, "job was deleted meanwhile") from e
+                raise HTTPException(502, f"clip check failed: {e}") from e
+            try:  # onto the job as it is now, still holding GPU_LOCK
+                return store.update_clip(job_id, index, lambda c: setattr(c, "review", result))
             except KeyError:
                 raise HTTPException(404, "clip not found") from None
         finally:

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { api } from '../api.js'
 import { defaultStep, isBusy, overallProgress, stepStates } from '../util.js'
+import LearnStep from './steps/LearnStep.jsx'
 import PickStep from './steps/PickStep.jsx'
 import PostsStep from './steps/PostsStep.jsx'
 import PublishStep from './steps/PublishStep.jsx'
@@ -16,6 +17,10 @@ const STEPS = [
   { key: 'posts', label: 'Posts', hint: 'edit copy' },
   { key: 'publish', label: 'Publish', hint: 'track posting' },
 ]
+const LEARN = { key: 'learn', label: '📚 Learn', hint: 'study notes & quiz' }
+
+// Learn jobs: video → transcript → study notes. Shorts jobs get the Learn step once they have notes too.
+const stepsFor = (job) => (job.purpose === 'learn' ? [STEPS[0], STEPS[1], LEARN] : job.learn ? [...STEPS, LEARN] : STEPS)
 
 export default function Workspace({ job, onChanged }) {
   const [step, setStep] = useState(() => defaultStep(job))
@@ -27,8 +32,10 @@ export default function Workspace({ job, onChanged }) {
 
   // Transcript is shared by Transcript + Pick steps
   useEffect(() => {
-    if (job.clips.length && transcript === null) api.transcript(job.id).then(setTranscript).catch(() => setTranscript([]))
-  }, [job.id, job.clips.length, transcript])
+    if ((job.clips.length || job.learn) && transcript === null) {
+      api.transcript(job.id).then(setTranscript).catch(() => setTranscript([]))
+    }
+  }, [job.id, job.clips.length, job.learn, transcript])
 
   // Move you forward automatically when a background phase finishes
   useEffect(() => {
@@ -37,7 +44,7 @@ export default function Workspace({ job, onChanged }) {
     if (was === job.status) return
     if (job.status === 'review' && (step === 'source' || step === 'transcript')) setStep('pick')
     if (job.status === 'done' && (was === 'running' || was === 'queued') && step === 'pick') setStep('shorts')
-    if (job.status === 'done' && step === 'source') setStep('shorts')
+    if (job.status === 'done' && step === 'source') setStep(job.purpose === 'learn' ? 'learn' : 'shorts')
   }, [job.status, step])
 
   // Wrap every action: show errors in one place, refresh after
@@ -65,7 +72,7 @@ export default function Workspace({ job, onChanged }) {
         </div>
       )}
       <nav className="stepper">
-        {STEPS.map((s, i) => {
+        {stepsFor(job).map((s, i) => {
           const st = states[s.key]
           return (
             <button
@@ -111,6 +118,7 @@ export default function Workspace({ job, onChanged }) {
         {step === 'shorts' && <ShortsStep {...props} />}
         {step === 'posts' && <PostsStep {...props} />}
         {step === 'publish' && <PublishStep {...props} />}
+        {step === 'learn' && <LearnStep {...props} />}
       </div>
     </div>
   )

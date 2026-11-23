@@ -84,6 +84,24 @@ backend/                FastAPI + pipeline (Python 3.11, conda env "clipforge")
                         2.4 vs 2.0 on-screen scenes — a small lean to visual moments, not a proven win yet.
                         Trace: candidates.json scene_index + scenes. Never fails prepare.
                         GET /jobs/{id}/scenes → Transcript step rows (search covers them). eval: --scenes on/off
+    judge.py            clip judge + gap detector, after selection (prepare, same Gemma load; JUDGE_ENABLED) and on
+                        POST /clips/{i}/review (GPU_LOCK). rule_checks (no model): mid-sentence start/end (a pause ≥
+                        PAUSE counts as a boundary — Whisper leaves segment ends bare), "three reasons" with fewer
+                        counted, "this/it/so…" opener = hint only. Gemma picks NUMBERED sentences (B1.. before, A1..
+                        after) it needs → fix = those sentence edges (≤ max clip), + hook/faithful/value/clear yes/no.
+                        verdict() is a rule: not faithful / no hook+value → reject; opening/ending/list issue → trim
+                        with a fix, else needs_context; else ready. Rejected pre-approved picks swap with the best
+                        spare (rebalance); auto mode applies trims (apply_fixes). clip.review keeps the judged span
+                        (UI: "outdated" after a trim). Measured (app.judge_eval, damaged copies of real clips): free-
+                        text quotes/times never worked; numbered picks with reasoning OFF flagged 88 % of clean clips;
+                        reasoning ON (JUDGE_THINK unset) catches 100 % of cut openings/endings, ~12 s/clip. Clean picks
+                        get flagged ~65 % — on reading them, mostly real mid-sentence cuts by selection
+    learn.py            learning mode (Job.purpose "learn", or POST /jobs/{id}/learn on any job with a video → worker
+                        kind "learn", status restored): ingest() (shared with prepare) → scene index → map over
+                        selection windows (notes + concepts at snapped line starts) → reduce by NUMBERS (P/N/C refs):
+                        summary, chapters (first 0:00, ≥ 10 s apart, < 3 → one per part), key concepts, quiz (answer
+                        index checked, tied to a note), hands-on, next steps → learn.json + notes.md (YouTube ?t=
+                        links). A failed part is skipped; a failed reduce keeps per-part notes. ~70 s per 10 min
     jumpcut.py          silence/filler removal: plan_cuts() → keep intervals + words remapped to output time;
                         `removed=` (clip.removed, struck words) is cut too, even with jump cuts off
     captions.py         karaoke ASS (per-word colours from a preset, pop-in) or one plain line per chunk (simple)
@@ -200,6 +218,7 @@ frontend/               React 18 + Vite (JSX, no TS). /api proxied to :8000
   src/components/Workspace.jsx   6-step stepper: Source → Transcript → Pick clips → Shorts → Posts → Publish
   src/components/steps/*.jsx     one file per step; PostEditor.jsx = per-platform editor (used by Posts)
   src/components/InsertEditor.jsx  stat cards per short (Shorts step): PATCH clip {inserts} with the whole list
+  src/components/steps/LearnStep.jsx  📚 study notes: click-to-seek, quiz, copy chapters for YouTube, notes.md
   src/util.js                    stepStates()/defaultStep() decide which steps unlock and where a job opens;
                                  timeline maths (timelineWindow/snapTime/moveEdge/waveBars) for Timeline.jsx
 scripts/setup_wsl.sh    one-time setup;  scripts/dev.sh  runs API + UI
@@ -433,6 +452,9 @@ For a later discussion (not planned yet):
 27. [ ] ComfyUI as an optional local generator over its HTTP API (workflow JSON in, frames out), behind GPU_LOCK and
         unloaded after use like Gemma (8 GB VRAM: SDXL-class images fine, video models slow): B-roll stills/loops when
         your folder has no match (item 19 / G), stylised cover backgrounds, upscaling. Not ClipForge-as-ComfyUI-nodes.
+30. [x] Clip judge + gap detector (judge.py, app.judge_eval), learning mode v1 (learn.py), scene thumbnails
+        (scenes/scene_K.jpg, made on request for older indexes). [ ] later: Q&A over a video (BM25 over transcript
+        chunks first), search by meaning only if word search falls short (small CPU embedding model).
 29. [x] Your voice: Qwen3-TTS cloning from several recordings (tts.py). Measured: 1.7B Base peak 4.5 GB VRAM, ~2 s
         to generate 1 s of speech, model load ~20 s warm; Whisper hears the exact words, speaker similarity 0.99 on a
         synthetic test voice. Hindi isn't one of its 10 languages. [ ] next: use it — spoken hook intro on a short,

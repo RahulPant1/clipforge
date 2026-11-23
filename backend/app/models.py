@@ -118,6 +118,32 @@ class HookVariant(BaseModel):
     hook: str
 
 
+class ReviewCheck(BaseModel):
+    """One thing the clip judge checked (judge.py). source: rule = measured from the transcript, gemma = model."""
+    key: str  # opening | ending | list | hook | faithful | value | clear
+    ok: bool
+    note: str = Field("", max_length=400)
+    quote: str = Field("", max_length=200)  # words from the transcript that show it (checked to be there)
+    source: Literal["rule", "gemma"] = "gemma"
+
+
+class ClipFix(BaseModel):
+    start: float
+    end: float
+    reason: str = Field("", max_length=300)
+
+
+class ClipReview(BaseModel):
+    """Clip judge verdict on the span start-end (a trim since makes it outdated; the UI offers to check again)."""
+    verdict: Literal["ready", "trim", "needs_context", "reject"]
+    checks: list[ReviewCheck] = []
+    fix: ClipFix | None = None  # boundaries that fix the opening/ending issues (sentence-snapped, ≤ max clip)
+    start: float
+    end: float
+    model: str | None = None
+    at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+
 class Clip(BaseModel):
     index: int = 0
     start: float
@@ -137,6 +163,7 @@ class Clip(BaseModel):
     approved: bool = True  # chosen for rendering (review step)
     custom: bool = False  # added by you from the transcript
     removed: list[tuple[float, float]] = []  # words you struck in the transcript (SOURCE seconds) → cut out
+    review: ClipReview | None = None  # clip judge (judge.py): verdict, checks, suggested fix
     variants: list[HookVariant] = []  # alternative title + hook pairs to choose from (Pick step)
     cover: str | None = None  # short_N.cover.jpg once made (reel cover / thumbnail)
     cover_text: str = ""  # text printed on the cover ("" = Instagram cover_text, else the hook)
@@ -162,8 +189,12 @@ class Clip(BaseModel):
         return self.end - self.start
 
 
+Purpose = Literal["create", "learn"]  # create = shorts + posts; learn = study notes (learn.py)
+
+
 class JobCreate(BaseModel):
     url: str
+    purpose: Purpose = "create"
     num_clips: int = Field(default=5, ge=1, le=20)
     mode: JobMode = JobMode.review
     topic: str = Field(default="", max_length=200)  # optional: only moments about this ("salary negotiation")
@@ -254,6 +285,8 @@ class Job(BaseModel):
     mode: JobMode = JobMode.review
     topic: str = ""  # steers clip selection (highlights.FOCUS); "" = best moments on any subject
     hinglish: bool = False  # Hindi (Devanagari) transcript converted to Latin letters (pipeline/hinglish.py)
+    purpose: Purpose = "create"
+    learn: bool = False  # study notes made (learn.json) — any job can have them
     status: JobStatus = JobStatus.queued
     stage: Stage = Stage.queued
     progress: float = 0.0  # 0..1 within the current stage
@@ -321,3 +354,43 @@ class VoiceBuild(BaseModel):
 class SpeakRequest(BaseModel):
     text: str = Field(min_length=1, max_length=2000)
     language: str = Field("", max_length=20)  # "" = the voice's / TTS_LANGUAGE
+
+
+class Chapter(BaseModel):
+    t: float  # SOURCE seconds — a real transcript time
+    title: str = Field(max_length=100)
+
+
+class Concept(BaseModel):
+    name: str = Field(max_length=80)
+    explanation: str = Field(max_length=600)
+    t: float  # where it's explained
+
+
+class StudyNote(BaseModel):
+    t: float
+    title: str = Field(max_length=120)
+    note: str = Field(max_length=600)
+
+
+class QuizQuestion(BaseModel):
+    q: str = Field(max_length=300)
+    choices: list[str] = Field(min_length=2, max_length=5)
+    answer: int = Field(ge=0)  # index into choices
+    explain: str = Field("", max_length=400)
+    t: float  # where the video answers it
+
+
+class LearnNotes(BaseModel):
+    """Learning mode (learn.py): what a video teaches, every point tied to where it's said."""
+    title: str = ""
+    summary: str = ""
+    chapters: list[Chapter] = []
+    concepts: list[Concept] = []
+    notes: list[StudyNote] = []
+    quiz: list[QuizQuestion] = []
+    hands_on: list[str] = []  # exercises to try it yourself
+    next_steps: list[str] = []  # what to learn next
+    language: str | None = None
+    model: str | None = None
+    made_at: datetime = Field(default_factory=lambda: datetime.now(UTC))

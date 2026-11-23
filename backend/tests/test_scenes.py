@@ -212,3 +212,38 @@ def test_a_tail_too_short_for_a_clip_joins_the_window_before():
     long = [Segment(start=i * 10.0, end=i * 10.0 + 9.5, text="x", words=[]) for i in range(40)]
     wins = list(highlights.windows(long, 150.0))  # 400 s: 4 windows of ~150 s / 100 s tail → kept apart
     assert all(w[-1].end - w[0].start >= 2 * settings.max_clip_seconds - 20 for w in wins)
+
+
+def test_scene_thumbnails_are_kept_and_made_on_request(fake_video, tmp_path, monkeypatch):
+    idx = scenes.build(tmp_path / "v.mp4", tmp_path, VisionLLM(), mode="on")
+    assert idx.mode == "described" and scenes.thumb_path(tmp_path, 0).read_bytes() == b"jpeg"
+    old = SceneIndex(mode="described", scenes=[Scene(0, 30, 15, "A chart.", "slides")])  # from before thumbnails
+    other = tmp_path / "older"
+    asked = []
+    monkeypatch.setattr(scenes, "keyframe", lambda v, t, width=448: asked.append((t, width)) or b"jpg2")
+    assert scenes.thumb(other, other / "v.mp4", old, 0).read_bytes() == b"jpg2" and asked == [(15, scenes.THUMB_W)]
+    scenes.thumb(other, other / "v.mp4", old, 0)
+    assert len(asked) == 1  # cached
+    assert scenes.thumb(other, other / "v.mp4", old, 5) is None
+
+
+def test_scene_thumbnail_endpoint(tmp_path, monkeypatch):
+    from fastapi.testclient import TestClient
+
+    from .test_api import fake_pipeline
+
+    monkeypatch.setattr(settings, "data_dir", tmp_path)
+    monkeypatch.setattr(scenes, "keyframe", lambda v, t, width=448: b"\xff\xd8jpeg")
+    from app.main import create_app
+
+    with TestClient(create_app(pipeline=fake_pipeline, start_worker=False)) as c:
+        jid = c.post("/api/jobs", json={"url": "https://youtube.com/watch?v=x", "num_clips": 1}).json()["id"]
+        d = tmp_path / "jobs" / jid
+        assert c.get(f"/api/jobs/{jid}/scenes/0.jpg").status_code == 404  # no index yet
+        scenes.save(SceneIndex(mode="described", scenes=[Scene(0, 30, 15), Scene(30, 60, 45, "A chart.", "slides")]), d)
+        (d / "source.mp4").write_bytes(b"v")
+        listed = c.get(f"/api/jobs/{jid}/scenes").json()["scenes"]
+        assert [s["k"] for s in listed] == [1]  # numbered like scenes.json, undescribed left out
+        r = c.get(f"/api/jobs/{jid}/scenes/1.jpg")
+        assert r.status_code == 200 and r.headers["content-type"] == "image/jpeg"
+        assert c.get(f"/api/jobs/{jid}/scenes/9.jpg").status_code == 404

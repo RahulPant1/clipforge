@@ -137,6 +137,14 @@ class Settings(BaseSettings):
     # "1:1" (X, LinkedIn) — own face-tracked crop (wider: more of the scene), captions/hook/logo re-placed.
     # Comma list for new shorts, e.g. EXTRA_ASPECTS=4:5 ; each short can switch them in the Shorts step.
     extra_aspects: str = ""
+    # Clip judge (judge.py): every candidate checked for a missing setup / payoff, meaning kept, hook, value →
+    # ready | trim (with a one-click fix) | needs_context | reject. One Gemma call per candidate after selection.
+    judge_enabled: bool = True
+    judge_context_seconds: float = 30.0  # transcript shown before and after the clip
+    judge_think: bool | None = None  # unset = model default (gemma4 reasons): measured, reasoning off flagged 88 %
+                                     # of clean clips and caught little; on: damage caught 100 %, ~12 s per clip
+    # Learning mode (learn.py): study notes instead of shorts — summary, chapters, concepts, notes, quiz
+    learn_think: bool | None = None  # unset = model default
     # Scene index (scenes.py): what is on screen, one keyframe per scene → vision Gemma, fed to clip selection as
     # ON SCREEN lines. auto = only videos that are more than a talking head (cuts / few faces); on = always; off
     scene_index: str = "auto"

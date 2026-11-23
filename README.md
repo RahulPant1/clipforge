@@ -19,10 +19,11 @@ YouTube URL / file
 |---|---|
 | **1 Source** | Paste a YouTube link or upload — or **Find videos** on a topic, or queue a **Batch** (several links, a playlist, a channel). Pick *Review each step* (default) or *Fully automatic*. If it fails: fix the cause, then **↻ Retry** |
 | **2 Transcript** | Read/search the transcript (and, for screen / demo videos, what's on screen scene by scene), click timestamps to play, mark start/end to **add your own clip** |
-| **3 Pick clips** | Gemma gives 2× the clips you asked for. Watch each, **trim with ±1s/±0.2s**, fix title/hook/keywords, **approve** → *Create shorts & posts* |
+| **3 Pick clips** | Gemma gives 2× the clips you asked for, each with the **clip judge's verdict** (ready / trim / needs context / reject) and a one-click fix. Watch each, **trim with ±1s/±0.2s**, fix title/hook/keywords, **approve** → *Create shorts & posts* |
 | **4 Shorts** | Watch the vertical shorts. Per short: jump cuts, punch-in zoom, hook title, framing (or drag the crop by hand), caption look, emoji, **stat cards**, logo/end card, sound fx and music, 4:5 / 1:1 feed versions, cover and quote cards → **re-render just that one** |
 | **5 Posts** | Per-platform tabs. Edit copy inline (X threads post-by-post with 280 counters), 🎲 **New angle**, mark **Approved** |
 | **6 Publish** | Checklist of every short × platform: file links, one copy button per upload-form field, paste the live link to mark **posted**. Download the full pack |
+| **📚 Learn** | Learn jobs (or **Make study notes** on any job): summary, chapters, key concepts, timestamped notes, a quiz, hands-on exercises — click any time to play that moment |
 
 ## Features
 - Paste a YouTube link **or** upload a video
@@ -52,10 +53,18 @@ YouTube URL / file
   tone, and leaves out takes that don't sound like you. Then type anything and hear it in your voice. Runs only
   when you ask (Qwen3-TTS, Apache 2.0, in its own environment — `bash scripts/setup_tts.sh`); clone your own voice
   only. English and 9 other languages; Hindi isn't supported yet
+- **Clip judge:** every candidate is checked like an editor would — does it start mid-thought or lean on something
+  said before it, does it stop before its payoff, does the cut change what the speaker meant — and gets a verdict
+  (ready / trim / needs context / reject) with the evidence and a one-click **Apply fix** that moves the edges to
+  the right sentences. Rejected picks give their place to the next best candidate; in automatic mode the fixes
+  are applied for you. **Check again** after you trim
+- **📚 Learn from a video:** pick "Learn from it" on the New job form (or **Make study notes** on any job) for a
+  summary, chapters (ready to paste into a YouTube description), key concepts, timestamped notes, a quiz,
+  hands-on exercises and what to learn next — every point jumps to where it's said; download it all as Markdown
 - **Sees what's on screen:** for videos that are more than a talking head (screen recordings, slides, demos,
   b-roll), Gemma looks at one frame per scene and describes it, then picks clips from what is said *and* what is
-  shown — a demo or a result on screen counts too. The Transcript step shows those scenes between the lines and
-  searches them ("spreadsheet", "calendar"). Plain talking-head videos skip it automatically (no extra Gemma time)
+  shown — a demo or a result on screen counts too. The Transcript step shows those scenes (with thumbnails) between
+  the lines and searches them ("spreadsheet", "calendar"). Plain talking-head videos skip it automatically (no extra Gemma time)
 - **Face tracking:** crop follows the speaker like a camera operator — steady when they're still,
   smooth pans when they move, instant snap on camera cuts; leaves room in the direction they look.
   Shots with no face (slides, screen, b-roll) are shown whole over a blurred copy instead of a blind centre crop
@@ -185,6 +194,7 @@ Copy `backend/.env.example` → `backend/.env`. Key options:
 | `CAPTION_FONT` | `Arial` | Any installed font, e.g. `Montserrat ExtraBold`. On WSL, Windows fonts are picked up automatically (copied once into `data/fonts`) |
 | `TTS_MODEL` | `Qwen/Qwen3-TTS-12Hz-1.7B-Base` | Voice cloning model (`…0.6B-Base` for less GPU memory) |
 | `TTS_PYTHON` | – | Python of the TTS env (default `~/miniconda3/envs/clipforge-tts/bin/python`) |
+| `JUDGE_ENABLED` | `true` | Check every candidate clip for missing setup/payoff, meaning, hook (~12 s per clip) |
 | `SCENE_INDEX` | `auto` | Describe what's on screen per scene for clip selection: `auto` (skip talking heads), `on`, `off` |
 | `REFRAME_NO_FACE` | `fit` | Shots without a face: `fit` (whole frame over a blurred copy) or `crop` (centre crop) |
 | `HINGLISH_DEFAULT` | `true` | New jobs: Hindi speech written in Latin letters (Hinglish); per job on the New job form |
@@ -264,6 +274,10 @@ python -m app.eval <job_id> --model gemma4:e4b-it-q4_K_M --model qwen3.5:4b --th
 python -m app.eval <job_id> --topic "salary negotiation"   # default: the job's topic; --topic "" for none
 python -m app.eval <job_id> --scenes off --scenes on --repeat 3  # with/without what's on screen (needs scenes.json)
 ```
+The clip judge has its own: `python -m app.judge_eval <job> [<job> ...]` judges each clip as picked plus damaged
+copies (opening sentences dropped, ending cut early) and reports how often the damage is caught and how close the
+suggested fix lands to the real boundary.
+
 Every combination runs and `data/evals/<timestamp>/report.md` gets a table: time, usable picks, too-short /
 invalid counts, median length, average score, how many of **your approved clips** each variant found, and
 agreement with the first (baseline) variant — then each variant's clips. Your picks came from the original

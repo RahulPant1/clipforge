@@ -96,11 +96,12 @@ class JobStore:
         (d / "job.json").write_text(job.model_dump_json(indent=2))
 
     def create(self, source: str, num_clips: int, mode: JobMode = JobMode.review, topic: str = "",
-               hinglish: bool = False, title: str = "", channel: str = "") -> Job:
+               hinglish: bool = False, title: str = "", channel: str = "", purpose: str = "create") -> Job:
         from .pipeline.highlights import clean_topic
 
         job = Job(id=uuid.uuid4().hex[:10], source=source, num_clips=num_clips, mode=mode, topic=clean_topic(topic),
-                  hinglish=hinglish, title=" ".join(title.split())[:300], channel=" ".join(channel.split())[:200])
+                  hinglish=hinglish, title=" ".join(title.split())[:300], channel=" ".join(channel.split())[:200],
+                  purpose=purpose)
         with self._lock:
             self._jobs[job.id] = job
             self._write(job)
@@ -172,6 +173,12 @@ class Worker:
         self.store.update(job_id, status=JobStatus.queued, message="Queued: posts + rendering", error=None)
         self.q.put(("produce", job_id, {"restore": prev}))
 
+    def submit_learn(self, job_id: str) -> None:
+        """Study notes for a job that already has its video (learn.py); the job goes back to where it was."""
+        prev = self.store.get(job_id).status
+        self.store.update(job_id, status=JobStatus.queued, message="Queued: study notes", error=None)
+        self.q.put(("learn", job_id, {"restore": prev}))
+
     def submit_render(self, job_id: str, index: int) -> None:
         prev = self.store.get(job_id).status
         self.store.update(job_id, status=JobStatus.queued, message=f"Queued: re-render short {index}", error=None)
@@ -218,7 +225,13 @@ class Worker:
                 steer = {"topic": job.topic} if job.topic else {}
                 if job.hinglish:
                     steer["romanize"] = True
-                if kind == "run" and job.mode == JobMode.auto:
+                if kind == "learn" or (kind == "run" and job.purpose == "learn"):
+                    self.steps.learn(source or job.source, d, report,
+                                     **({"romanize": True} if job.hinglish else {}))
+                    done = JobStatus.done if kind == "run" else (before or JobStatus.done)
+                    self.store.update(job_id, status=done, stage=Stage.done, progress=1.0, learn=True,
+                                      message="Study notes ready")
+                elif kind == "run" and job.mode == JobMode.auto:
                     clips = self.steps.run(source, d, job.num_clips, report, **steer)
                     self.store.update(job_id, status=JobStatus.done, stage=Stage.done, progress=1.0, clips=clips)
                 elif kind == "run":

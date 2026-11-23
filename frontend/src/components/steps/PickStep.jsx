@@ -22,6 +22,54 @@ function Edge({ label, value, on, onPick, onNudge, disabled }) {
 const STYLE = { question: 'Question', bold_claim: 'Bold claim', number: 'Number', curiosity: 'Curiosity',
   pov: 'POV', contrarian: 'Contrarian', mistake: 'Mistake', other: 'Other' }
 
+const VERDICT = {
+  ready: ['✓ Ready', 'Stands on its own: setup and payoff are inside the clip'],
+  trim: ['✂ Trim', 'Publishable after moving an edge — the fix below does it'],
+  needs_context: ['⚠ Needs context', "Missing setup or payoff that doesn't fit in a Short as cut"],
+  reject: ['✕ Reject', 'Changes the meaning, or has no hook and no value'],
+}
+const CHECK = { opening: 'Opening', ending: 'Ending', list: 'List', faithful: 'Meaning', hook: 'Hook',
+  value: 'Value', clear: 'Clarity', hint: 'Hint', fix: 'Fix' }
+
+// Clip judge (judge.py): verdict + what exactly is missing + a one-click fix. Re-check after you trim.
+function ReviewPanel({ job, clip, busy, act, save }) {
+  const [asking, setAsking] = useState(false)
+  const r = clip.review
+  const outdated = r && (Math.abs(r.start - clip.start) > 0.05 || Math.abs(r.end - clip.end) > 0.05)
+  const check = async () => {
+    setAsking(true)
+    try { await act(() => api.reviewClip(job.id, clip.index)) } catch { /* shown by act() */ } finally { setAsking(false) }
+  }
+  const issues = r ? r.checks.filter((c) => !c.ok) : []
+  return (
+    <div className={`review v-${r?.verdict || 'none'}`}>
+      <div className="review-head">
+        {r ? <b title={VERDICT[r.verdict][1]}>{VERDICT[r.verdict][0]}</b> : <span className="muted">Not checked yet</span>}
+        {outdated && <span className="chip warnchip" title="You changed the clip since it was checked">outdated</span>}
+        {r && !r.model && <span className="muted small" title="Gemma wasn't available: only the transcript checks ran">rules only</span>}
+        <button className="btn sm ghost" disabled={busy || asking} onClick={check}>
+          {asking ? 'Checking…' : r ? '↻ Check again' : 'Check this clip'}
+        </button>
+      </div>
+      {issues.length > 0 && (
+        <ul>
+          {issues.map((c, i) => (
+            <li key={i} className={c.key === 'hint' ? 'muted' : ''}>
+              <span className="tag">{CHECK[c.key] || c.key}</span> {c.note}
+            </li>
+          ))}
+        </ul>
+      )}
+      {r?.fix && !outdated && (
+        <button className="btn sm" disabled={busy} title="Moves the clip edges; you can still adjust them below"
+                onClick={() => save({ start: r.fix.start, end: r.fix.end })}>
+          Apply fix: {fmtPrecise(r.fix.start)}–{fmtPrecise(r.fix.end)} ({(r.fix.end - r.fix.start).toFixed(0)} s) · {r.fix.reason}
+        </button>
+      )}
+    </div>
+  )
+}
+
 function HookVariants({ job, clip, busy, act, onUse }) {
   const [asking, setAsking] = useState(false)
   const ask = async () => {
@@ -172,6 +220,8 @@ function Candidate({ job, clip, others, transcript, wave, total, busy, act, relo
             {clip.approved ? '✓ Approved' : 'Approve'}
           </button>
         </div>
+
+        {!clip.visual && <ReviewPanel job={job} clip={clip} busy={busy} act={act} save={save} />}
 
         <label className="fl">
           Title

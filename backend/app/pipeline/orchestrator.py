@@ -15,8 +15,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from ..config import settings
-from ..models import Clip, Segment, Stage
-from . import hinglish, inserts, scenes, transcript_edit
+from ..models import Clip, LearnNotes, Segment, Stage
+from . import hinglish, inserts, judge, learn, scenes, transcript_edit
 from .content import ContentContext, clip_text, generate_all, load_meta, write_posts_md
 from .cover import make_cover
 from .download import download
@@ -42,11 +42,11 @@ def load_segments(job_dir: Path) -> list[Segment]:
     return [Segment(**s) for s in json.loads((job_dir / "transcript.json").read_text())]
 
 
-def prepare(source: str, job_dir: Path, num_clips: int, report: Reporter,
-            llm: LLM | None = None, candidates: int | None = None, topic: str = "",
-            romanize: bool = False) -> list[Clip]:
+def ingest(source: str, job_dir: Path, report: Reporter, llm: LLM,
+           romanize: bool = False) -> tuple[Path, list[Segment], float]:
+    """Video in (download / copy an upload — both reused when already there) → transcript (cached) → Hinglish if
+    asked. Shared by prepare() (shorts) and learn_pipeline() (study notes)."""
     job_dir.mkdir(parents=True, exist_ok=True)
-    llm = llm or OllamaClient()
     llm.unload()  # in case a "new angle" request left Gemma in VRAM — Whisper needs the room
 
     local = Path(source)
@@ -65,7 +65,14 @@ def prepare(source: str, job_dir: Path, num_clips: int, report: Reporter,
     if romanize and segs and hinglish.romanize(job_dir):  # Hindi in Devanagari → Hinglish before anything reads it
         report(Stage.transcribing, 1.0, "Hindi → Hinglish (Latin letters)")
         segs = transcript_edit.load(job_dir)
-    duration = probe_duration(video)
+    return video, segs, probe_duration(video)
+
+
+def prepare(source: str, job_dir: Path, num_clips: int, report: Reporter,
+            llm: LLM | None = None, candidates: int | None = None, topic: str = "",
+            romanize: bool = False) -> list[Clip]:
+    llm = llm or OllamaClient()
+    video, segs, duration = ingest(source, job_dir, report, llm, romanize)
     no_speech = not segs or words_per_minute(segs, duration) < MIN_WPM
     if no_speech and not settings.no_speech_mode:
         raise RuntimeError("Not enough speech found (and NO_SPEECH_MODE is off).")
@@ -86,6 +93,7 @@ def prepare(source: str, job_dir: Path, num_clips: int, report: Reporter,
             clips = select_highlights(segs, num_clips, llm, lambda p, m: on_select(base + (1 - base) * p, m),
                                       keep=candidates or num_clips, trace=trace, topic=topic,
                                       **({"scenes": seen} if seen else {}))  # only when there are any
+            judge_clips(segs, clips, num_clips, llm, report, trace)
     finally:
         llm.unload()
     if not clips and 0 < duration <= settings.max_clip_seconds:
@@ -99,6 +107,52 @@ def prepare(source: str, job_dir: Path, num_clips: int, report: Reporter,
         raise RuntimeError("Gemma returned no usable clips. Try a bigger model or tweak the prompt.")
     report(Stage.selecting, 1.0, f"{len(clips)} candidates ready for review")
     return clips
+
+
+def learn_pipeline(source: str, job_dir: Path, report: Reporter, llm: LLM | None = None,
+                   romanize: bool = False) -> LearnNotes:
+    """Learning mode: video in → transcript → (scene index) → study notes in learn.json + notes.md. Works on an
+    existing shorts job too (download and transcript are reused)."""
+    llm = llm or OllamaClient()
+    video, segs, duration = ingest(source, job_dir, report, llm, romanize)
+    meta = load_meta(job_dir)
+    try:
+        if settings.scene_index != "off":  # screens/slides: what's shown is part of what's taught
+            scene_lines(video, job_dir, llm, report, {})
+        notes = learn.build(segs, llm, duration, meta.get("title", ""),
+                            lambda p, m: report(Stage.writing, p, m))
+    finally:
+        llm.unload()
+    learn.save(notes, job_dir, meta.get("url", ""))
+    report(Stage.done, 1.0, f"Study notes ready: {len(notes.notes)} notes, {len(notes.quiz)} quiz questions")
+    return notes
+
+
+def judge_clips(segs: list[Segment], clips: list[Clip], n: int, llm: LLM, report: Reporter, trace: dict) -> None:
+    """Clip judge on every candidate while Gemma is loaded (judge.py); a rejected pre-approved clip gives its place
+    to the best spare that isn't rejected. Never fails prepare."""
+    if not settings.judge_enabled or not clips or not any(s.words for s in segs):
+        return
+    try:
+        counts = judge.review_all(segs, clips, llm, lambda p, m: report(Stage.selecting, 0.9 + 0.1 * p, m))
+        trace["judge"] = {"verdicts": counts, "swapped": judge.rebalance(clips, n),
+                          "clips": [{"start": c.start, "end": c.end, "verdict": c.review.verdict,
+                                     "fix": c.review.fix.model_dump() if c.review.fix else None,
+                                     "issues": [f"{x.key}: {x.note}" for x in c.review.checks if not x.ok]}
+                                    for c in clips if c.review]}
+    except Exception as e:
+        log.exception("clip judge failed — candidates kept unjudged")
+        trace["judge"] = {"error": str(e)[:300]}
+
+
+def apply_fixes(clips: list[Clip]) -> int:
+    """Auto mode (nobody reviews): move "trim" clips to their suggested boundaries. Returns how many moved."""
+    moved = 0
+    for c in clips:
+        if c.review and c.review.verdict == "trim" and c.review.fix:
+            c.start, c.end = c.review.fix.start, c.review.fix.end
+            moved += 1
+    return moved
 
 
 def scene_lines(video: Path, job_dir: Path, llm: LLM, report: Reporter, trace: dict) -> list | None:
@@ -214,6 +268,7 @@ def run_pipeline(source: str, job_dir: Path, num_clips: int, report: Reporter,
     """Auto mode: everything end to end."""
     llm = llm or OllamaClient()
     clips = prepare(source, job_dir, num_clips, report, llm, topic=topic, romanize=romanize)
+    apply_fixes(clips)  # no review step in auto mode: the judge's trims are taken as they are
     clips = produce(job_dir, clips, report, llm)
     if not any(c.file for c in clips):
         raise RuntimeError("All renders failed: " + "; ".join(c.render_error or "" for c in clips)[:300])
@@ -227,3 +282,4 @@ class Steps:
     produce: Callable = produce
     render_one: Callable = render_one
     run: Callable = run_pipeline
+    learn: Callable = learn_pipeline

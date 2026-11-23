@@ -13,6 +13,7 @@ them and searches them.
 """
 import json
 import logging
+import shutil
 import subprocess
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
@@ -164,9 +165,31 @@ def describe_one(frame: bytes, at: float, llm: LLM, title: str = "") -> tuple[st
 GIVE_UP = 4  # this many failures in a row before any success → the model can't do it; stop asking
 
 
+THUMB_W = 320
+
+
+def thumb_path(job_dir: Path, k: int) -> Path:
+    return job_dir / "scenes" / f"scene_{k}.jpg"
+
+
+def thumb(job_dir: Path, video: Path, index: "SceneIndex", k: int) -> Path | None:
+    """Scene k's keyframe as a small JPEG (saved while describing; made once on request for older indexes)."""
+    if not 0 <= k < len(index.scenes):
+        return None
+    f = thumb_path(job_dir, k)
+    if not f.is_file():
+        data = keyframe(video, index.scenes[k].t, THUMB_W)
+        if not data:
+            return None
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_bytes(data)
+    return f
+
+
 def describe(video: Path, scenes: list[Scene], llm: LLM, on_progress: ProgressFn | None = None,
-             title: str = "") -> int:
-    """Fills scene.description/kind in place; returns how many were described."""
+             title: str = "", thumbs: Path | None = None) -> int:
+    """Fills scene.description/kind in place; returns how many were described. thumbs: job dir to keep each
+    keyframe as the scene's thumbnail (scenes/scene_K.jpg)."""
     done, fails = 0, 0
     for i, s in enumerate(scenes):
         if on_progress:
@@ -175,6 +198,9 @@ def describe(video: Path, scenes: list[Scene], llm: LLM, on_progress: ProgressFn
             frame = keyframe(video, s.t)
             if not frame:
                 raise ValueError("no frame")
+            if thumbs is not None:
+                thumb_path(thumbs, i).parent.mkdir(parents=True, exist_ok=True)
+                thumb_path(thumbs, i).write_bytes(frame)
             s.description, s.kind = describe_one(frame, s.t, llm, title)
             done += 1
         except Exception as e:  # one bad frame never fails the job
@@ -234,7 +260,8 @@ def build(video: Path, job_dir: Path, llm: LLM, on_progress: ProgressFn | None =
     if want:
         index.scenes = [Scene(a, b, round((a + b) / 2, 2)) for a, b in spans(cuts, duration)]
         index.model = getattr(llm, "model", None)
-        n = describe(video, index.scenes, llm, lambda p, m: prog(0.35 + 0.65 * p, m), title)
+        shutil.rmtree(job_dir / "scenes", ignore_errors=True)  # thumbnails of an older index
+        n = describe(video, index.scenes, llm, lambda p, m: prog(0.35 + 0.65 * p, m), title, thumbs=job_dir)
         index.mode = "described" if n else "skipped"
         index.reason = why if n else f"{why}, but no frame could be described"
     save(index, job_dir)

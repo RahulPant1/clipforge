@@ -18,7 +18,7 @@ YouTube URL / file
 | Step | What you do |
 |---|---|
 | **1 Source** | Paste a YouTube link or upload — or **Find videos** on a topic, or queue a **Batch** (several links, a playlist, a channel). Pick *Review each step* (default) or *Fully automatic*. If it fails: fix the cause, then **↻ Retry** |
-| **2 Transcript** | Read/search the transcript, click timestamps to play, mark start/end to **add your own clip** |
+| **2 Transcript** | Read/search the transcript (and, for screen / demo videos, what's on screen scene by scene), click timestamps to play, mark start/end to **add your own clip** |
 | **3 Pick clips** | Gemma gives 2× the clips you asked for. Watch each, **trim with ±1s/±0.2s**, fix title/hook/keywords, **approve** → *Create shorts & posts* |
 | **4 Shorts** | Watch the vertical shorts. Per short: jump cuts, punch-in zoom, hook title, framing (or drag the crop by hand), caption look, emoji, **stat cards**, logo/end card, sound fx and music, 4:5 / 1:1 feed versions, cover and quote cards → **re-render just that one** |
 | **5 Posts** | Per-platform tabs. Edit copy inline (X threads post-by-post with 280 counters), 🎲 **New angle**, mark **Approved** |
@@ -201,6 +201,21 @@ Copy `backend/.env.example` → `backend/.env`. Key options:
 | `LIBRARY_DIR` | `data/library` | Where the history folders and spreadsheet go |
 | `YTDLP_COOKIES` | – | cookies.txt path if YouTube asks for bot check |
 
+### Your voice (voice cloning)
+One-time: `bash scripts/setup_tts.sh` (its own conda env, ~10 GB with PyTorch; the 1.7B model, ~4 GB, downloads on
+the first build). Then **🗣 Your voice** in the sidebar:
+1. **Record** 6–10 takes of 5–15 s in different moods (1–2 minutes in all): quiet room, mic 15–20 cm away, your
+   normal voice. Read the suggested lines or upload audio; long takes are split at sentence ends.
+2. **Check** each take: fix words Whisper misheard (the voice uses them), untick noisy ones. Quality is scored
+   from clarity, Whisper's confidence and length.
+3. **Build** (~30 s once the model is there): your voice averaged over every take; takes that don't sound like the
+   rest are left out; the best take sets the pace and tone.
+4. **Try it**: type anything, hear it in your voice. Sounds off → add or replace takes and rebuild.
+
+It runs only when you ask (one process per build or line, then the GPU is free again) and takes ~4.5 GB of GPU
+memory. Measured on an RTX 4060 laptop: ~2 s to make 1 s of speech, plus ~20 s to load the model each time.
+Clone only your own voice, and mark realistic AI voice-overs as altered/synthetic when you upload to YouTube.
+
 ### Ollama on Windows, app in WSL
 Either enable mirrored networking (`%UserProfile%\.wslconfig` → `[wsl2]` `networkingMode=mirrored`, then `wsl --shutdown`),
 or run Ollama with `OLLAMA_HOST=0.0.0.0` and set `OLLAMA_URL=http://<windows-ip>:11434`.
@@ -222,10 +237,15 @@ or run Ollama with `OLLAMA_HOST=0.0.0.0` and set `OLLAMA_URL=http://<windows-ip>
 - **Shorts show "✂ no pauses"** → the speaker never paused longer than `MAX_PAUSE` (0.4 s + padding). In a noisy
   room, lower `SILENCE_DROP_DB` (e.g. 18) so quieter gaps count as pauses.
 - **CUDA out of memory** → `WHISPER_MODEL=small`, smaller Gemma, close other GPU apps.
+- **🗣 Your voice says "Voice engine not ready" / the TTS worker exits with 139 (segfault)** → the TTS env got a
+  PyTorch build for CUDA 13.x, which crashes on CUDA start with some WSL drivers. Run `bash scripts/setup_tts.sh`
+  again: it pins PyTorch 2.9 for CUDA 12.8. "GPU is busy" means a job is running — try again when it's done.
+- **Your voice sounds off in Hinglish** → Qwen3-TTS has no Hindi; its 10 languages are English, Chinese, Japanese,
+  Korean, German, French, Russian, Portuguese, Spanish and Italian.
 
 ## Development
 ```bash
-cd backend && python -m pytest -q && ruff check app tests
+cd backend && python -m pytest -q && ruff check app tests tts
 cd frontend && npm run build
 ```
 VS Code: open the folder via **Remote - WSL**; launch configs for API and CLI debugging are included (GPU Whisper
@@ -242,6 +262,7 @@ python -m app.eval --print-prompt > my_prompt.txt          # edit it; keep {n} {
 python -m app.eval <job_id> --prompt default --prompt my_prompt.txt
 python -m app.eval <job_id> --model gemma4:e4b-it-q4_K_M --model qwen3.5:4b --think on --think off --repeat 2
 python -m app.eval <job_id> --topic "salary negotiation"   # default: the job's topic; --topic "" for none
+python -m app.eval <job_id> --scenes off --scenes on --repeat 3  # with/without what's on screen (needs scenes.json)
 ```
 Every combination runs and `data/evals/<timestamp>/report.md` gets a table: time, usable picks, too-short /
 invalid counts, median length, average score, how many of **your approved clips** each variant found, and

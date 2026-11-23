@@ -85,6 +85,7 @@ class RenderOptions(BaseModel):
     music: str | None = None  # track in data/sounds/music ("" = none, None = MUSIC_DEFAULT)
     emoji: bool | None = None  # colour emoji above caption lines + the hook's emoji (None = CAPTION_EMOJI)
     aspects: list[Literal["4:5", "1:1"]] | None = None  # feed versions next to the 9:16 (None = EXTRA_ASPECTS)
+    dub: bool | None = None  # Replace voice: the clip's dub track (dub.py) instead of the original speech
 
 
 class Insert(BaseModel):
@@ -410,3 +411,43 @@ class LearnNotes(BaseModel):
     language: str | None = None
     model: str | None = None
     made_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+
+class DubLine(BaseModel):
+    """One sentence of a clip's dialogue: the original (SOURCE times) and what the chosen voice says instead."""
+    i: int
+    start: float  # SOURCE seconds — where the original sentence starts (the new one starts here too)
+    end: float
+    original: str = Field(max_length=2000)
+    text: str = Field(max_length=2000)  # what to say ("" = silence in its place)
+    file: str | None = None  # dub_N_i_<hash>.wav, the generated speech for `said`
+    said: str | None = None  # the text `file` was made from (≠ text → regenerate)
+    voice: str | None = None  # voice/version it was made with ("id@v3")
+    seconds: float | None = None  # length of the generated speech
+    words: list[Word] = []  # its words, timed relative to the generated file (Whisper), for captions
+    fit: Literal["ok", "stretched", "too_long"] | None = None
+    rate: float | None = None  # speed-up applied to fit the slot (1 = none)
+    at: float | None = None  # clip-relative start where the layout put it (≠ original when borrowing time)
+    over: float | None = None  # seconds cut off a too_long line (how much to shorten it)
+
+
+class DubScript(BaseModel):
+    """Replace voice for one clip (dub_N.json): which voice speaks, and each sentence's new text."""
+    clip: int
+    voice: str = ""
+    version: int | None = None  # None = the voice's newest version
+    lines: list[DubLine] = []
+    track: str | None = None  # dub_N.wav once assembled (clip-relative, clip length)
+    track_version: int = 0  # bumps on every assembly (cache-busting)
+    span: tuple[float, float] | None = None  # the clip's start/end the track was laid out for
+
+
+class DubEdit(BaseModel):
+    voice: str | None = Field(None, max_length=40)
+    version: int | None = None
+    texts: dict[int, str] = {}  # line i → new text ("" = silence there)
+    reset: bool = False  # start again from the clip's current sentences
+
+
+class DubGenerate(BaseModel):
+    lines: list[int] | None = None  # None = every line that needs it; else regenerate just these

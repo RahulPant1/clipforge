@@ -591,3 +591,16 @@ aside { min-width: 0; }  /* a long History path must shrink (ellipsis), not wide
 .voicelab .vl-versions audio, .voicelab .vl-pair audio { width: 100%; height: 34px; }
 .voicelab .vl-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 @media (max-width: 700px) { .voicelab .vl-versions li, .voicelab .vl-pair { grid-template-columns: 1fr; } }
+
+/* 🎙 Replace voice (DubEditor) */
+.dub .dub-lines { list-style: none; margin: 6px 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.dub .dub-line { display: grid; grid-template-columns: 52px 1fr; gap: 6px; padding: 6px; border: 1px solid var(--line);
+  border-radius: 8px; background: var(--bg); }
+.dub .dub-body { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.dub .dub-body textarea { width: 100%; resize: vertical; }
+.dub .dub-orig { text-decoration: line-through; text-decoration-color: color-mix(in srgb, var(--muted) 50%, transparent); }
+.dub audio { height: 30px; max-width: 220px; }
+.dub .dub-track { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.dub .dub-track audio { max-width: 100%; flex: 1; }
+.goodchip { background: #15301d; color: var(--good, #3fb950); }
+.badchip { background: #3a1616; color: var(--bad); }

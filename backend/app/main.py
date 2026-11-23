@@ -26,6 +26,8 @@ from .models import (
     ClipEdit,
     CompareRequest,
     CoverEdit,
+    DubEdit,
+    DubGenerate,
     Insert,
     Job,
     JobCreate,
@@ -56,6 +58,7 @@ from .pipeline import (
     brand,
     cover,
     discover,
+    dub,
     emoji,
     hinglish,
     inserts,
@@ -835,6 +838,72 @@ def create_app(pipeline=None, start_worker: bool = True, llm_factory=OllamaClien
                 raise HTTPException(404, "clip not found") from None
         finally:
             GPU_LOCK.release()
+
+    # ---------------------------------------------------------------- Replace voice (dub.py)
+    def segs_of(job_id: str) -> list[Segment]:
+        f = store.dir(job_id) / "transcript.json"
+        if not f.is_file():
+            raise HTTPException(400, "no transcript yet")
+        return [Segment(**x) for x in json.loads(f.read_text())]
+
+    @app.get("/api/jobs/{job_id}/clips/{index}/dub")
+    def get_dub(job_id: str, index: int) -> dict:
+        """The clip's Replace-voice script — saved, or a draft of its sentences as said now."""
+        _, clip = clip_of(job_id, index)
+        script = dub.load(store.dir(job_id), index)
+        saved = script is not None
+        script = script or dub.draft(segs_of(job_id), clip)
+        return {"saved": saved, "script": script.model_dump(mode="json"),
+                "stale": [ln.i for ln in script.lines if dub.stale(script, ln)] if script.voice else [],
+                "max_rate": dub.MAX_RATE}
+
+    @app.put("/api/jobs/{job_id}/clips/{index}/dub")
+    def put_dub(job_id: str, index: int, body: DubEdit) -> dict:
+        """Choose the voice/version and edit the lines (nothing is generated yet)."""
+        editable(job_id)
+        _, clip = clip_of(job_id, index)
+        d = store.dir(job_id)
+        if body.voice:
+            try:
+                tts.load(body.voice)
+            except (KeyError, ValueError):
+                raise HTTPException(404, "voice not found") from None
+        script = None if body.reset else dub.load(d, index)
+        script = script or dub.draft(segs_of(job_id), clip)
+        dub.save(d, dub.edit(script, body.voice, body.version, body.texts))
+        return get_dub(job_id, index)
+
+    @app.post("/api/jobs/{job_id}/clips/{index}/dub/generate")
+    def generate_dub(job_id: str, index: int, body: DubGenerate | None = None) -> dict:
+        """Speak the lines that need it (or just `lines`) in the chosen voice and lay out the dub track.
+        A short rendered with it is marked to re-render."""
+        editable(job_id)
+        _, clip = clip_of(job_id, index)
+        d = store.dir(job_id)
+        script = dub.load(d, index)
+        if script is None:
+            raise HTTPException(400, "choose a voice first")
+        dub.save(d, gpu_work(lambda: dub.generate(d, script, clip, body.lines if body else None)))
+        if clip.file and clip.options.dub:
+            store.update_clip(job_id, index, lambda c: setattr(c, "stale", True))
+        return get_dub(job_id, index)
+
+    @app.delete("/api/jobs/{job_id}/clips/{index}/dub")
+    def delete_dub(job_id: str, index: int) -> Job:
+        """Back to the original voice: the script and its audio go; a short using it is marked to re-render."""
+        editable(job_id)
+        _, clip = clip_of(job_id, index)
+        d = store.dir(job_id)
+        for f in d.glob(f"dub_{index}_*.wav"):
+            f.unlink(missing_ok=True)
+        for f in (d / f"dub_{index}.wav", dub.path(d, index)):
+            f.unlink(missing_ok=True)
+
+        def off(c: Clip) -> None:
+            if c.options.dub:
+                c.options = c.options.model_copy(update={"dub": None})
+                c.stale = bool(c.file)
+        return store.update_clip(job_id, index, off)
 
     @app.get("/api/jobs/{job_id}/clips/{index}/people")
     def clip_people(job_id: str, index: int) -> list[dict]:

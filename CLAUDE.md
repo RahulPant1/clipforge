@@ -96,6 +96,18 @@ backend/                FastAPI + pipeline (Python 3.11, conda env "clipforge")
                         text quotes/times never worked; numbered picks with reasoning OFF flagged 88 % of clean clips;
                         reasoning ON (JUDGE_THINK unset) catches 100 % of cut openings/endings, ~12 s/clip. Clean picks
                         get flagged ~65 % — on reading them, mostly real mid-sentence cuts by selection
+    dub.py              🎙 Replace voice per clip: dub_N.json (DubScript: voice/version, lines = judge.sentences of the
+                        clip — original text + SOURCE start, editable text, generated file, Whisper word timings) →
+                        generate() = only stale lines (text/voice/version changed) or `only` in ONE tts.speak load +
+                        transcribe_many → assemble() lays lines out (layout(): original start, or later behind the
+                        previous line, ≤ EARLY sooner when it needs room, may run LATE into the next; atempo ≤
+                        MAX_RATE 1.35; else cut with a fade, fit too_long + over seconds) → dub_N.wav (48 kHz mono,
+                        clip span; span stored → re-laid out after a trim, no GPU). Measured: the cloned voice needed
+                        34 s for 28.8 s of fast speech — fixed slots + 1.2x cut every line. render: options.dub +
+                        track → dub track as the voice input (sfx.audio_graph voice_src), segments() = new words for
+                        captions/.srt/stat cards/sfx, no jump cuts, no strikes. Replaces the WHOLE clip audio (no
+                        source separation model). API /clips/{i}/dub (GET draft|saved, PUT, POST generate under
+                        gpu_work, DELETE → option off + stale). DubEditor.jsx in the Shorts step; 🤖 AI voice badge
     learn.py            learning mode (Job.purpose "learn", or POST /jobs/{id}/learn on any job with a video → worker
                         kind "learn", status restored): ingest() (shared with prepare) → scene index → map over
                         selection windows (notes + concepts at snapped line starts) → reduce by NUMBERS (P/N/C refs):
@@ -457,6 +469,14 @@ For a later discussion (not planned yet):
 27. [ ] ComfyUI as an optional local generator over its HTTP API (workflow JSON in, frames out), behind GPU_LOCK and
         unloaded after use like Gemma (8 GB VRAM: SDXL-class images fine, video models slow): B-roll stills/loops when
         your folder has no match (item 19 / G), stylised cover backgrounds, upscaling. Not ClipForge-as-ComfyUI-nodes.
+31. [x] Replace voice (dub.py): sentence-level re-voicing of a clip in a Voice Library voice, laid out on the
+        original timing, rendered with the existing pipeline. Not done on purpose: lip-sync (needs a heavy model),
+        keeping music/ambience under the new voice (needs a separation model, e.g. Demucs ~80 MB in the TTS env —
+        opt-in later), jump cuts on dubbed clips, whole long videos (clips ≤ 180 s).
+        [ ] Phase 3 — audio→audio voice conversion (investigation): (a) no new model: Whisper on your narration →
+        each sentence spoken in the target voice at your timing (= Replace voice on your own recording; keeps pauses
+        and timing, not intonation); (b) true conversion keeping delivery needs a VC model (Seed-VC-class zero-shot,
+        ~200 MB-1 GB, would run in the TTS env) — evaluate quality/VRAM before adding.
 30. [x] Clip judge + gap detector (judge.py, app.judge_eval), learning mode v1 (learn.py), scene thumbnails
         (scenes/scene_K.jpg, made on request for older indexes). [ ] later: Q&A over a video (BM25 over transcript
         chunks first), search by meaning only if word search falls short (small CPU embedding model).

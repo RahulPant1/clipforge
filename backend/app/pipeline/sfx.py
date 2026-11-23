@@ -157,11 +157,13 @@ def write_track(evts: list[tuple[float, str]], duration: float, out: Path) -> Pa
     return out
 
 
-def audio_graph(af: list[str], music_input: int | None, sfx_input: int | None, duration: float) -> str:
-    """filter_complex for audio → [aout]. af = the voice chain (cuts, crossfades, end-card pad) as for -af."""
+def audio_graph(af: list[str], music_input: int | None, sfx_input: int | None, duration: float,
+                voice_src: str = "0:a") -> str:
+    """filter_complex for audio → [aout]. af = the voice chain (cuts, crossfades, end-card pad) as for -af.
+    voice_src: the speech stream — the source's audio, or a Replace-voice dub track input ("3:a")."""
     voice = ",".join(af) if af else "anull"
     fmt = f"aformat=sample_fmts=fltp:sample_rates={RATE}:channel_layouts=stereo"  # sidechain needs equal formats
-    parts = [f"[0:a]{voice},{fmt}[voice]"]
+    parts = [f"[{voice_src}]{voice},{fmt}[voice]"]
     mix = ["[vo]"]
     if music_input is not None:
         fade = min(1.5, duration / 4)

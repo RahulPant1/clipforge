@@ -20,7 +20,7 @@ YouTube URL / file
 | **1 Source** | Paste a YouTube link or upload — or **Find videos** on a topic, or queue a **Batch** (several links, a playlist, a channel). Pick *Review each step* (default) or *Fully automatic*. If it fails: fix the cause, then **↻ Retry** |
 | **2 Transcript** | Read/search the transcript (and, for screen / demo videos, what's on screen scene by scene), click timestamps to play, mark start/end to **add your own clip** |
 | **3 Pick clips** | Gemma gives 2× the clips you asked for, each with the **clip judge's verdict** (ready / trim / needs context / reject) and a one-click fix. Watch each, **trim with ±1s/±0.2s**, fix title/hook/keywords, **approve** → *Create shorts & posts* |
-| **4 Shorts** | Watch the vertical shorts. Per short: jump cuts, punch-in zoom, hook title, framing (or drag the crop by hand), caption look, emoji, **stat cards**, logo/end card, sound fx and music, 4:5 / 1:1 feed versions, cover and quote cards → **re-render just that one** |
+| **4 Shorts** | Watch the vertical shorts. Per short: jump cuts, punch-in zoom, hook title, framing (or drag the crop by hand), caption look, emoji, **stat cards**, **replace voice**, logo/end card, sound fx and music, 4:5 / 1:1 feed versions, cover and quote cards → **re-render just that one** |
 | **5 Posts** | Per-platform tabs. Edit copy inline (X threads post-by-post with 280 counters), 🎲 **New angle**, mark **Approved** |
 | **6 Publish** | Checklist of every short × platform: file links, one copy button per upload-form field, paste the live link to mark **posted**. Download the full pack |
 | **📚 Learn** | Learn jobs (or **Make study notes** on any job): summary, chapters, key concepts, timestamped notes, a quiz, hands-on exercises — click any time to play that moment |
@@ -54,6 +54,10 @@ YouTube URL / file
   training: the voice is averaged over your takes (ones that don't sound like the rest are left out) and the
   clearest take sets the pace and tone; the model itself never changes. Runs only when you ask (Qwen3-TTS, Apache
   2.0, in its own environment — `bash scripts/setup_tts.sh`). English and 9 other languages; no Hindi yet
+- **🎙 Replace voice:** on a short, rewrite any sentence of its dialogue and have a Voice Library voice say it —
+  each new sentence is placed where the original was said (sped up a little if needed, flagged "too long —
+  shorten" if it can't fit), captions follow the new words, and you can regenerate a single line. The whole clip
+  audio is replaced (add music under it if you like); lips won't match on a speaker's face. Marked 🤖 AI voice
 - **Clip judge:** every candidate is checked like an editor would — does it start mid-thought or lean on something
   said before it, does it stop before its payoff, does the cut change what the speaker meant — and gets a verdict
   (ready / trim / needs context / reject) with the evidence and a one-click **Apply fix** that moves the edges to

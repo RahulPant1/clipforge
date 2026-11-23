@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { api } from '../../api.js'
 import CropEditor from '../CropEditor.jsx'
+import DubEditor from '../DubEditor.jsx'
 import InsertEditor from '../InsertEditor.jsx'
 import { FEED, feedFile, fmt } from '../../util.js'
 
@@ -226,10 +227,11 @@ function ShortCard({ job, clip, busy, act, presets, kit, sounds }) {
           {clip.cut_seconds > 0.5 ? (
             <span className="cut"> · ✂ {clip.cut_seconds.toFixed(1)}s</span>
           ) : (
-            clip.file && clip.options.jumpcut !== false && (
+            clip.file && clip.options.jumpcut !== false && !o.dub && (
               <span className="muted" title="Jump cuts found no pause longer than MAX_PAUSE in this clip"> · ✂ no pauses</span>
             )
           )}
+          {o.dub && <span className="cut" title="The dialogue is AI-generated (Replace voice)"> · 🤖 AI voice</span>}
           {clip.reframe === 'face' && <span className="cut"> · 🎯 face</span>}
           {clip.reframe === 'split' && <span className="cut"> · 👥 2 speakers</span>}
           {clip.reframe === 'speaker' && <span className="cut"> · 🎙 follows talker</span>}
@@ -334,6 +336,8 @@ function ShortCard({ job, clip, busy, act, presets, kit, sounds }) {
           <InsertEditor job={job} clip={clip} busy={busy} act={act}
                         accent={kit?.enabled && kit.accent ? kit.accent : undefined} />
         )}
+
+        {!clip.visual && <DubEditor job={job} clip={clip} busy={busy} act={act} setOpt={setOpt} />}
 
         <CoverPanel job={job} clip={clip} busy={busy} act={act}
                     defaultText={clip.content?.instagram?.extra?.cover_text || clip.hook} />

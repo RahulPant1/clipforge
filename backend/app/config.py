@@ -137,6 +137,14 @@ class Settings(BaseSettings):
     # "1:1" (X, LinkedIn) — own face-tracked crop (wider: more of the scene), captions/hook/logo re-placed.
     # Comma list for new shorts, e.g. EXTRA_ASPECTS=4:5 ; each short can switch them in the Shorts step.
     extra_aspects: str = ""
+    # Scene index (scenes.py): what is on screen, one keyframe per scene → vision Gemma, fed to clip selection as
+    # ON SCREEN lines. auto = only videos that are more than a talking head (cuts / few faces); on = always; off
+    scene_index: str = "auto"
+    scene_span: float = 30.0  # s: one keyframe per scene, long scenes split into spans this long
+    scene_min: float = 4.0  # s: shorter scenes are merged into the one before
+    scene_max: int = 160  # keyframes per video at most (longer spans instead)
+    scene_skip_cuts_per_min: float = 2.0  # auto: fewer cuts a minute than this…
+    scene_skip_face_share: float = 0.75  # …and a face in at least this share of frames → talking head, skipped
     # Inserts (inserts.py): motion-graphics cards burned in when a number is spoken (stat_counter). Only approved
     # ones render; drawn by INSERT_RENDERER (pillow; a Blender renderer can plug into insert_render.py later).
     inserts_suggest: bool = True  # produce: Gemma picks which spoken numbers get a card (suggestions, not approved)

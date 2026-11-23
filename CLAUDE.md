@@ -70,6 +70,20 @@ backend/                FastAPI + pipeline (Python 3.11, conda env "clipforge")
     nospeech.py         < 30 wpm over the whole video (words_per_minute(segs, duration)): analyse() (one ffmpeg pass of 64x36 grey frames → motion + scene cuts, mono PCM →
                         loudness; cached signals.json) → excitement() → peak_windows() (payoff 65% in, snap to
                         cuts) → keyframes → vision Gemma (score/title/hook/description, mostly_text → capped)
+    scenes.py           scene index for SPEECH videos (prepare, after transcribe, before selection; same Gemma load):
+                        frame_signals cuts + face_share (16 frames) → SCENE_INDEX auto skips talking heads
+                        (< SCENE_SKIP_CUTS_PER_MIN and ≥ SCENE_SKIP_FACE_SHARE; calibrated on 6 real jobs: talking heads
+                        0.2-1.15 cuts/min with faces in 14-16/16, the screen tutorial 11.7/min with 6/16) → spans() (merge
+                        < SCENE_MIN, split > SCENE_SPAN, ≤ SCENE_MAX) → one keyframe each → vision Gemma {description,
+                        kind} (< 1 s/scene warm on gemma4; GIVE_UP after 4 straight failures) → scenes.json (cached).
+                        highlights.build_prompt(scenes=) puts "  ↳ on screen (kind): …" under the transcript line being
+                        spoken (not talking_head) + SCENE_NOTE. NO [start-end] on scene lines: with them Gemma used scene
+                        edges as clip edges (7/18 picks too short). windows() counts their chars; a tail window shorter
+                        than TAIL_MIN × max clip is merged into / balanced with the one before (a 12 s tail gave only
+                        5-11 s picks). Eval on the screen tutorial (3 runs each): too-short 3/27 vs 2/24, clips cover
+                        2.4 vs 2.0 on-screen scenes — a small lean to visual moments, not a proven win yet.
+                        Trace: candidates.json scene_index + scenes. Never fails prepare.
+                        GET /jobs/{id}/scenes → Transcript step rows (search covers them). eval: --scenes on/off
     jumpcut.py          silence/filler removal: plan_cuts() → keep intervals + words remapped to output time;
                         `removed=` (clip.removed, struck words) is cut too, even with jump cuts off
     captions.py         karaoke ASS (per-word colours from a preset, pop-in) or one plain line per chunk (simple)
@@ -406,7 +420,7 @@ For a later discussion (not planned yet):
 27. [ ] ComfyUI as an optional local generator over its HTTP API (workflow JSON in, frames out), behind GPU_LOCK and
         unloaded after use like Gemma (8 GB VRAM: SDXL-class images fine, video models slow): B-roll stills/loops when
         your folder has no match (item 19 / G), stylised cover backgrounds, upscaling. Not ClipForge-as-ComfyUI-nodes.
-28. [ ] Scene index (from the "Video Intelligence v1" review, Nov 2026). Slim scope only: scene cuts for every video
+28. [x] Scene index (from the "Video Intelligence v1" review, Nov 2026) — built, see scenes.py. Slim scope only: scene cuts for every video
         (nospeech.analyse already finds them) → ≤ 1 keyframe per scene / ~20-30 s → vision Gemma description →
         scenes.json (start, end, frame, description, transcript text). Main use: scene lines in the SELECTION prompt
         so visual payoffs (demos, screens, before/after) get picked; then descriptions in transcript search, B-roll

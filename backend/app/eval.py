@@ -25,6 +25,7 @@ from pathlib import Path
 
 from .config import settings
 from .models import Segment
+from .pipeline import scenes
 from .pipeline.highlights import PROMPT, check_prompt, prompt_id, select_highlights
 from .pipeline.llm import OllamaClient
 
@@ -51,6 +52,7 @@ class Variant:
     think: str  # key of THINK
     run: int = 1
     topic: str = ""
+    scenes: str = "off"  # on = the job's scene index as ON SCREEN lines (scenes.json)
     seconds: float = 0.0
     error: str = ""
     trace: dict = field(default_factory=dict)
@@ -58,7 +60,8 @@ class Variant:
     @property
     def label(self) -> str:
         r = f" #{self.run}" if self.run > 1 else ""
-        return f"{self.model} · {self.prompt_name} · think={self.think}{r}"
+        sc = " · scenes" if self.scenes == "on" else ""
+        return f"{self.model} · {self.prompt_name} · think={self.think}{sc}{r}"
 
 
 def summarize(v: Variant, picks: list[tuple[float, float]], baseline: list[tuple[float, float]] | None) -> dict:
@@ -148,12 +151,21 @@ def load_target(target: str) -> tuple[str, list[Segment], list[tuple[float, floa
     return job_dir.name, segs, picks, n, topic
 
 
-def run_variant(v: Variant, segs: list[Segment], n: int, keep: int) -> None:
+def job_scenes(target: str) -> list | None:
+    """The job's scene index lines for the prompt (None = no scenes.json with descriptions)."""
+    p = Path(target)
+    if not p.exists():
+        p = settings.data_dir / "jobs" / target
+    index = scenes.load(p.parent if p.is_file() else p)
+    return index.for_prompt() if index and index.mode == "described" else None
+
+
+def run_variant(v: Variant, segs: list[Segment], n: int, keep: int, scene_lines: list | None = None) -> None:
     llm = OllamaClient(model=v.model)
     t0 = time.monotonic()
     try:
         select_highlights(segs, n, llm, keep=keep, prompt=v.prompt, think=THINK[v.think], trace=v.trace,
-                          topic=v.topic)
+                          topic=v.topic, scenes=scene_lines if v.scenes == "on" else None)
     except Exception as e:  # one broken variant (model not pulled, think unsupported…) mustn't stop the eval
         v.error = str(e)[:300]
     v.seconds = time.monotonic() - t0
@@ -168,6 +180,8 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--clips", type=int, help="shorts wanted (default: the job's)")
     ap.add_argument("--candidates", type=int, help="candidates to keep (default 2× clips, like review mode)")
     ap.add_argument("--topic", help="steer selection to a topic (default: the job's; '' for none)")
+    ap.add_argument("--scenes", action="append", choices=["on", "off"],
+                    help="repeatable: with/without the job's scene index (scenes.json); default off")
     ap.add_argument("--repeat", type=int, default=1, help="runs per variant, to see run-to-run noise")
     ap.add_argument("--out", type=Path, help="report folder (default data/evals/<timestamp>)")
     ap.add_argument("--print-prompt", action="store_true", help="print the built-in prompt and exit")
@@ -192,9 +206,13 @@ def main(argv: list[str] | None = None) -> None:
             raise SystemExit(f"{spec}: {e}") from None
         prompts.append((spec if spec == "default" else Path(spec).stem, text))
     default_think = next(k for k, val in THINK.items() if val == settings.select_think)
-    variants = [Variant(model=m, prompt_name=pn, prompt=pt, think=t, run=r, topic=topic)
-                for m, (pn, pt), t, r in itertools.product(a.model or [settings.gemma_model], prompts,
-                                                           a.think or [default_think], range(1, a.repeat + 1))]
+    scene_lines = job_scenes(a.target)
+    if "on" in (a.scenes or []) and scene_lines is None:
+        raise SystemExit("--scenes on: this job has no described scenes.json (SCENE_INDEX=on, then Retry/new job)")
+    variants = [Variant(model=m, prompt_name=pn, prompt=pt, think=t, run=r, topic=topic, scenes=sc)
+                for m, (pn, pt), t, sc, r in itertools.product(a.model or [settings.gemma_model], prompts,
+                                                               a.think or [default_think], a.scenes or ["off"],
+                                                               range(1, a.repeat + 1))]
 
     out = a.out or settings.data_dir / "evals" / datetime.now().strftime("%Y%m%d-%H%M%S")
     out.mkdir(parents=True, exist_ok=True)
@@ -208,7 +226,7 @@ def main(argv: list[str] | None = None) -> None:
             OllamaClient(model=last_model).unload()  # 8 GB VRAM: never hold two models
         last_model = v.model
         print(f"[{i}/{len(variants)}] {v.label}", flush=True)
-        run_variant(v, segs, n, keep)
+        run_variant(v, segs, n, keep, scene_lines)
         spans = [(c["start"], c["end"]) for c in v.trace.get("clips", [])]
         row = summarize(v, picks, baseline)
         if baseline is None and not v.error:

@@ -99,22 +99,73 @@ def _line(s: Segment) -> str:
     return f"[{s.start:.1f}-{s.end:.1f}] {s.text}"
 
 
-def windows(segs: list[Segment], size: float, max_chars: int | None = None) -> Iterator[list[Segment]]:
-    """Split transcript into chunks of ~size seconds AND at most max_chars of transcript lines,
-    so the prompt always leaves Gemma room in its context to think and answer."""
+# Scene index (scenes.py): what is visible, between the transcript lines. Only added when the job has scenes.
+SCENE_NOTE = """
+Lines starting with "  ↳ on screen" are not speech: they say what is visible while the line above is spoken.
+- Prefer moments where what is said and what is shown pay off together (a demo, a result on screen, a
+  before/after, something the speaker shows), and skip clips that only make sense with a visual outside them.
+- They have no times on purpose: clip start/end still come only from the [start-end] transcript brackets.
+"""
+
+
+def _scene_line(sc) -> str:
+    # no [start-end]: on real footage Gemma used scene edges as clip edges → 20 s clips, 7 of 18 too short
+    return f"  ↳ on screen ({sc.kind.replace('_', ' ')}): {sc.description}"
+
+
+def _scenes_in(scenes: list | None, start: float, end: float) -> list:
+    return [sc for sc in scenes or [] if start <= sc.start < end]
+
+
+TAIL_MIN = 2  # × max_clip_seconds: a shorter last window is merged into the one before
+
+
+def windows(segs: list[Segment], size: float, max_chars: int | None = None,
+            scenes: list | None = None) -> Iterator[list[Segment]]:
+    """Split transcript into chunks of ~size seconds AND at most max_chars of transcript lines (+ the ON SCREEN
+    lines that fall inside them), so the prompt always leaves Gemma room in its context to think and answer."""
     if not segs:
         return
+    extra = [0] * len(segs)  # chars of scene lines that start during segment i (before the next one)
+    for sc in scenes or []:
+        i = next((k for k, x in enumerate(segs) if x.end > sc.start), len(segs) - 1)
+        extra[i] += len(_scene_line(sc)) + 1
+    out: list[list[Segment]] = []
+    size_of: dict[int, int] = {}  # id(segment) → its chars in the prompt (line + scene lines)
     win: list[Segment] = []
     t0, chars = segs[0].start, 0
-    for s in segs:
-        n = len(_line(s)) + 1
+    for k, s in enumerate(segs):
+        n = len(_line(s)) + 1 + extra[k]
+        size_of[id(s)] = n
         if win and (s.start - t0 > size or (max_chars and chars + n > max_chars)):
-            yield win
+            out.append(win)
             win, t0, chars = [], s.start, 0
         win.append(s)
         chars += n
+    if win and out and win[-1].end - win[0].start < TAIL_MIN * settings.max_clip_seconds:
+        # a tail too short for a clip (seen: the last 12 s of a video) only yields 5-11 s picks that all get
+        # rejected → one window with the one before if it fits the budget, else the two split evenly
+        both = out.pop() + win
+        total = sum(size_of[id(x)] for x in both)
+        if not max_chars or total <= max_chars:
+            win = both
+        else:
+            run, cut = 0, len(both)
+            for i, x in enumerate(both):
+                run += size_of[id(x)]
+                if run >= total / 2:
+                    cut = i + 1
+                    break
+            if sum(size_of[id(x)] for x in both[:cut]) > max_chars:  # one long line crossed the middle
+                cut -= 1
+            if 0 < cut < len(both) and sum(size_of[id(x)] for x in both[cut:]) <= max_chars:
+                out.append(both[:cut])
+                win = both[cut:]
+            else:  # can't balance within budget: leave them as they were
+                out.append(both[:len(both) - len(win)])
     if win:
-        yield win
+        out.append(win)
+    yield from out
 
 
 # Measured with gemma4 on a real transcript: ~2.6 chars/token (timestamps tokenise heavily). With thinking on,
@@ -123,8 +174,9 @@ CHARS_PER_TOKEN = 2.5
 PROMPT_CTX_SHARE = 0.5
 
 
-def transcript_char_budget(template: str = PROMPT, topic: str = "") -> int:
-    return int(settings.ollama_num_ctx * PROMPT_CTX_SHARE * CHARS_PER_TOKEN) - len(template) - len(focus_block(topic))
+def transcript_char_budget(template: str = PROMPT, topic: str = "", scenes: bool = False) -> int:
+    return (int(settings.ollama_num_ctx * PROMPT_CTX_SHARE * CHARS_PER_TOKEN) - len(template) - len(focus_block(topic))
+            - (len(SCENE_NOTE) if scenes else 0))
 
 
 PROMPT_FIELDS = ("{n}", "{min_s", "{max_s", "{transcript}")
@@ -141,12 +193,20 @@ def prompt_id(template: str) -> str:
     return hashlib.sha256(template.encode()).hexdigest()[:10]
 
 
-def build_prompt(win: list[Segment], n: int, template: str = PROMPT, topic: str = "") -> str:
-    lines = "\n".join(_line(s) for s in win)
+def build_prompt(win: list[Segment], n: int, template: str = PROMPT, topic: str = "",
+                 scenes: list | None = None) -> str:
+    """The prompt for one window. `scenes` (scenes.SceneIndex.for_prompt()) become ON SCREEN lines in time order."""
+    shown = _scenes_in(scenes, win[0].start, win[-1].end) if win else []
+    rows: list[str] = []
+    for i, s in enumerate(win):  # each scene under the line being spoken when it starts
+        rows.append(_line(s))
+        nxt = win[i + 1].start if i + 1 < len(win) else float("inf")
+        rows += [_scene_line(sc) for sc in shown if (i == 0 or sc.start >= s.start) and sc.start < nxt]
+    lines = "\n".join(rows)
     if "{focus}" not in template:  # custom eval prompts needn't know about topics: it goes before the transcript
         template = template.replace("{transcript}", "{focus}{transcript}", 1)
     return template.format(n=n, min_s=settings.min_clip_seconds, max_s=settings.max_clip_seconds,
-                           transcript=lines, focus=focus_block(topic))
+                           transcript=lines, focus=focus_block(topic) + (SCENE_NOTE if shown else ""))
 
 
 SNAP_REACH = 8.0  # s: how far a clip edge may move to land on a sentence boundary
@@ -245,7 +305,7 @@ _SETTING = object()  # "use settings.select_think" (None itself means "don't sen
 def select_highlights(segs: list[Segment], n: int, llm: LLM,
                       on_progress: ProgressFn | None = None, keep: int | None = None, *,
                       prompt: str = PROMPT, think=_SETTING, trace: dict | None = None,
-                      topic: str = "") -> list[Clip]:
+                      topic: str = "", scenes: list | None = None) -> list[Clip]:
     """Returns up to `keep` (default n) non-overlapping candidates; the best `n` are pre-approved.
 
     `topic` (optional) steers the prompt to moments about it; picks it rates below MIN_RELEVANCE are dropped
@@ -257,7 +317,7 @@ def select_highlights(segs: list[Segment], n: int, llm: LLM,
     think = settings.select_think if think is _SETTING else think
     topic = clean_topic(topic)
     schema = TOPIC_SCHEMA if topic else CLIP_SCHEMA
-    wins = list(windows(segs, settings.window_seconds, transcript_char_budget(prompt, topic)))
+    wins = list(windows(segs, settings.window_seconds, transcript_char_budget(prompt, topic, bool(scenes)), scenes))
     want = max(keep or n, n)
     per_window = clips_per_window(want, len(wins))
     candidates: list[Clip] = []
@@ -271,7 +331,7 @@ def select_highlights(segs: list[Segment], n: int, llm: LLM,
         entry = {"window": i, "start": win[0].start, "end": win[-1].end, "asked": per_window}
         win_log.append(entry)
         try:
-            raw = llm.chat_json(build_prompt(win, per_window, prompt, topic), schema, think=think)
+            raw = llm.chat_json(build_prompt(win, per_window, prompt, topic, scenes), schema, think=think)
         except Exception as e:  # one bad window shouldn't kill the job
             log.warning("window %d skipped: %s", i, e)
             failures.append(str(e))
@@ -307,6 +367,7 @@ def select_highlights(segs: list[Segment], n: int, llm: LLM,
                 rec["outcome"] = "invalid"
     if trace is not None:  # filled before a possible raise, so failed runs still show what went wrong
         trace.update(model=getattr(llm, "model", None), think=think, prompt_id=prompt_id(prompt), topic=topic,
+                     scenes=len(scenes or []),
                      num_ctx=settings.ollama_num_ctx, min_s=settings.min_clip_seconds,
                      max_s=settings.max_clip_seconds, asked_total=want, windows=win_log, items=items, clips=[])
     if wins and len(failures) == len(wins):

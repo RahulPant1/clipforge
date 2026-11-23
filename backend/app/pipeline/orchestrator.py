@@ -16,7 +16,7 @@ from pathlib import Path
 
 from ..config import settings
 from ..models import Clip, Segment, Stage
-from . import hinglish, inserts, transcript_edit
+from . import hinglish, inserts, scenes, transcript_edit
 from .content import ContentContext, clip_text, generate_all, load_meta, write_posts_md
 from .cover import make_cover
 from .download import download
@@ -79,10 +79,13 @@ def prepare(source: str, job_dir: Path, num_clips: int, report: Reporter,
                                      title=load_meta(job_dir).get("title", ""), cache=job_dir / "signals.json",
                                      trace=trace, topic=topic)
         else:
-            report(Stage.selecting, 0, f"Asking Gemma for moments about “{topic}”" if topic
+            seen = scene_lines(video, job_dir, llm, report, trace)
+            base = 0.4 if seen is not None else 0.0  # the scene pass had the first part of the bar
+            report(Stage.selecting, base, f"Asking Gemma for moments about “{topic}”" if topic
                    else "Asking Gemma for highlights")
-            clips = select_highlights(segs, num_clips, llm, on_select, keep=candidates or num_clips, trace=trace,
-                                      topic=topic)
+            clips = select_highlights(segs, num_clips, llm, lambda p, m: on_select(base + (1 - base) * p, m),
+                                      keep=candidates or num_clips, trace=trace, topic=topic,
+                                      **({"scenes": seen} if seen else {}))  # only when there are any
     finally:
         llm.unload()
     if not clips and 0 < duration <= settings.max_clip_seconds:
@@ -96,6 +99,23 @@ def prepare(source: str, job_dir: Path, num_clips: int, report: Reporter,
         raise RuntimeError("Gemma returned no usable clips. Try a bigger model or tweak the prompt.")
     report(Stage.selecting, 1.0, f"{len(clips)} candidates ready for review")
     return clips
+
+
+def scene_lines(video: Path, job_dir: Path, llm: LLM, report: Reporter, trace: dict) -> list | None:
+    """Scene index for a speech video (scenes.py) → the scenes worth an ON SCREEN line in the selection prompt.
+    None = the pass didn't run (SCENE_INDEX=off); [] = ran but nothing to add. Never fails the job."""
+    if settings.scene_index == "off":
+        return None
+    try:
+        index = scenes.build(video, job_dir, llm, lambda p, m: report(Stage.selecting, 0.4 * p, m),
+                             title=load_meta(job_dir).get("title", ""))
+    except Exception as e:
+        log.exception("scene index failed — selecting from the transcript only")
+        trace["scene_index"] = {"mode": "failed", "reason": str(e)[:300]}
+        return []
+    trace["scene_index"] = {"mode": index.mode, "reason": index.reason, "described": len(index.described),
+                            "cuts_per_min": index.cuts_per_min, "face_share": index.face_share}
+    return index.for_prompt()
 
 
 def whole_video_clip(duration: float, trace: dict, title: str = "") -> Clip:

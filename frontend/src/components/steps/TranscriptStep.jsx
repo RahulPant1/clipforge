@@ -26,12 +26,21 @@ export default function TranscriptStep({ job, busy, act, go, transcript, reloadT
   const [q, setQ] = useState('')
   const [sel, setSel] = useState({ start: null, end: null })
   const [title, setTitle] = useState('')
+  const [scenes, setScenes] = useState(null) // { mode, reason, scenes: [...] } from scenes.json
+  const [showScenes, setShowScenes] = useState(true)
+  useEffect(() => {
+    api.scenes(job.id).then(setScenes).catch(() => setScenes(null))
+  }, [job.id, job.status])
 
+  // transcript lines + what's on screen (scene index), in time order; search covers both
   const lines = useMemo(() => {
-    const t = transcript || []
+    const t = (transcript || []).map((s) => ({ ...s, kind: 'speech' }))
+    const shots = showScenes ? (scenes?.scenes || []).map((x) => ({ ...x, text: x.description, scene: true })) : []
+    const all = [...t, ...shots].sort((a, b) => a.start - b.start || (a.scene ? -1 : 1))
     const needle = q.trim().toLowerCase()
-    return needle ? t.filter((s) => s.text.toLowerCase().includes(needle)) : t
-  }, [transcript, q])
+    return needle ? all.filter((s) => s.text.toLowerCase().includes(needle)) : all
+  }, [transcript, scenes, showScenes, q])
+  const sceneCount = scenes?.scenes?.length || 0
 
   const clipAt = (s) => job.clips.find((c) => s.end > c.start && s.start < c.end)
 
@@ -90,12 +99,34 @@ export default function TranscriptStep({ job, busy, act, go, transcript, reloadT
         <ScriptSwitch job={job} busy={busy} act={act} reloadTranscript={reloadTranscript} />
         <div className="tlist-head">
           <h3>Transcript</h3>
-          <input className="search" placeholder="Search…" value={q} onChange={(e) => setQ(e.target.value)} />
+          <input className="search" placeholder={sceneCount ? 'Search what is said or shown…' : 'Search…'} value={q}
+                 onChange={(e) => setQ(e.target.value)} />
         </div>
+        {sceneCount > 0 && (
+          <label className="scene-toggle muted small" title={`Described by ${scenes.model || 'Gemma'} from one frame per scene`}>
+            <input type="checkbox" checked={showScenes} onChange={(e) => setShowScenes(e.target.checked)} />
+            🎬 Show what's on screen ({sceneCount} scenes) — Gemma reads them when it picks clips (all but plain
+            talking-head shots)
+          </label>
+        )}
+        {scenes?.mode === 'skipped' && (
+          <p className="muted small">🎬 No scene descriptions: {scenes.reason}.</p>
+        )}
         <div className="legend">
           <span className="lg approved" /> approved clip <span className="lg cand" /> candidate
         </div>
         {lines.map((s, i) => {
+          if (s.scene) {
+            return (
+              <div key={`sc${i}`} className="tline scene">
+                <button className="ts" onClick={() => seek(s.t ?? s.start)} title="Play this scene">{fmt(s.start)}</button>
+                <span className="ttext"><span className="skind">🎬 {s.kind.replace('_', ' ')}</span> {s.text}</span>
+                <span className="tact">
+                  <button onClick={() => setSel((x) => ({ ...x, start: s.start }))} title="Start clip at this scene">⇤ start</button>
+                </span>
+              </div>
+            )
+          }
           const c = clipAt(s)
           const inSel = sel.start !== null && s.start >= sel.start && s.end <= (sel.end ?? sel.start)
           return (

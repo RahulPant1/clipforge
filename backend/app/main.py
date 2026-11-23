@@ -53,6 +53,7 @@ from .pipeline import (
     hinglish,
     inserts,
     quote,
+    scenes,
     sfx,
     transcript_edit,
     vocabulary,
@@ -345,6 +346,18 @@ def create_app(pipeline=None, start_worker: bool = True, llm_factory=OllamaClien
         if not p.exists():
             return []
         return [{"start": s["start"], "end": s["end"], "text": s["text"]} for s in json.loads(p.read_text())]
+
+    @app.get("/api/jobs/{job_id}/scenes")
+    def get_scenes(job_id: str) -> dict:
+        """What is on screen, scene by scene (scenes.json), for the Transcript step; mode "none" = no index yet."""
+        if not store.get(job_id):
+            raise HTTPException(404, "job not found")
+        index = scenes.load(store.dir(job_id))
+        if not index:
+            return {"mode": "none", "scenes": []}
+        return {"mode": index.mode, "reason": index.reason, "model": index.model,
+                "scenes": [{"start": x.start, "end": x.end, "t": x.t, "kind": x.kind, "description": x.description}
+                           for x in index.described]}
 
     # ---------------------------------------------------------------- caption fixes + vocabulary
 

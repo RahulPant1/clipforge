@@ -21,6 +21,7 @@ def _offline_defaults(monkeypatch, tmp_path):
     from app.config import settings
 
     monkeypatch.setattr(settings, "reframe_mode", "center")
+    monkeypatch.setattr(settings, "scene_index", "off")  # no cut scan / vision calls on fake videos
     monkeypatch.setattr(settings, "data_dir", tmp_path / "data")
     monkeypatch.setattr(settings, "hinglish_default", False)  # fake pipelines predate romanize=
     from app.pipeline import fonts

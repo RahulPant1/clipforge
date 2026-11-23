@@ -520,3 +520,9 @@ aside { min-width: 0; }  /* a long History path must shrink (ellipsis), not wide
 .stat-num { display: grid; grid-template-columns: 3.5em 1fr 5em; gap: 4px; }
 .nudge { display: inline-flex; gap: 2px; }
 .nudge .btn { padding: 2px 8px; }
+
+/* Scene index rows in the transcript */
+.tline.scene { background: color-mix(in srgb, var(--panel2) 70%, transparent); border-left: 3px solid var(--muted); }
+.tline.scene .ttext { color: var(--muted); font-style: italic; }
+.tline.scene .skind { font-style: normal; font-size: 11px; text-transform: uppercase; letter-spacing: .04em; margin-right: 4px; }
+.scene-toggle { display: flex; align-items: center; gap: 6px; margin: 4px 0 8px; cursor: pointer; }

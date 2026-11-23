@@ -47,6 +47,10 @@ YouTube URL / file
 - **No-speech videos** (music, gameplay, sport, nature): when hardly anything is said, clips come from the
   loudest, busiest moments (loudness, motion, scene cuts), and Gemma *looks* at keyframes to score and title
   them; credits and title screens are marked down. Those shorts render without captions or jump cuts
+- **Sees what's on screen:** for videos that are more than a talking head (screen recordings, slides, demos,
+  b-roll), Gemma looks at one frame per scene and describes it, then picks clips from what is said *and* what is
+  shown — a demo or a result on screen counts too. The Transcript step shows those scenes between the lines and
+  searches them ("spreadsheet", "calendar"). Plain talking-head videos skip it automatically (no extra Gemma time)
 - **Face tracking:** crop follows the speaker like a camera operator — steady when they're still,
   smooth pans when they move, instant snap on camera cuts; leaves room in the direction they look.
   Shots with no face (slides, screen, b-roll) are shown whole over a blurred copy instead of a blind centre crop
@@ -173,6 +177,7 @@ Copy `backend/.env.example` → `backend/.env`. Key options:
 | `CAPTION_PRESET` | `classic` | Caption look: `classic` (uses the `CAPTION_*` colours/font), `punch`, `clean`, `boxed`, `neon` or one of yours |
 | `CAPTION_POSITION` | `bottom` | `bottom` or `middle` (two-speaker stacks always use the seam) |
 | `CAPTION_FONT` | `Arial` | Any installed font, e.g. `Montserrat ExtraBold`. On WSL, Windows fonts are picked up automatically (copied once into `data/fonts`) |
+| `SCENE_INDEX` | `auto` | Describe what's on screen per scene for clip selection: `auto` (skip talking heads), `on`, `off` |
 | `REFRAME_NO_FACE` | `fit` | Shots without a face: `fit` (whole frame over a blurred copy) or `crop` (centre crop) |
 | `HINGLISH_DEFAULT` | `true` | New jobs: Hindi speech written in Latin letters (Hinglish); per job on the New job form |
 | `CAPTION_EMOJI` | `false` | Colour emoji above caption lines (per-short toggle in the UI) |

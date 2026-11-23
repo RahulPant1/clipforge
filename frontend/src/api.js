@@ -64,6 +64,7 @@ export const api = {
   addClip: (id, clip) => req(`/jobs/${id}/clips`, json('POST', clip)),
   produce: (id) => req(`/jobs/${id}/produce`, { method: 'POST' }),
   hookVariants: (id, index) => req(`/jobs/${id}/clips/${index}/hooks`, { method: 'POST' }),
+  scenes: (id) => req(`/jobs/${id}/scenes`),
   suggestInserts: (id, index) => req(`/jobs/${id}/clips/${index}/inserts/suggest`, { method: 'POST' }),
   people: (id, index) => req(`/jobs/${id}/clips/${index}/people`),
   crop: (id, index) => req(`/jobs/${id}/clips/${index}/crop`),

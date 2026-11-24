@@ -108,6 +108,12 @@ backend/                FastAPI + pipeline (Python 3.11, conda env "clipforge")
                         captions/.srt/stat cards/sfx, no jump cuts, no strikes. Replaces the WHOLE clip audio (no
                         source separation model). API /clips/{i}/dub (GET draft|saved, PUT, POST generate under
                         gpu_work, DELETE → option off + stale). DubEditor.jsx in the Shorts step; 🤖 AI voice badge
+    revoice.py          🔁 Re-voice a recording (Phase 3, text-based): data/revoice/<id>/ source.<ext> (audio or video ≤
+                        MAX_SECONDS 180, generation runs in the request) → Whisper words → dub.DubScript (clip=1,
+                        0 → duration) → dub.generate/assemble UNCHANGED → revoiced.mp4 (video stream copied, else
+                        libx264) or revoiced.wav. Keeps timing/pauses, NOT intonation. Measured on a synthetic
+                        narration: all lines fit at 1.0x, result vs target voice 0.987, vs the original narrator
+                        0.942 (≈ the two-different-voices level). API /api/revoice…, RevoicePanel.jsx in Voice Library
     learn.py            learning mode (Job.purpose "learn", or POST /jobs/{id}/learn on any job with a video → worker
                         kind "learn", status restored): ingest() (shared with prepare) → scene index → map over
                         selection windows (notes + concepts at snapped line starts) → reduce by NUMBERS (P/N/C refs):
@@ -473,10 +479,11 @@ For a later discussion (not planned yet):
         original timing, rendered with the existing pipeline. Not done on purpose: lip-sync (needs a heavy model),
         keeping music/ambience under the new voice (needs a separation model, e.g. Demucs ~80 MB in the TTS env —
         opt-in later), jump cuts on dubbed clips, whole long videos (clips ≤ 180 s).
-        [ ] Phase 3 — audio→audio voice conversion (investigation): (a) no new model: Whisper on your narration →
-        each sentence spoken in the target voice at your timing (= Replace voice on your own recording; keeps pauses
-        and timing, not intonation); (b) true conversion keeping delivery needs a VC model (Seed-VC-class zero-shot,
-        ~200 MB-1 GB, would run in the TTS env) — evaluate quality/VRAM before adding.
+        [x] Phase 3 (a) — re-voice a recording without a new model (revoice.py): timing kept, intonation not.
+        [ ] Phase 3 (b) — true conversion keeping your delivery needs a VC model; not downloaded. Candidates:
+        OpenVoice V2 tone-colour converter (MIT; timbre only, rhythm/intonation from your audio; needs MeloTTS in
+        its setup; community ONNX build ~0.06 RTF on CUDA) — first choice; Seed-VC (zero-shot, 25-200M params,
+        real-time capable; GPL-3.0 per a mirror — verify; GPL matters if ClipForge is ever distributed).
 30. [x] Clip judge + gap detector (judge.py, app.judge_eval), learning mode v1 (learn.py), scene thumbnails
         (scenes/scene_K.jpg, made on request for older indexes). [ ] later: Q&A over a video (BM25 over transcript
         chunks first), search by meaning only if word search falls short (small CPU embedding model).

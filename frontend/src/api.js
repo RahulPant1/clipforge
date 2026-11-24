@@ -46,6 +46,18 @@ export const api = {
   compareVoice: (id, text, versions, language) =>
     req(`/voices/${id}/compare`, json('POST', { text, versions, language: language || '' })),
   voiceAudio: (id, kind, name) => `/api/voices/${id}/audio/${kind}/${name}`,
+  revoiceList: () => req('/revoice'),
+  revoice: (id) => req(`/revoice/${id}`),
+  createRevoice: (file, name) => {
+    const fd = new FormData()
+    fd.append('file', file, file.name || 'narration.webm')
+    fd.append('name', name || '')
+    return req('/revoice', { method: 'POST', body: fd })
+  },
+  putRevoice: (id, body) => req(`/revoice/${id}`, json('PUT', body)),
+  generateRevoice: (id, lines) => req(`/revoice/${id}/generate`, json('POST', { lines: lines ?? null })),
+  deleteRevoice: (id) => req(`/revoice/${id}`, { method: 'DELETE' }),
+  revoiceFile: (id, name, v) => `/api/revoice/${id}/files/${name}${v ? `?v=${v}` : ''}`,
   removeLogo: () => req('/brand-kit/logo', { method: 'DELETE' }),
   logoUrl: (v) => `/api/brand-kit/logo.png?v=${v}`,
   endCardUrl: (v) => `/api/brand-kit/end-card.png?v=${v}`,

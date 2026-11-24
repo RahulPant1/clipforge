@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { api } from '../api.js'
 import { fmtPrecise } from '../util.js'
 
-function fitChip(ln, stale, maxRate) {
+export function fitChip(ln, stale, maxRate) {
   if (!ln.text.trim()) return <span className="chip">silence</span>
   if (stale) return <span className="chip warnchip">{ln.file ? 'changed — generate' : 'not generated'}</span>
   if (ln.fit === 'too_long') return <span className="chip badchip" title={`Doesn't fit even at ${maxRate}× — it's cut at the end. Shorten the text.`}>⚠ {ln.over ? `${ln.over} s ` : ''}too long — shorten</span>
@@ -11,7 +11,7 @@ function fitChip(ln, stale, maxRate) {
   return null
 }
 
-function Line({ ln, stale, busy, maxRate, onText, onRegen, jobId }) {
+export function Line({ ln, stale, busy, maxRate, onText, onRegen, src }) {
   const [text, setText] = useState(ln.text)
   useEffect(() => setText(ln.text), [ln.text])
   return (
@@ -23,7 +23,7 @@ function Line({ ln, stale, busy, maxRate, onText, onRegen, jobId }) {
                   onChange={(e) => setText(e.target.value)} onBlur={() => text !== ln.text && onText(text)} />
         <div className="row-btns">
           {fitChip(ln, stale, maxRate)}
-          {ln.file && !stale && <audio controls preload="none" src={api.fileUrl(jobId, ln.file)} />}
+          {ln.file && !stale && <audio controls preload="none" src={src(ln.file)} />}
           <button className="btn sm ghost" disabled={busy || !ln.text.trim()} onClick={onRegen}
                   title="Speak just this line again (another take)">↻ this line</button>
         </div>
@@ -95,7 +95,7 @@ export default function DubEditor({ job, clip, busy, act, setOpt }) {
           <ul className="dub-lines">
             {s.lines.filter((l) => l.start >= clip.start && l.start < clip.end).map((ln) => (
               <Line key={ln.i} ln={ln} stale={stale.has(ln.i)} busy={busy || !!working} maxRate={data.max_rate}
-                    jobId={job.id}
+                    src={(f) => api.fileUrl(job.id, f)}
                     onText={(t) => run(() => api.putDub(job.id, clip.index, { texts: { [ln.i]: t } }), 'Saving…')}
                     onRegen={() => run(() => api.generateDub(job.id, clip.index, [ln.i]), 'Speaking 1 line…')} />
             ))}

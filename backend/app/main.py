@@ -65,6 +65,7 @@ from .pipeline import (
     judge,
     learn,
     quote,
+    revoice,
     scenes,
     sfx,
     transcript_edit,
@@ -325,6 +326,69 @@ def create_app(pipeline=None, start_worker: bool = True, llm_factory=OllamaClien
         if not f.is_file():
             raise HTTPException(404, "not found")
         return FileResponse(f, media_type="audio/wav")
+
+    # ---------------------------------------------------------------- re-voice a recording (revoice.py)
+    def revoice_view(rid: str) -> dict:
+        try:
+            m, sc = revoice.meta(rid), revoice.script(rid)
+        except (KeyError, ValueError):
+            raise HTTPException(404, "recording not found") from None
+        return {**m, "script": sc.model_dump(mode="json"),
+                "stale": [ln.i for ln in sc.lines if dub.stale(sc, ln)] if sc.voice else [],
+                "max_rate": dub.MAX_RATE}
+
+    @app.get("/api/revoice")
+    def list_revoice() -> dict:
+        return {"items": revoice.all_items(), "max_seconds": revoice.MAX_SECONDS}
+
+    @app.post("/api/revoice", status_code=201)
+    def create_revoice(file: UploadFile = File(...), name: str = Form("", max_length=80)) -> dict:
+        """Your narration (audio or video, ≤ MAX_SECONDS): saved and transcribed into sentences you can edit."""
+        data = file.file.read(revoice.MAX_UPLOAD + 1)
+        if len(data) > revoice.MAX_UPLOAD:
+            raise HTTPException(413, f"under {revoice.MAX_UPLOAD // 2**20} MB please")
+        m = gpu_work(lambda: revoice.create(file.filename or "recording", data, name))
+        return revoice_view(m["id"])
+
+    @app.get("/api/revoice/{rid}")
+    def get_revoice(rid: str) -> dict:
+        return revoice_view(rid)
+
+    @app.put("/api/revoice/{rid}")
+    def put_revoice(rid: str, body: DubEdit) -> dict:
+        revoice_view(rid)
+        try:
+            revoice.edit(rid, body.voice, body.version, body.texts)
+        except (KeyError, ValueError):
+            raise HTTPException(404, "voice not found") from None
+        return revoice_view(rid)
+
+    @app.post("/api/revoice/{rid}/generate")
+    def generate_revoice(rid: str, body: DubGenerate | None = None) -> dict:
+        """Every sentence in the chosen voice at your timing → revoiced.mp4 (video) / revoiced.wav (audio)."""
+        sc = revoice_view(rid)["script"]
+        if not sc["voice"]:
+            raise HTTPException(400, "choose a voice first")
+        gpu_work(lambda: revoice.generate(rid, body.lines if body else None))
+        return revoice_view(rid)
+
+    @app.delete("/api/revoice/{rid}")
+    def delete_revoice(rid: str) -> dict:
+        revoice_view(rid)
+        revoice.delete(rid)
+        return {"ok": True}
+
+    @app.get("/api/revoice/{rid}/files/{name}")
+    def revoice_file(rid: str, name: str):
+        if not SAFE_NAME.match(name):
+            raise HTTPException(404, "not found")
+        try:
+            f = revoice.folder(rid) / name
+        except KeyError:
+            raise HTTPException(404, "not found") from None
+        if not f.is_file() or name in ("meta.json", "words.json"):
+            raise HTTPException(404, "not found")
+        return FileResponse(f)
 
     @app.get("/api/brand-voice/suggestions")
     def brand_voice_suggestions() -> dict[str, list[str]]:

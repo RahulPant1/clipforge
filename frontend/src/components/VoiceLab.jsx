@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { api } from '../api.js'
+import RevoicePanel from './RevoicePanel.jsx'
 
 // Lines to read: different moods and lengths give the voice more to learn from. Read naturally, ~5-15 s each.
 const SCRIPT = [
@@ -369,6 +370,8 @@ export default function VoiceLab() {
           </div>
         </>
       )}
+
+      <RevoicePanel voices={list.voices} Recorder={Recorder} />
     </div>
   )
 }

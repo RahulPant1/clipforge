@@ -99,12 +99,12 @@ def test_verdict_rule(checks, fix, want):
 def test_fixes_snap_to_sentences_and_respect_the_short_limit(monkeypatch):
     segs = talk(*S)
     c = clip_over(segs, 3, 4)
-    fix, why = judge.make_fix(segs, c, segs[2].start + 1.0, None, "setup")
+    fix, why, need = judge.make_fix(segs, c, segs[2].start + 1.0, None, "setup")
     assert why == "" and fix.start == segs[2].start and fix.end == c.end  # snapped back to the sentence start
     assert fix.reason.startswith("Setup: start") and "s earlier" in fix.reason
     monkeypatch.setattr(settings, "max_clip_seconds", 8.0)
-    fix, why = judge.make_fix(segs, c, segs[1].start, None, "setup", snap=False)
-    assert fix is None and "over the 8 s" in why
+    fix, why, need = judge.make_fix(segs, c, segs[1].start, None, "setup", snap=False)
+    assert fix is None and "over the 8 s" in why and need == round(c.end - segs[1].start, 1)
 
 
 # ------------------------------------------------------------------ Gemma picks sentences by number
@@ -215,3 +215,83 @@ def test_judge_eval_damage_and_summary():
     assert s["clean"]["flag_opening"] == 0.5 and s["late_start"]["caught"] == 0.5
     assert s["late_start"]["fix_within_tol"] == 0.5 and s["early_end"]["caught"] == 1.0
     assert "| clean | 2 |" in judge_eval.report_md(s, [])
+
+
+# ------------------------------------------------------------------ validation before rendering
+
+def judged(i, verdict, approved=True, need=None, start=None):
+    s = start if start is not None else i * 100.0
+    return Clip(index=i, start=s, end=s + 30, title=f"c{i}", hook="h", score=7, approved=approved,
+                review=ClipReview(verdict=verdict, start=s, end=s + 30, need_seconds=need))
+
+
+@pytest.mark.parametrize("verdicts, asked, kind, possible", [
+    ([("ready", True), ("trim", True), ("ready", False)], 2, "ok", 3),
+    ([("ready", True), ("needs_context", True), ("reject", False)], 3, "fewer", 1),
+    ([("needs_context", True), ("needs_context", True)], 2, "longer", 0),
+    ([("reject", True), ("reject", False)], 2, "none", 0),
+])
+def test_validation_recommends_fewer_longer_or_none(verdicts, asked, kind, possible):
+    clips = [judged(i, v, a, need=72.0 + i if v == "needs_context" else None)
+             for i, (v, a) in enumerate(verdicts, 1)]
+    v = judge.validate(clips, asked)
+    assert v["kind"] == kind and v["possible"] == possible
+    if any(x == "needs_context" for x, _ in verdicts):
+        assert "7" in v["text"] and "to be complete" in v["text"] and "Content ID" in v["text"] and v["need_seconds"]
+    assert [f["index"] for f in v["approved_flagged"]] == [i for i, (x, a) in enumerate(verdicts, 1)
+                                                           if a and x in ("needs_context", "reject")]
+
+
+def test_validation_ignores_trimmed_clips_and_unjudged_jobs():
+    c = judged(1, "reject")
+    c.start += 5  # trimmed since it was checked: its verdict is outdated
+    v = judge.validate([c, judged(2, "ready")], 1)
+    assert v["outdated"] == [1] and v["approved_flagged"] == [] and v["kind"] == "ok"
+    assert judge.validate([Clip(index=1, start=0, end=30, title="t", hook="h", score=5)], 1) is None
+
+
+def test_the_judge_sees_what_is_on_screen_when_there_is_a_scene_index():
+    from app.pipeline.scenes import Scene
+
+    segs = talk(*S)
+    c = clip_over(segs, 3, 5)
+    shots = [Scene(segs[4].start + 0.1, segs[5].end, segs[4].start + 1, "A dashboard shows the hour saved.", "screen")]
+    llm = JudgeLLM(ok())
+    judge.review(segs, c, llm, scenes=shots)
+    clip_part = llm.prompts[0].split("THE CLIP (")[1].split("Sentences AFTER")[0]
+    assert "↳ on screen (screen): A dashboard shows the hour saved." in clip_part
+    assert clip_part.index("Then you only add") < clip_part.index("↳ on screen") < clip_part.index("It sounds small")
+    assert "SHOWN there" in llm.prompts[0]
+    judge.review(segs, c, llm)
+    assert "on screen" not in llm.prompts[1]  # no scene index → prompt as before
+
+
+def test_refused_fix_records_how_long_the_idea_needs(monkeypatch):
+    monkeypatch.setattr(settings, "max_clip_seconds", 8.0)
+    segs = talk(*S)
+    c = clip_over(segs, 2, 3)
+    r = judge.review(segs, c, JudgeLLM(ok(setup_lines=[2])))
+    assert r.fix is None and r.verdict == "needs_context" and r.need_seconds == round(c.end - segs[0].start, 1)
+
+
+def test_produce_asks_to_confirm_flagged_clips(tmp_path, monkeypatch):
+    from .test_api import _fake_steps, _wait_status
+
+    monkeypatch.setattr(settings, "data_dir", tmp_path)
+    from app.main import create_app
+
+    steps, calls = _fake_steps(tmp_path)
+    llm = JudgeLLM(ok(faithful=False, faithful_note="Drops the 'but' that reverses it."))
+    with TestClient(create_app(steps=steps, llm_factory=lambda: llm)) as cl:
+        jid = cl.post("/api/jobs", json={"url": "https://youtube.com/watch?v=x", "num_clips": 1}).json()["id"]
+        _wait_status(cl, jid, "review")
+        (tmp_path / "jobs" / jid / "transcript.json").write_text(json.dumps([x.model_dump()
+                                                                             for x in talk(*S, start=20.0)]))
+        assert cl.post(f"/api/jobs/{jid}/clips/1/review").json()["clips"][0]["review"]["verdict"] == "reject"
+        r = cl.post(f"/api/jobs/{jid}/produce")
+        assert r.status_code == 409 and "#1 (reject)" in r.json()["detail"] and calls["produce"] == 0
+        v = cl.get(f"/api/jobs/{jid}/validation").json()["validation"]
+        assert v["kind"] == "none" and v["approved_flagged"] == [{"index": 1, "title": "c1", "verdict": "reject"}]
+        assert cl.post(f"/api/jobs/{jid}/produce", json={"confirm": True}).status_code == 200
+        _wait_status(cl, jid, "done")
+        assert calls["produce"] == 1

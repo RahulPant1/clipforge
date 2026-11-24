@@ -93,7 +93,7 @@ def prepare(source: str, job_dir: Path, num_clips: int, report: Reporter,
             clips = select_highlights(segs, num_clips, llm, lambda p, m: on_select(base + (1 - base) * p, m),
                                       keep=candidates or num_clips, trace=trace, topic=topic,
                                       **({"scenes": seen} if seen else {}))  # only when there are any
-            judge_clips(segs, clips, num_clips, llm, report, trace)
+            judge_clips(segs, clips, num_clips, llm, report, trace, scenes=seen or None)
     finally:
         llm.unload()
     if not clips and 0 < duration <= settings.max_clip_seconds:
@@ -128,18 +128,22 @@ def learn_pipeline(source: str, job_dir: Path, report: Reporter, llm: LLM | None
     return notes
 
 
-def judge_clips(segs: list[Segment], clips: list[Clip], n: int, llm: LLM, report: Reporter, trace: dict) -> None:
+def judge_clips(segs: list[Segment], clips: list[Clip], n: int, llm: LLM, report: Reporter, trace: dict,
+                scenes: list | None = None) -> None:
     """Clip judge on every candidate while Gemma is loaded (judge.py); a rejected pre-approved clip gives its place
     to the best spare that isn't rejected. Never fails prepare."""
     if not settings.judge_enabled or not clips or not any(s.words for s in segs):
         return
     try:
-        counts = judge.review_all(segs, clips, llm, lambda p, m: report(Stage.selecting, 0.9 + 0.1 * p, m))
-        trace["judge"] = {"verdicts": counts, "swapped": judge.rebalance(clips, n),
+        counts = judge.review_all(segs, clips, llm, lambda p, m: report(Stage.selecting, 0.9 + 0.1 * p, m),
+                                  scenes=scenes)
+        trace["judge"] = {"verdicts": counts, "swapped": judge.rebalance(clips, n), "scenes": bool(scenes),
+                          "validation": None,
                           "clips": [{"start": c.start, "end": c.end, "verdict": c.review.verdict,
                                      "fix": c.review.fix.model_dump() if c.review.fix else None,
                                      "issues": [f"{x.key}: {x.note}" for x in c.review.checks if not x.ok]}
                                     for c in clips if c.review]}
+        trace["judge"]["validation"] = judge.validate(clips, n)
     except Exception as e:
         log.exception("clip judge failed — candidates kept unjudged")
         trace["judge"] = {"error": str(e)[:300]}

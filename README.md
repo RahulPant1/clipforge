@@ -61,6 +61,10 @@ YouTube URL / file
 - **🔁 Re-voice a recording:** in the Voice Library, record or import your narration (audio or video, up to 3 min)
   and have it spoken again in any library voice — every sentence starts where you said it, so the timing and pauses
   stay (your intonation doesn't: the voice reads the words its own way). A video keeps its picture
+- **Check before creating:** the Pick step opens with the judge's verdict on the whole job — how many of the shorts
+  you asked for can be complete within 59 s, how long the incomplete ideas would need, and what to do (create fewer,
+  allow longer clips, or skip a video that has no self-contained moment). It only recommends: **Approve only the
+  complete ones** and **Apply all fixes** are buttons, and creating shorts from flagged clips asks you to confirm
 - **Clip judge:** every candidate is checked like an editor would — does it start mid-thought or lean on something
   said before it, does it stop before its payoff, does the cut change what the speaker meant — and gets a verdict
   (ready / trim / needs context / reject) with the evidence and a one-click **Apply fix** that moves the edges to

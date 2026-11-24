@@ -616,3 +616,12 @@ aside { min-width: 0; }  /* a long History path must shrink (ellipsis), not wide
 .revoice .revoice-out { display: grid; grid-template-columns: 90px 1fr; gap: 6px 10px; align-items: center; }
 .revoice .revoice-out video { width: 100%; max-height: 260px; border-radius: 8px; background: #000; }
 .revoice .revoice-out .btn { grid-column: 2; justify-self: start; }
+
+/* Validation before rendering (Pick step) */
+.validation { display: flex; flex-direction: column; gap: 8px; margin-bottom: 12px; border-left: 4px solid var(--muted); }
+.validation.k-ok { border-left-color: var(--good, #3fb950); }
+.validation.k-fewer, .validation.k-longer { border-left-color: var(--warn); }
+.validation.k-none { border-left-color: var(--bad); }
+.validation .val-head { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; }
+.validation .val-counts { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+.validation p { margin: 0; line-height: 1.45; }

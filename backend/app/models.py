@@ -143,6 +143,7 @@ class ClipReview(BaseModel):
     end: float
     model: str | None = None
     at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    need_seconds: float | None = None  # the whole idea's length when it doesn't fit max_clip_seconds
 
 
 class Clip(BaseModel):
@@ -451,3 +452,7 @@ class DubEdit(BaseModel):
 
 class DubGenerate(BaseModel):
     lines: list[int] | None = None  # None = every line that needs it; else regenerate just these
+
+
+class ProduceRequest(BaseModel):
+    confirm: bool = False  # yes, create approved clips the judge flagged (needs context / reject)

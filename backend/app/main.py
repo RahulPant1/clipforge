@@ -35,6 +35,7 @@ from .models import (
     JobStatus,
     Post,
     PostEdit,
+    ProduceRequest,
     Purpose,
     QuoteEdit,
     RecordingEdit,
@@ -710,11 +711,16 @@ def create_app(pipeline=None, start_worker: bool = True, llm_factory=OllamaClien
         return store.update(job_id, clips=clips)
 
     @app.post("/api/jobs/{job_id}/produce", response_model=Job)
-    def produce_job(job_id: str) -> Job:
-        """Write posts + render every approved clip that's missing or changed."""
+    def produce_job(job_id: str, body: ProduceRequest | None = None) -> Job:
+        """Write posts + render every approved clip that's missing or changed. Approved clips the judge marked
+        needs_context / reject must be confirmed ({"confirm": true}) — the check before rendering."""
         job = editable(job_id)
         if not any(c.approved for c in job.clips):
             raise HTTPException(400, "approve at least one clip first")
+        flagged = [c for c in job.clips if c.approved and judge.current(c) and c.review.verdict in judge.FLAGGED]
+        if flagged and not (body and body.confirm):
+            names = ", ".join(f"#{c.index} ({c.review.verdict.replace('_', ' ')})" for c in flagged)
+            raise HTTPException(409, f"confirm creating clips the judge flagged: {names}")
         worker.submit_produce(job_id)
         return store.get(job_id)
 
@@ -880,6 +886,14 @@ def create_app(pipeline=None, start_worker: bool = True, llm_factory=OllamaClien
         finally:
             GPU_LOCK.release()
 
+    @app.get("/api/jobs/{job_id}/validation")
+    def job_validation(job_id: str) -> dict:
+        """Before rendering: how many complete shorts this job can give, how long the rest need, a recommendation."""
+        job = store.get(job_id)
+        if not job:
+            raise HTTPException(404, "job not found")
+        return {"validation": judge.validate(job.clips, job.num_clips)}
+
     @app.post("/api/jobs/{job_id}/clips/{index}/review", response_model=Job)
     def review_clip(job_id: str, index: int) -> Job:
         """Clip judge on the clip as it is now (after your trims): verdict, what's missing, a suggested fix."""
@@ -891,7 +905,9 @@ def create_app(pipeline=None, start_worker: bool = True, llm_factory=OllamaClien
         try:
             try:
                 segs = [Segment(**x) for x in json.loads((d / "transcript.json").read_text())]
-                result = judge.review(segs, clip, llm_factory())
+                scene_index = scenes.load(d)  # what's on screen counts too, for videos that have a scene index
+                shown = scene_index.for_prompt() if scene_index and scene_index.mode == "described" else None
+                result = judge.review(segs, clip, llm_factory(), shown or None)
             except Exception as e:
                 if store.get(job_id) is None:
                     raise HTTPException(404, "job was deleted meanwhile") from e

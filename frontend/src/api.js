@@ -95,7 +95,8 @@ export const api = {
   // review & editing
   editClip: (id, index, changes) => req(`/jobs/${id}/clips/${index}`, json('PATCH', changes)),
   addClip: (id, clip) => req(`/jobs/${id}/clips`, json('POST', clip)),
-  produce: (id) => req(`/jobs/${id}/produce`, { method: 'POST' }),
+  produce: (id, confirm = false) => req(`/jobs/${id}/produce`, json('POST', { confirm })),
+  validation: (id) => req(`/jobs/${id}/validation`),
   learnNotes: (id) => req(`/jobs/${id}/learn`),
   makeLearn: (id) => req(`/jobs/${id}/learn`, { method: 'POST' }),
   dub: (id, index) => req(`/jobs/${id}/clips/${index}/dub`),

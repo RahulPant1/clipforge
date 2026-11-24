@@ -41,7 +41,7 @@ Sentences BEFORE the clip (B1 is right before it; not in the clip):
 
 THE CLIP ({dur:.0f} s):
 {clip}
-
+{screen}
 Sentences AFTER the clip (A1 is right after it; not in the clip):
 {after}
 
@@ -165,30 +165,33 @@ def _snap(t: float, edges: list[float]) -> float | None:
 
 
 def make_fix(segs: list[Segment], clip: Clip, start: float | None, end: float | None,
-             reason: str, snap: bool = True) -> tuple[ClipFix | None, str]:
+             reason: str, snap: bool = True) -> tuple[ClipFix | None, str, float | None]:
     """Snap suggested edges to sentence edges; refuse if the clip would pass max_clip_seconds.
-    Returns (fix, why_not) — why_not explains a fix that couldn't be applied."""
+    Returns (fix, why_not, needed): why_not explains a fix that couldn't be applied; needed = the length the whole
+    idea takes when that's over max_clip_seconds (the validation summary suggests a duration from it)."""
     starts, ends = sentence_bounds(segs)
     s, e = clip.start, clip.end
     if start is not None and start < clip.start:
         s = _snap(start, starts) if snap else start
         if s is None:
-            return None, "the suggested start isn't near a sentence start"
+            return None, "the suggested start isn't near a sentence start", None
     if end is not None and end > clip.end:
         e = _snap(end, ends) if snap else end
         if e is None:
-            return None, "the suggested end isn't near a sentence end"
+            return None, "the suggested end isn't near a sentence end", None
     if (s, e) == (clip.start, clip.end):
-        return None, ""
+        return None, "", None
     if e - s > settings.max_clip_seconds:
-        return None, (f"fixing it needs {e - s:.0f} s — over the {settings.max_clip_seconds:.0f} s a Short allows")
+        return None, (f"fixing it needs {e - s:.0f} s — over the {settings.max_clip_seconds:.0f} s a Short allows"), \
+            round(e - s, 1)
     moves = ([f"start {clip.start - s:.1f} s earlier"] if s < clip.start else []) + \
             ([f"end {e - clip.end:.1f} s later"] if e > clip.end else [])
     why = f"{reason[0].upper()}{reason[1:]}: " if reason else ""
-    return ClipFix(start=round(s, 2), end=round(e, 2), reason=f"{why}{' and '.join(moves)}."[:300]), ""
+    return ClipFix(start=round(s, 2), end=round(e, 2), reason=f"{why}{' and '.join(moves)}."[:300]), "", None
 
 
-def rule_fix(segs: list[Segment], clip: Clip, checks: list[ReviewCheck]) -> tuple[ClipFix | None, str]:
+def rule_fix(segs: list[Segment], clip: Clip,
+             checks: list[ReviewCheck]) -> tuple[ClipFix | None, str, float | None]:
     """Mid-sentence edges: back to the sentence start / on to the sentence end (when within SNAP_REACH)."""
     starts, ends = sentence_bounds(segs)
     s = e = None
@@ -199,7 +202,7 @@ def rule_fix(segs: list[Segment], clip: Clip, checks: list[ReviewCheck]) -> tupl
         later = [t for t in ends if t > clip.end + 0.01]
         e = min(later) if later and min(later) - clip.end <= 15 else None
     if s is None and e is None:
-        return None, "no sentence edge close enough"
+        return None, "no sentence edge close enough", None
     return make_fix(segs, clip, s, e, "whole sentences")
 
 
@@ -241,17 +244,44 @@ def _times(words: list[tuple[int, Word]]) -> set[float]:
     return {round(w.start, 1) for _, w in words} | {round(w.end, 1) for _, w in words}
 
 
-def ask(segs: list[Segment], clip: Clip, llm: LLM) -> tuple[list[ReviewCheck], float | None, float | None, str]:
+SCREEN_NOTE = """
+Lines in THE CLIP starting with "↳ on screen" are what is visible while the line above is spoken (one frame per
+scene), not speech. A setup or payoff that is clearly SHOWN there (a result, a screen, a demo) counts as inside
+the clip."""
+
+
+def _clip_lines(inside: list[tuple[int, Word]], scenes: list | None) -> tuple[str, bool]:
+    """THE CLIP's lines, with each scene's description under the line being spoken when it starts."""
+    text = _lines(inside)
+    if not scenes or not inside:
+        return text, False
+    lines = text.split("\n")
+    starts = [float(ln[1:].split("-", 1)[0]) for ln in lines]
+    lo, hi = inside[0][1].start, inside[-1][1].end
+    out, shown = [], False
+    for k, ln in enumerate(lines):
+        out.append(ln)
+        nxt = starts[k + 1] if k + 1 < len(starts) else hi + 0.01
+        for sc in scenes:
+            if lo <= sc.start < hi and (k == 0 or sc.start >= starts[k]) and sc.start < nxt:
+                out.append(f"  ↳ on screen ({sc.kind.replace('_', ' ')}): {sc.description}")
+                shown = True
+    return "\n".join(out), shown
+
+
+def ask(segs: list[Segment], clip: Clip, llm: LLM,
+        scenes: list | None = None) -> tuple[list[ReviewCheck], float | None, float | None, str]:
     """Gemma's checks + the start/end its chosen sentences imply. It picks sentence NUMBERS (B1.., A1..), so every
     flag points at real words outside the clip and every fix lands on a sentence edge (free-text quotes and times
     were unreliable: on real clips the setup flag either fired on self-introducing clips or never)."""
     before, inside, after = views(segs, clip)
+    clip_text, shown = _clip_lines(inside, scenes)
     bs = sentences(before)[-CONTEXT_SENTENCES:][::-1]  # B1 = right before the clip
     as_ = sentences(after)[:CONTEXT_SENTENCES]
     raw = llm.chat_json(PROMPT.format(
         before="\n".join(_sentence_line(f"B{k}", ws) for k, ws in reversed(list(enumerate(bs, 1))))
         or "(the video starts here)",
-        clip=_lines(inside), dur=clip.end - clip.start,
+        clip=clip_text, dur=clip.end - clip.start, screen=SCREEN_NOTE if shown else "",
         after="\n".join(_sentence_line(f"A{k}", ws) for k, ws in enumerate(as_, 1)) or "(the video ends here)"),
         SCHEMA, think=settings.judge_think)
     if not isinstance(raw, dict):
@@ -309,36 +339,39 @@ def _text(ws: list[Word]) -> str:
     return "".join(w.word for w in ws).strip()
 
 
-def review(segs: list[Segment], clip: Clip, llm: LLM | None) -> ClipReview:
-    """The clip judged as it is now (start-end, struck words removed)."""
+def review(segs: list[Segment], clip: Clip, llm: LLM | None, scenes: list | None = None) -> ClipReview:
+    """The clip judged as it is now (start-end, struck words removed). scenes: the job's scene index lines
+    (scenes.SceneIndex.for_prompt()) — only videos that have one; what's on screen then counts too."""
     rules = rule_checks(segs, clip)
-    checks, fix, why_not, model = list(rules), None, "", None
+    checks, fix, why_not, model, need = list(rules), None, "", None, None
     if llm is not None:
         try:
-            asked, s, e, reason = ask(segs, clip, llm)
+            asked, s, e, reason = ask(segs, clip, llm, scenes)
             model = getattr(llm, "model", None) or "gemma"
             have = {(c.key, c.ok) for c in asked}
             checks = asked + [r for r in rules if (r.key, False) not in have]  # rules add what Gemma didn't see
             if s is not None or e is not None:
-                fix, why_not = make_fix(segs, clip, s, e, reason, snap=False)  # already sentence edges
+                fix, why_not, need = make_fix(segs, clip, s, e, reason, snap=False)  # already sentence edges
         except Exception as e:  # one bad answer never costs the job: the measured checks still stand
             log.warning("clip judge: Gemma failed for %.0f-%.0f s (%s) — rule checks only", clip.start, clip.end, e)
     if fix is None and any(not c.ok and c.key in ("opening", "ending") for c in checks):
-        rfix, rwhy = rule_fix(segs, clip, checks)
+        rfix, rwhy, rneed = rule_fix(segs, clip, checks)
         fix, why_not = (rfix, "") if rfix else (None, why_not or rwhy)
+        need = need or rneed
     if why_not:
         checks.append(ReviewCheck(key="fix", ok=False, source="rule", note=f"No automatic fix: {why_not}."))
     return ClipReview(verdict=verdict(checks, fix), checks=checks, fix=fix, start=clip.start, end=clip.end,
-                      model=model)
+                      model=model, need_seconds=need if not fix else None)
 
 
-def review_all(segs: list[Segment], clips: list[Clip], llm: LLM | None, on_progress=None) -> dict:
+def review_all(segs: list[Segment], clips: list[Clip], llm: LLM | None, on_progress=None,
+               scenes: list | None = None) -> dict:
     """Every candidate (in place) → counts per verdict, for the trace."""
     counts: dict[str, int] = {}
     for i, c in enumerate(clips):
         if on_progress:
             on_progress(i / max(len(clips), 1), f"Checking clip {i + 1}/{len(clips)}")
-        c.review = review(segs, c, llm)
+        c.review = review(segs, c, llm, scenes)
         counts[c.review.verdict] = counts.get(c.review.verdict, 0) + 1
     return counts
 
@@ -357,3 +390,53 @@ def rebalance(clips: list[Clip], n: int) -> list[str]:
         c.approved, sub.approved = False, True
         changed.append(f"#{c.index} rejected → #{sub.index} approved instead")
     return changed
+
+
+# ------------------------------------------------------------------ job-level validation (before rendering)
+
+FLAGGED = ("needs_context", "reject")
+
+
+def current(c: Clip) -> bool:
+    """The clip's verdict is about the clip as it is now (not trimmed since)."""
+    r = c.review
+    return bool(r) and abs(r.start - c.start) < 0.05 and abs(r.end - c.end) < 0.05
+
+
+def validate(clips: list[Clip], asked: int) -> dict | None:
+    """What the judge's verdicts mean for the job: how many complete shorts it can really give, how long the
+    incomplete ideas need, and one recommendation. Recommends only — you decide (approve / trim / confirm).
+    None when nothing has been judged (no-speech jobs, judge off)."""
+    judged = [c for c in clips if c.review]
+    if not judged:
+        return None
+    fresh = [c for c in judged if current(c)]
+    by = {k: [c for c in fresh if c.review.verdict == k] for k in ("ready", "trim", "needs_context", "reject")}
+    possible = len(by["ready"]) + len(by["trim"])
+    needs = sorted(c.review.need_seconds for c in by["needs_context"] if c.review.need_seconds)
+    limit = settings.max_clip_seconds
+    approved_flagged = [{"index": c.index, "title": c.title, "verdict": c.review.verdict}
+                        for c in fresh if c.approved and c.review.verdict in FLAGGED]
+    if possible >= asked:
+        kind, text = "ok", (f"All {asked} short{'s' if asked != 1 else ''} you asked for can be complete — "
+                            f"{possible} candidate{'s qualify' if possible != 1 else ' qualifies'} "
+                            f"({len(by['ready'])} ready, {len(by['trim'])} after a one-click fix).")
+    elif possible:
+        kind = "fewer"
+        text = (f"Only {possible} of the {asked} shorts you asked for can be complete within {limit:.0f} s"
+                f" ({len(by['ready'])} ready, {len(by['trim'])} after a fix).")
+    elif needs:
+        kind, text = "longer", f"No complete idea fits in {limit:.0f} s here."
+    else:
+        kind, text = "none", "No self-contained moment found — this video may not suit Shorts as it is."
+    if needs:
+        lo, hi = needs[0], needs[-1]
+        span = f"{lo:.0f} s" if round(lo) == round(hi) else f"{lo:.0f}-{hi:.0f} s"
+        ideas = f"{len(needs)} more idea{'s need' if len(needs) != 1 else ' needs'}"
+        text += (f" {ideas} {span} to be complete: you could allow longer clips (MAX_CLIP_SECONDS) — Shorts up to"
+                 f" 3 minutes are allowed, but one with any Content ID claim is blocked worldwide.")
+    return {"asked": asked, "judged": len(judged), "outdated": [c.index for c in judged if not current(c)],
+            "ready": [c.index for c in by["ready"]], "trim": [c.index for c in by["trim"]],
+            "needs_context": [c.index for c in by["needs_context"]], "reject": [c.index for c in by["reject"]],
+            "possible": possible, "need_seconds": needs, "limit": limit, "kind": kind, "text": text,
+            "approved_flagged": approved_flagged}

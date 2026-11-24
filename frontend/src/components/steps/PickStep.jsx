@@ -285,9 +285,70 @@ function Candidate({ job, clip, others, transcript, wave, total, busy, act, relo
   )
 }
 
+// The check before rendering: what the clip judge's verdicts mean for this job, and what to do about it.
+// It only recommends — every change here is a button you press.
+function Validation({ job, v, busy, act }) {
+  if (!v) return null
+  const byIndex = Object.fromEntries(job.clips.map((c) => [c.index, c]))
+  const rank = (c) => c.score + (c.relevance || 0)
+  const complete = [...v.ready, ...v.trim].map((i) => byIndex[i]).filter(Boolean).sort((a, b) => rank(b) - rank(a))
+  const keep = new Set(complete.slice(0, v.asked).map((c) => c.index))
+  const approvalOff = job.clips.some((c) => c.approved !== keep.has(c.index)) && complete.length > 0
+  const fixable = v.trim.map((i) => byIndex[i]).filter((c) => c?.review?.fix)
+  const approveComplete = () => act(async () => {
+    for (const c of job.clips) {
+      if (c.approved !== keep.has(c.index)) await api.editClip(job.id, c.index, { approved: keep.has(c.index) })
+    }
+  }).catch(() => {})
+  const applyFixes = () => act(async () => {
+    for (const c of fixable) await api.editClip(job.id, c.index, { start: c.review.fix.start, end: c.review.fix.end })
+  }).catch(() => {})
+  const need = v.need_seconds.length
+    ? ` (need ${Math.round(v.need_seconds[0])}${v.need_seconds.length > 1 ? `–${Math.round(v.need_seconds.at(-1))}` : ''} s)` : ''
+  return (
+    <div className={`card validation k-${v.kind}`}>
+      <div className="val-head">
+        <b>{{ ok: '✓ Ready to create', fewer: '⚠ Fewer complete clips than asked', longer: '⚠ The ideas here need longer clips',
+          none: '✕ No self-contained moment found' }[v.kind]}</b>
+        <span className="muted small">checked by the clip judge before anything is rendered</span>
+      </div>
+      <p>{v.text}</p>
+      <div className="val-counts small">
+        <span className="chip goodchip">✓ {v.ready.length} ready</span>
+        <span className="chip">✂ {v.trim.length} after a fix</span>
+        <span className="chip warnchip">⚠ {v.needs_context.length} need context{need}</span>
+        <span className="chip badchip">✕ {v.reject.length} reject</span>
+        {v.outdated.length > 0 && (
+          <span className="muted">· {v.outdated.length} changed since checked — use “Check again” on {v.outdated.length === 1 ? 'it' : 'them'}</span>
+        )}
+      </div>
+      {(approvalOff || fixable.length > 0) && (
+        <div className="row-btns">
+          {approvalOff && (
+            <button className="btn sm" disabled={busy} onClick={approveComplete}
+                    title="Approve the best complete clips (up to the number you asked for), un-approve the rest">
+              Approve only the complete ones ({keep.size})
+            </button>
+          )}
+          {fixable.length > 0 && (
+            <button className="btn sm ghost" disabled={busy} onClick={applyFixes}
+                    title="Move each fixable clip's edges to the sentences the judge suggested">
+              Apply all {fixable.length} fix{fixable.length === 1 ? '' : 'es'}
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
 export default function PickStep({ job, busy, act, go, transcript, reloadTranscript }) {
   const [filter, setFilter] = useState('all')
   const [wave, setWave] = useState(null)
+  const [check, setCheck] = useState(null) // job-level validation from the clip judge
+  useEffect(() => {
+    api.validation(job.id).then((r) => setCheck(r.validation)).catch(() => setCheck(null))
+  }, [job.id, job.updated_at])
   useEffect(() => {
     api.waveform(job.id).then(setWave).catch(() => setWave(null)) // no waveform: the timeline still works
   }, [job.id])
@@ -320,6 +381,8 @@ export default function PickStep({ job, busy, act, go, transcript, reloadTranscr
         </div>
       </div>
 
+      <Validation job={job} v={check} busy={busy} act={act} />
+
       <div className="cands">
         {shown.map((c) => (
           <Candidate key={c.index} job={job} clip={c} transcript={transcript} wave={wave} total={total}
@@ -335,7 +398,14 @@ export default function PickStep({ job, busy, act, go, transcript, reloadTranscr
               <b>{pending.length}</b> approved clip{pending.length > 1 && 's'} need{pending.length === 1 && 's'} posts
               and/or rendering
             </span>
-            <button className="primary" disabled={busy} onClick={() => act(() => api.produce(job.id)).catch(() => {})}>
+            <button className="primary" disabled={busy} onClick={() => {
+              const flagged = check?.approved_flagged || []
+              if (flagged.length && !window.confirm(
+                `The clip judge flagged ${flagged.length} approved clip${flagged.length > 1 ? 's' : ''}:\n\n`
+                + flagged.map((f) => `#${f.index} ${f.title} — ${f.verdict.replace('_', ' ')}`).join('\n')
+                + '\n\nCreate them anyway?')) return
+              act(() => api.produce(job.id, flagged.length > 0)).catch(() => {})
+            }}>
               {busy ? 'Working…' : `Create shorts & posts (${pending.length}) →`}
             </button>
           </>

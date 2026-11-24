@@ -95,7 +95,14 @@ backend/                FastAPI + pipeline (Python 3.11, conda env "clipforge")
                         (UI: "outdated" after a trim). Measured (app.judge_eval, damaged copies of real clips): free-
                         text quotes/times never worked; numbered picks with reasoning OFF flagged 88 % of clean clips;
                         reasoning ON (JUDGE_THINK unset) catches 100 % of cut openings/endings, ~12 s/clip. Clean picks
-                        get flagged ~65 % — on reading them, mostly real mid-sentence cuts by selection
+                        get flagged ~65 % — on reading them, mostly real mid-sentence cuts by selection.
+                        Validation before rendering: a refused fix records need_seconds; validate(clips, num_clips) →
+                        possible (ready + trim, verdicts on the CURRENT span only — current()), need range, kind ok |
+                        fewer | longer | none + text, approved_flagged. GET /jobs/{id}/validation; POST /produce 409s
+                        while approved clips are needs_context/reject unless {"confirm": true}. Recommends only — the
+                        Pick step panel's "Approve only the complete ones" / "Apply all fixes" are buttons you press.
+                        With a scene index (mode described), review() also gets for_prompt() scenes as "↳ on screen"
+                        notes in THE CLIP + SCREEN_NOTE (prepare and Check again); without one the prompt is unchanged
     dub.py              🎙 Replace voice per clip: dub_N.json (DubScript: voice/version, lines = judge.sentences of the
                         clip — original text + SOURCE start, editable text, generated file, Whisper word timings) →
                         generate() = only stale lines (text/voice/version changed) or `only` in ONE tts.speak load +

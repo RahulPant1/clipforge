@@ -594,7 +594,7 @@ For a later discussion (not planned yet):
       human timings. Evaluate full `large-v3` only if Turbo keeps missing important words.
 - [ ] **Audio-based speaker suggestions:** evaluate speaker labeling on off-camera dialogue and interviews
       with frequent cuts. Keep manual review before applying labels.
-- [ ] **Batch narration review filters:** jump to unlabeled lines, flagged script lines, and shorts over duration.
+- [x] **Batch narration review filters:** jump to unlabeled lines, flagged script lines, and shorts over duration.
 - [ ] **Compare timing versions.** Compare automatic and manual anchors around the same output range.
 - [ ] **Other voice ideas.** Spoken hook intros, Script → Short (script → voice-over → stills with motion or template
       cards), lip-sync, jump cuts on dubbed clips, and re-voicing longer source videos.

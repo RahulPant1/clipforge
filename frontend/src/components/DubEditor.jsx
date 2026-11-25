@@ -33,7 +33,7 @@ function LineComparison({ source, generated, stale, sourceSeconds }) {
   </details>
 }
 
-export function Line({ ln, stale, busy, maxRate, onText, onRegen, onPreview, onSuggest, src, comparisonSource, children, warnings = [] }) {
+export function Line({ ln, stale, busy, maxRate, onText, onRegen, onPreview, onSuggest, src, comparisonSource, rowId, children, warnings = [] }) {
   const [text, setText] = useState(ln.text)
   const [suggestion, setSuggestion] = useState(null)
   const [suggesting, setSuggesting] = useState(false)
@@ -47,7 +47,7 @@ export function Line({ ln, stale, busy, maxRate, onText, onRegen, onPreview, onS
     try { setSuggestion(await onSuggest()) } catch { /* shown by act() */ } finally { setSuggesting(false) }
   }
   return (
-    <li className="dub-line">
+    <li className="dub-line" id={rowId} tabIndex={rowId ? -1 : undefined}>
       <span className="muted small dub-t">{fmtPrecise(ln.start)}</span>
       <div className="dub-body">
         <span className="muted small dub-orig" title="What was said">{ln.original}</span>
@@ -181,7 +181,7 @@ function SavedVoiceSelect({ label, voices, value, disabled, onChange, fallback =
 }
 
 // 🎙 Replace voice: the clip's sentences re-spoken in a Voice Library voice, laid out where the originals were.
-export default function DubEditor({ job, clip, busy, act, setOpt, fixedVoice = false, previewPacing, previewSmartLimit, onWarnings, onFit, batchVoices }) {
+export default function DubEditor({ job, clip, busy, act, setOpt, fixedVoice = false, previewPacing, previewSmartLimit, onIssues, onFit, batchVoices, reviewId }) {
   const [data, setData] = useState(null)
   const [libraryVoices, setVoices] = useState([])
   const voices = batchVoices ?? libraryVoices
@@ -210,8 +210,24 @@ export default function DubEditor({ job, clip, busy, act, setOpt, fixedVoice = f
   useEffect(() => setPreview(''), [pacing, smartLimit, clip.start, clip.end])
   useEffect(() => setSpeakerSuggestions(null), [job.id, clip.index, clip.start, clip.end])
   useEffect(() => {
-    onWarnings?.(clip.index, Object.keys(data?.warnings || {}).length)
-  }, [clip.index, data?.warnings, onWarnings])
+    if (!onIssues) return
+    if (!data) {
+      onIssues(clip.index, null)
+      return
+    }
+    const lines = (data?.script.lines ?? []).filter((line) =>
+      line.start >= clip.start && line.start < clip.end && line.text.trim())
+    const named = new Set(lines.map((line) => line.speaker).filter(Boolean))
+    const assigned = new Set(lines.map((line) =>
+      line.voice_override || data.script.speaker_voices?.[line.speaker] || data.script.voice))
+    const staleIds = new Set(data?.stale)
+    const summarize = (line) => ({ i: line.i, text: line.text, start: line.start })
+    onIssues(clip.index, {
+      flagged: lines.filter((line) => data.warnings?.[line.i]?.length).map(summarize),
+      stale: lines.filter((line) => line.file && staleIds.has(line.i)).map(summarize),
+      unlabeled: named.size > 1 || assigned.size > 1 ? lines.filter((line) => !line.speaker).map(summarize) : [],
+    })
+  }, [clip.index, clip.start, clip.end, data, onIssues])
 
   const run = async (fn, label) => {
     setPreview('')
@@ -353,7 +369,7 @@ export default function DubEditor({ job, clip, busy, act, setOpt, fixedVoice = f
           ))}
           <ul className="dub-lines">
             {s.lines.filter((l) => l.start >= clip.start && l.start < clip.end).map((ln) => (
-              <Line key={ln.i} ln={ln} stale={stale.has(ln.i)} busy={busy || !!working} maxRate={data.max_rate}
+              <Line key={ln.i} rowId={reviewId ? `${reviewId}-line-${ln.i}` : undefined} ln={ln} stale={stale.has(ln.i)} busy={busy || !!working} maxRate={data.max_rate}
                     warnings={data.warnings?.[ln.i]}
                     comparisonSource={(data.warnings?.[ln.i]?.length || ln.fit === 'too_long' || ln.file)
                       ? api.dubSourceAudio(job.id, clip.index, ln.i) : null}

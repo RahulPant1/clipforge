@@ -91,7 +91,8 @@ YouTube URL / file
   until then. Open a short's script review in a batch to override its duration mode or Smart limit.
   ClipForge keeps each override when retrying failed narration.
   **Fit before queueing** shows every prepared short's estimate and flags likely overruns. Review and
-  accept a suggested shorter line directly from the summary.
+  accept a suggested shorter line directly from the summary. Use **Review issues** to jump to overruns,
+  flagged lines, stale takes, or unlabeled speakers in clips with multiple assignments.
   Choose **Suggest shorter wording** in batch narration to review a more concise script before generating speech.
   **Match source cues** and **Scene-aware pacing** remain available for cue-based timing.
 - **Pronunciation and speaker voices:** save all-voice or voice-specific spoken spellings under **Voice Library →

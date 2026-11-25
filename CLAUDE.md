@@ -455,6 +455,9 @@ publish: PATCH post {status, url}: posted_at set on → posted (cleared when it 
       rewrite. The script changes only on acceptance, and a proposal based on older wording cannot overwrite
       a newer line. A live local Gemma trial completed the tutorial's cut-off line by removing a trailing
       connector and keeping the complete statement.
+- [x] **Narration duration controls:** fixed video duration, natural voice pacing, and Smart fitting are
+      available in batch narration and per short. Review approximate duration and tempo before generation,
+      and optionally set a maximum export duration for Smart mode.
 - [x] **Natural pacing for narration:** an opt-in mode keeps generated speech at full length and slows the picture
       uniformly if it needs more time. The existing source-timing mode remains the default.
 - [x] **Retain source ambience:** optional CPU Demucs separation caches the non-vocal stem for a clip range and
@@ -572,6 +575,10 @@ For a later discussion (not planned yet):
       With automatic language selection, WER fell from 88.8% (Small) to 68.1% (Turbo). With Hindi forced,
       WER was 93.1% and 66.5%, respectively. Mixed-script scoring kept Devanagari marks and did not
       transliterate. The sample favors an optional Turbo mode for mixed-language jobs, with manual review.
+- [x] **Per-job transcription model:** New job, batch, upload, study notes and CLI can select Small or Turbo for
+      the source transcript. The Worker preserves the choice across restarts and model choices use different
+      transcript cache keys. Turbo can load from `data/models/whisper/large-v3-turbo` inside the ignored local
+      data folder. The configured server default on this machine is Small.
 - [x] **Real narration-to-export smoke test:** local Gemma repair, saved v2 voice batch, two B-roll matches and
       placements, scene anchor, ranged preview, square export, captions, and ZIP passed in a temporary job.
 - [ ] **Broader reference coverage:** add independent checks for proper names and word alignment against

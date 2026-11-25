@@ -6,7 +6,7 @@ import pytest
 
 from app.config import settings
 from app.jobs import GPU_LOCK, JobStore, QueueConflict, Worker
-from app.models import Clip, JobStatus, NarrationBatch, NarrationItem, Post, Stage
+from app.models import Clip, JobMode, JobStatus, NarrationBatch, NarrationItem, Post, Stage
 
 
 def test_failed_job_replace_keeps_saved_and_in_memory_state(tmp_path, monkeypatch):
@@ -56,6 +56,27 @@ def test_restart_preserves_ready_narrations_and_makes_interrupted_ones_retryable
     assert restarted.status == JobStatus.done
     assert restarted.narration.items[1].status == "ready"
     assert restarted.narration.items[2].status == "failed"
+
+
+@pytest.mark.parametrize("mode,purpose,step", [
+    (JobMode.review, "create", "prepare"), (JobMode.auto, "create", "run"), (JobMode.review, "learn", "learn"),
+])
+def test_saved_job_model_reaches_transcription_entry_points(tmp_path, mode, purpose, step):
+    from app.pipeline.orchestrator import Steps
+
+    seen = []
+
+    def run(*args, whisper_model, **kwargs):
+        seen.append(whisper_model)
+        return []
+
+    store = JobStore(tmp_path)
+    job = store.create("source", 1, mode=mode, purpose=purpose, whisper_model="large-v3-turbo")
+    reloaded = JobStore(tmp_path)
+    worker = Worker(reloaded, steps=Steps(**{step: run}))
+    worker._run("run", job.id, source=job.source)
+    assert seen == ["large-v3-turbo"]
+    assert reloaded.get(job.id).status in (JobStatus.review, JobStatus.done)
 
 
 def test_concurrent_submissions_claim_job_once(tmp_path):

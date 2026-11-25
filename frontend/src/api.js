@@ -67,10 +67,10 @@ export const api = {
   eventsUrl: () => '/api/events',
   createJob: (url, num_clips, mode, topic = '', hinglish = true, known = {}) =>
     req('/jobs', json('POST', { url, num_clips, mode, topic, hinglish, ...known })),
-  createBatch: (urls, num_clips, mode, topic = '', hinglish = true, info = {}) =>
-    req('/jobs/batch', json('POST', { urls, num_clips, mode, topic, hinglish, info })),
+  createBatch: (urls, num_clips, mode, topic = '', hinglish = true, info = {}, whisper_model = null) =>
+    req('/jobs/batch', json('POST', { urls, num_clips, mode, topic, hinglish, info, whisper_model })),
   batchExpand: (text) => req('/batch/expand', json('POST', { text })),
-  uploadJob: (file, num_clips, mode, topic = '', hinglish = true, purpose = 'create') => {
+  uploadJob: (file, num_clips, mode, topic = '', hinglish = true, purpose = 'create', whisperModel = null) => {
     const fd = new FormData()
     fd.append('purpose', purpose)
     fd.append('file', file)
@@ -78,6 +78,7 @@ export const api = {
     fd.append('mode', mode)
     fd.append('topic', topic)
     fd.append('hinglish', hinglish)
+    if (whisperModel) fd.append('whisper_model', whisperModel)
     return req('/jobs/upload', { method: 'POST', body: fd })
   },
   scriptState: (id) => req(`/jobs/${id}/script`),
@@ -104,7 +105,9 @@ export const api = {
   generateDub: (id, index, lines, activate = false) =>
     req(`/jobs/${id}/clips/${index}/dub/generate`, json('POST', { lines: lines ?? null, activate })),
   draftDubs: (id, body) => req(`/jobs/${id}/dub/drafts`, json('POST', body)),
-  previewDub: (id, index, pacing) => req(`/jobs/${id}/clips/${index}/dub/preview`, json('POST', { pacing })),
+  previewDub: (id, index, pacing, smartMaxSeconds) => req(
+    `/jobs/${id}/clips/${index}/dub/preview`, json('POST', { pacing, smart_max_seconds: smartMaxSeconds }),
+  ),
   narrationOptions: () => req('/narration/options'),
   exportPreview: (id, index, range) => req(`/jobs/${id}/clips/${index}/export-preview`, json('POST', range)),
   uploadBroll: (id, index, file) => {

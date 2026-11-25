@@ -57,3 +57,41 @@ def test_local_source_reuse_keeps_original_independent(tmp_path):
     user_file.write_bytes(b"modified")
     assert first.samefile(second)
     assert second.read_bytes() == b"original"
+
+
+def test_transcript_cache_respects_model_override_without_redownloading(tmp_path, monkeypatch):
+    source = tmp_path / "input.mp4"
+    source.write_bytes(b"same source")
+    calls = []
+
+    def transcribe(video, directory, report, *, whisper_model=None):
+        selected = whisper_model or settings.whisper_model
+        calls.append(selected)
+        return [Segment(start=0, end=2, text=selected)]
+
+    monkeypatch.setattr(settings, "whisper_model", "small")
+    monkeypatch.setattr(orchestrator, "transcribe", transcribe)
+    monkeypatch.setattr(orchestrator, "probe_duration", lambda _: 2)
+
+    def ingest(name, model=None):
+        return orchestrator.ingest(str(source), tmp_path / name, lambda *args: None, FakeLLM([]),
+                                   whisper_model=model)
+
+    default_video, default, _ = ingest("default")
+    turbo_video, turbo, _ = ingest("turbo", "large-v3-turbo")
+    _, cached, _ = ingest("turbo-again", "large-v3-turbo")
+    assert calls == ["small", "large-v3-turbo"]
+    assert [default[0].text, turbo[0].text, cached[0].text] == ["small", "large-v3-turbo", "large-v3-turbo"]
+    assert default_video.samefile(turbo_video)
+
+
+def test_turbo_prefers_complete_local_weights():
+    from app.pipeline.transcribe import model_location
+
+    directory = settings.data_dir / "models" / "whisper" / "large-v3-turbo"
+    directory.mkdir(parents=True)
+    assert model_location("large-v3-turbo") == "large-v3-turbo"
+    for name in ("model.bin", "config.json", "tokenizer.json"):
+        (directory / name).touch()
+    assert model_location("large-v3-turbo") == str(directory.resolve())
+    assert model_location("small") == "small"

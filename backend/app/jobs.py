@@ -15,7 +15,7 @@ from pathlib import Path
 
 from .config import settings
 from .files import atomic_output
-from .models import Clip, Job, JobMode, JobStatus, NarrationBatch, NarrationItem, Stage
+from .models import Clip, Job, JobMode, JobStatus, NarrationBatch, NarrationItem, Stage, WhisperChoice
 
 log = logging.getLogger(__name__)
 
@@ -117,12 +117,13 @@ class JobStore:
         self._bump(job.id)
 
     def create(self, source: str, num_clips: int, mode: JobMode = JobMode.review, topic: str = "",
-               hinglish: bool = False, title: str = "", channel: str = "", purpose: str = "create") -> Job:
+               hinglish: bool = False, title: str = "", channel: str = "", purpose: str = "create",
+               whisper_model: WhisperChoice | None = None) -> Job:
         from .pipeline.highlights import clean_topic
 
         job = Job(id=uuid.uuid4().hex[:10], source=source, num_clips=num_clips, mode=mode, topic=clean_topic(topic),
                   hinglish=hinglish, title=" ".join(title.split())[:300], channel=" ".join(channel.split())[:200],
-                  purpose=purpose)
+                  purpose=purpose, whisper_model=whisper_model)
         with self._lock:
             self._save(job)
         return job
@@ -238,7 +239,7 @@ class Worker:
             clip = clips[index].model_copy(deep=True)
             clip.options = clip.options.model_copy(update={
                 "dub": True, "dub_pacing": batch.pacing, "dub_ambience": batch.ambience,
-                "dub_ambience_level": batch.ambience_level,
+                "dub_ambience_level": batch.ambience_level, "dub_smart_max_seconds": batch.smart_max_seconds,
             })
             requested.append(clip)
         for clip, error in dub.generate_batch(directory, requested, progress):
@@ -321,14 +322,16 @@ class Worker:
                 if job is None:
                     raise KeyError(job_id)  # deleted while queued → handled below like any vanished job
                 # only passed when set, so step callables written before topics (tests, scripts) keep working
-                steer = {"topic": job.topic} if job.topic else {}
+                ingest_options = {}
                 if job.hinglish:
-                    steer["romanize"] = True
+                    ingest_options["romanize"] = True
+                if job.whisper_model:
+                    ingest_options["whisper_model"] = job.whisper_model
+                steer = {**ingest_options, **({"topic": job.topic} if job.topic else {})}
                 if kind == "narrate":
                     self._narrate(job, d)
                 elif kind == "learn" or (kind == "run" and job.purpose == "learn"):
-                    self.steps.learn(source or job.source, d, report,
-                                     **({"romanize": True} if job.hinglish else {}))
+                    self.steps.learn(source or job.source, d, report, **ingest_options)
                     done = JobStatus.done if kind == "run" else (before or JobStatus.done)
                     self.store.update(job_id, status=done, stage=Stage.done, progress=1.0, learn=True,
                                       message="Study notes ready")

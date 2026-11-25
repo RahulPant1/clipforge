@@ -44,7 +44,7 @@ def load_segments(job_dir: Path) -> list[Segment]:
 
 
 def ingest(source: str, job_dir: Path, report: Reporter, llm: LLM,
-           romanize: bool = False) -> tuple[Path, list[Segment], float]:
+           romanize: bool = False, *, whisper_model: str | None = None) -> tuple[Path, list[Segment], float]:
     """Video in (download / copy an upload — both reused when already there) → transcript (cached) → Hinglish if
     asked. Shared by prepare() (shorts) and learn_pipeline() (study notes)."""
     job_dir.mkdir(parents=True, exist_ok=True)
@@ -56,12 +56,13 @@ def ingest(source: str, job_dir: Path, report: Reporter, llm: LLM,
 
     def build_transcript(staged: Path) -> None:
         llm.unload()  # Whisper may need the memory held by a previous interactive model call.
-        report(Stage.transcribing, 0, "Loading Whisper")
-        raw = transcribe(video, staged, lambda p, m: report(Stage.transcribing, p, m))
+        report(Stage.transcribing, 0, f"Loading Whisper ({whisper_model or settings.whisper_model})")
+        raw = transcribe(video, staged, lambda p, m: report(Stage.transcribing, p, m),
+                         **({"whisper_model": whisper_model} if whisper_model else {}))
         if not (staged / "transcript.json").exists():
             transcript_edit.save(staged, raw)
 
-    restore_transcript(video, job_dir, build_transcript)
+    restore_transcript(video, job_dir, build_transcript, whisper_model=whisper_model)
     segs = load_segments(job_dir)
     if romanize and segs and hinglish.romanize(job_dir):  # Hindi in Devanagari → Hinglish before anything reads it
         report(Stage.transcribing, 1.0, "Hindi → Hinglish (Latin letters)")
@@ -71,9 +72,10 @@ def ingest(source: str, job_dir: Path, report: Reporter, llm: LLM,
 
 def prepare(source: str, job_dir: Path, num_clips: int, report: Reporter,
             llm: LLM | None = None, candidates: int | None = None, topic: str = "",
-            romanize: bool = False) -> list[Clip]:
+            romanize: bool = False, *, whisper_model: str | None = None) -> list[Clip]:
     llm = llm or OllamaClient()
-    video, segs, duration = ingest(source, job_dir, report, llm, romanize)
+    video, segs, duration = ingest(source, job_dir, report, llm, romanize,
+                                   **({"whisper_model": whisper_model} if whisper_model else {}))
     no_speech = not segs or words_per_minute(segs, duration) < MIN_WPM
     if no_speech and not settings.no_speech_mode:
         raise RuntimeError("Not enough speech found (and NO_SPEECH_MODE is off).")
@@ -111,11 +113,12 @@ def prepare(source: str, job_dir: Path, num_clips: int, report: Reporter,
 
 
 def learn_pipeline(source: str, job_dir: Path, report: Reporter, llm: LLM | None = None,
-                   romanize: bool = False) -> LearnNotes:
+                   romanize: bool = False, *, whisper_model: str | None = None) -> LearnNotes:
     """Learning mode: video in → transcript → (scene index) → study notes in learn.json + notes.md. Works on an
     existing shorts job too (download and transcript are reused)."""
     llm = llm or OllamaClient()
-    video, segs, duration = ingest(source, job_dir, report, llm, romanize)
+    video, segs, duration = ingest(source, job_dir, report, llm, romanize,
+                                   **({"whisper_model": whisper_model} if whisper_model else {}))
     meta = load_meta(job_dir)
     try:
         if settings.scene_index != "off":  # screens/slides: what's shown is part of what's taught
@@ -289,10 +292,11 @@ def render_one(job_dir: Path, clip: Clip) -> Clip:
 
 def run_pipeline(source: str, job_dir: Path, num_clips: int, report: Reporter,
                  llm: LLM | None = None, topic: str = "", romanize: bool = False, *,
-                 on_clip: Callable[[Clip], None] | None = None) -> list[Clip]:
+                 on_clip: Callable[[Clip], None] | None = None, whisper_model: str | None = None) -> list[Clip]:
     """Auto mode: everything end to end."""
     llm = llm or OllamaClient()
-    clips = prepare(source, job_dir, num_clips, report, llm, topic=topic, romanize=romanize)
+    clips = prepare(source, job_dir, num_clips, report, llm, topic=topic, romanize=romanize,
+                    **({"whisper_model": whisper_model} if whisper_model else {}))
     apply_fixes(clips)  # no review step in auto mode: the judge's trims are taken as they are
     clips = produce(job_dir, clips, report, llm, on_clip=on_clip)
     if not any(c.file for c in clips):

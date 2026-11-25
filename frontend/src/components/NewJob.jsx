@@ -44,6 +44,7 @@ export default function NewJob({ onCreated, onOpen }) {
   const [purpose, setPurpose] = useState('create') // create = shorts + posts; learn = study notes
   const [topic, setTopic] = useState('') // optional: only moments about this
   const [hinglish, setHinglish] = useState(true) // Hindi speech → captions in Latin letters
+  const [whisperModel, setWhisperModel] = useState('')
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
   const [vocab, setVocab] = useState('') // names & terms for Whisper, remembered for all jobs
@@ -80,7 +81,7 @@ export default function NewJob({ onCreated, onOpen }) {
       if (kind === 'batch') { // one job per video, run one after another by the worker
         const info = Object.fromEntries(queue.filter((v) => v.title)
           .map((v) => [v.url, { title: v.title.slice(0, 300), channel: (v.channel || '').slice(0, 200) }]))
-        const { jobs } = await api.createBatch(queue.map((v) => v.url), numClips, mode, t, hinglish, info)
+        const { jobs } = await api.createBatch(queue.map((v) => v.url), numClips, mode, t, hinglish, info, whisperModel || null)
         setItems([])
         onCreated(jobs[0])
         return
@@ -88,10 +89,10 @@ export default function NewJob({ onCreated, onOpen }) {
       const job =
         kind === 'url'
           ? await api.createJob(url.trim(), numClips, mode, t, hinglish, {
-            purpose,
+            purpose, whisper_model: whisperModel || null,
             ...(picked?.url === url.trim() ? { title: picked.title.slice(0, 300), channel: picked.channel.slice(0, 200) } : {}),
           })
-          : await api.uploadJob(file, numClips, mode, t, hinglish, purpose)
+          : await api.uploadJob(file, numClips, mode, t, hinglish, purpose, whisperModel || null)
       onCreated(job)
     } catch (e) {
       setErr(e.message)
@@ -167,6 +168,14 @@ export default function NewJob({ onCreated, onOpen }) {
             </button>
           </div>
         )}
+        <label className="fl">
+          <span>Transcription model</span>
+          <select value={whisperModel} onChange={(event) => setWhisperModel(event.target.value)}>
+            <option value="">App default</option>
+            <option value="small">Whisper Small</option>
+            <option value="large-v3-turbo">Whisper Turbo · Hindi, Hinglish, or difficult speech</option>
+          </select>
+        </label>
         {purpose === 'learn' && kind !== 'batch' ? (
           <p className="hint">Study notes instead of shorts: a summary, chapters, key concepts and timestamped notes,
             a quiz, a hands-on exercise and what to learn next — every point linked to where it's said. About a

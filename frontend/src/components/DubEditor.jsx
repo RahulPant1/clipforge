@@ -63,8 +63,63 @@ export function Line({ ln, stale, busy, maxRate, onText, onRegen, onPreview, onS
   )
 }
 
+export function SmartDurationLimit({ value, onChange, disabled }) {
+  return (
+    <label className="small">
+      Maximum duration (seconds)
+      <input key={value} type="number" min="0.01" max="86400" step="0.01"
+             placeholder="Auto" defaultValue={value ?? ''} disabled={disabled}
+             onBlur={(e) => {
+               if (!e.target.validity.valid) {
+                 e.target.value = value ?? ''
+                 return
+               }
+               const next = e.target.value === '' ? null : e.target.valueAsNumber
+               if (next !== value) onChange(next)
+             }} />
+    </label>
+  )
+}
+
+function DurationEstimate({ script, stale, clip, pacing, limit }) {
+  const span = clip.end - clip.start
+  const lines = script.lines.filter((line) => line.start >= clip.start && line.start < clip.end && line.text.trim())
+  if (!lines.length || !['fixed', 'smart', 'natural', 'scene'].includes(pacing)) return null
+  const seconds = (line) => {
+    if (line.seconds && !stale.has(line.i)) return line.seconds
+    // Count non-whitespace characters so the estimate also works for languages without word spaces.
+    const length = (text) => Array.from(text.replace(/\s/g, '')).length
+    return Math.max(0.25, (line.end - line.start) * length(line.text) / Math.max(1, length(line.original)))
+  }
+  const speech = lines.reduce((sum, line) => sum + seconds(line), 0)
+  const fixed = pacing === 'fixed'
+  if (fixed || pacing === 'smart') {
+    const gaps = 0.12 * (lines.length - 1)
+    const maxRate = fixed ? 2 : 1.15
+    const rate = Math.min(maxRate, Math.max(1, speech / Math.max(span - gaps, 0.01)))
+    const duration = Math.max(span, speech / rate + gaps)
+    const budget = fixed ? span : Math.min(span + 4, limit ?? Infinity)
+    return <p className="muted small">
+      Estimated speech {speech.toFixed(1)} s · tempo {rate.toFixed(2)}×
+      {duration > budget + 0.000001
+        ? <span className="warn"> · May exceed the {budget.toFixed(2)} s limit</span>
+        : <> · Estimated video before end card {duration.toFixed(1)} s</>}
+    </p>
+  }
+  let end = 0
+  lines.forEach((line, index) => {
+    const previous = lines[index - 1]
+    const gap = previous ? Math.max(0.12, line.start - previous.end) : 0
+    end = Math.max(line.start - clip.start, end + gap) + seconds(line)
+  })
+  const duration = Math.max(span, end + Math.max(0, clip.end - lines.at(-1).end))
+  return <p className="muted small">
+    Estimated speech {speech.toFixed(1)} s · tempo 1.00× · Estimated video before end card {duration.toFixed(1)} s
+  </p>
+}
+
 // 🎙 Replace voice: the clip's sentences re-spoken in a Voice Library voice, laid out where the originals were.
-export default function DubEditor({ job, clip, busy, act, setOpt, fixedVoice = false, previewPacing, onWarnings }) {
+export default function DubEditor({ job, clip, busy, act, setOpt, fixedVoice = false, previewPacing, previewSmartLimit, onWarnings }) {
   const [data, setData] = useState(null)
   const [voices, setVoices] = useState([])
   const [working, setWorking] = useState('')
@@ -74,6 +129,9 @@ export default function DubEditor({ job, clip, busy, act, setOpt, fixedVoice = f
   const audio = useRef(null)
   const [ambienceAvailable, setAmbienceAvailable] = useState(false)
   const pacing = previewPacing ?? clip.options?.dub_pacing ?? 'source'
+  const smartLimit = pacing === 'smart'
+    ? (fixedVoice ? previewSmartLimit : clip.options?.dub_smart_max_seconds) ?? null
+    : null
   const narrationStatus = job.narration?.items[clip.index]?.status
   const load = () => api.dub(job.id, clip.index).then(setData)
   useEffect(() => {
@@ -84,7 +142,7 @@ export default function DubEditor({ job, clip, busy, act, setOpt, fixedVoice = f
       api.narrationOptions().then((r) => setAmbienceAvailable(r.ambience_available)).catch(() => {})
     }
   }, [open, job.id, clip.index, clip.start, clip.end, clip.version, fixedVoice, narrationStatus])
-  useEffect(() => setPreview(''), [pacing, clip.start, clip.end])
+  useEffect(() => setPreview(''), [pacing, smartLimit, clip.start, clip.end])
   useEffect(() => {
     onWarnings?.(clip.index, Object.keys(data?.warnings || {}).length)
   }, [clip.index, data?.warnings, onWarnings])
@@ -105,14 +163,14 @@ export default function DubEditor({ job, clip, busy, act, setOpt, fixedVoice = f
   const on = !!clip.options?.dub
   const faceFraming = ['face', 'speaker', 'split'].includes(clip.reframe)
   const tooLong = s ? s.lines.filter((l) => l.fit === 'too_long').length : 0
-  const timingChanged = s?.track && (s.pacing !== pacing || !s.span
+  const timingChanged = s?.track && (s.pacing !== pacing || (s.smart_max_seconds ?? null) !== smartLimit || !s.span
     || Math.abs(s.span[0] - clip.start) > 0.001 || Math.abs(s.span[1] - clip.end) > 0.001)
   const makePreview = async () => {
     setWorking('Making video preview…')
     setPreview('')
     setPreviewLine(null)
     try {
-      const { file } = await act(() => api.previewDub(job.id, clip.index, pacing))
+      const { file } = await act(() => api.previewDub(job.id, clip.index, pacing, smartLimit))
       setPreview(api.fileUrl(job.id, file, Date.now()))
     } catch { /* shown by act() */ } finally { setWorking('') }
   }
@@ -160,6 +218,18 @@ export default function DubEditor({ job, clip, busy, act, setOpt, fixedVoice = f
                 {[...voice.builds].reverse().filter((b) => b.prompt).map((b) => <option key={b.version} value={b.version}>v{b.version}</option>)}
               </select>
             )}
+            {!fixedVoice && <>
+              <select aria-label="Narration duration" value={pacing} disabled={busy || !!working}
+                      onChange={(e) => setOpt('dub_pacing', e.target.value)}>
+                <option value="fixed">Preserve video duration</option>
+                <option value="smart">Smart duration fitting</option>
+                <option value="source">Match source cues</option>
+                <option value="natural">Preserve voice naturalness</option>
+                <option value="scene">Scene-aware pacing · align to indexed cuts</option>
+              </select>
+              {pacing === 'smart' && <SmartDurationLimit value={smartLimit} disabled={busy || !!working}
+                onChange={(value) => setOpt('dub_smart_max_seconds', value)} />}
+            </>}
             {!fixedVoice && <button className="btn sm" disabled={busy || !!working || !s.voice || !stale.size}
                     onClick={() => run(() => api.generateDub(job.id, clip.index), `Speaking ${stale.size} line(s)…`)}>
               ▶ Generate {stale.size || ''} line{stale.size === 1 ? '' : 's'}
@@ -169,6 +239,7 @@ export default function DubEditor({ job, clip, busy, act, setOpt, fixedVoice = f
             </button>
             {working && <span className="muted small">{working} (~2 s per second of speech + ~20 s to load)</span>}
           </div>
+          {s.voice && <DurationEstimate script={s} stale={stale} clip={clip} pacing={pacing} limit={smartLimit} />}
           <ul className="dub-lines">
             {s.lines.filter((l) => l.start >= clip.start && l.start < clip.end).map((ln) => (
               <Line key={ln.i} ln={ln} stale={stale.has(ln.i)} busy={busy || !!working} maxRate={data.max_rate}
@@ -194,12 +265,6 @@ export default function DubEditor({ job, clip, busy, act, setOpt, fixedVoice = f
             </div>
           )}
           {!fixedVoice && <div className="row-btns">
-            <select aria-label="Narration pacing" value={pacing} disabled={busy || !!working}
-                    onChange={(e) => setOpt('dub_pacing', e.target.value)}>
-              <option value="source">Match source timing</option>
-              <option value="natural">Natural pacing · flexible picture</option>
-              <option value="scene">Scene-aware pacing · align to indexed cuts</option>
-            </select>
             <label className="small"><input type="checkbox" checked={!!clip.options?.dub_ambience}
                                             disabled={busy || !!working || (!ambienceAvailable && !clip.options?.dub_ambience)}
                                             onChange={(e) => setOpt('dub_ambience', e.target.checked)} />{' '}

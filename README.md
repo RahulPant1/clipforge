@@ -42,6 +42,13 @@ YouTube URL / file
 - Whisper transcription with word-level timing. Jobs reuse cached source videos and raw transcripts, and keep
   caption edits and Hinglish conversions in their own folders. The History sidebar shows reclaimable source
   cache space. With ClipForge stopped, you can remove `data/cache` to clear the shared cache.
+- **Per-job Whisper:** in New job, choose **App default**, **Whisper Small**, or **Whisper Turbo** for source
+  transcription. Turbo is useful for difficult Hindi or Hinglish speech. Model choices have separate transcript
+  caches. ClipForge looks for an installed Turbo snapshot in `backend/data/models/whisper/large-v3-turbo`,
+  and faster-whisper downloads the weights on first use if it needs them. For the CLI, use
+  `--whisper-model large-v3-turbo` with a fresh output directory. Other Python projects can reuse these
+  weights by passing the absolute directory path to `faster_whisper.WhisperModel(path)`. This model
+  transcribes audio. Voice Library uses a separate model for speech generation.
 - Finished shorts appear as they render. Posts and covers follow automatically.
 - Gemma ranks moments by hook strength / self-containedness, writes title + hook + virality score
 - Cuts snapped to sentence boundaries, overlaps removed, clips capped at 59 s (Content ID safe zone)
@@ -73,10 +80,15 @@ YouTube URL / file
   Use **Suggest a fix** beside a flagged line to review a rewrite based on the surrounding transcript. Changes
   apply only when you accept them. A batch shares one voice-model load and one word-timing model load for
   the lines that need generation.
-- **Narration pacing:** choose **Match source timing** for picture-locked footage or **Natural pacing** for B-roll
-  and screen recordings. Natural pacing keeps the generated speech at its original speed and slows the picture
-  uniformly if the short needs more time. **Scene-aware pacing** adjusts indexed scenes around narration cues
-  and uses uniform pacing when there are no suitable cues. Captions follow the new speech timing.
+- **Narration duration** is available in batch narration and under **Shorts → Replace voice**.
+  **Preserve video duration** fits the script with pitch-preserving tempo adjustment.
+  **Preserve voice naturalness** keeps the speech at its generated speed and extends the picture as needed.
+  **Smart duration fitting** trims gaps between lines, caps speedup at 15%, and allows up to four extra
+  seconds. Optionally set a maximum export duration in seconds. Trim a source clip that already exceeds
+  the limit. ClipForge shortens or omits the end card if needed to respect the limit.
+  Review the estimated speech duration, tempo and video duration before generating.
+  Choose **Suggest shorter wording** in batch narration to review a more concise script before generating speech.
+  **Match source cues** and **Scene-aware pacing** remain available for cue-based timing.
 - **Preview export:** choose a start and up to 10 seconds on the output timeline to review current captions,
   narration and audio mix at lower resolution. Find the preview next to ready narration or on the Shorts step.
 - **Manual scene anchors:** under **Shorts → Replace voice → Scene-aware pacing**, pair a point in the source

@@ -164,7 +164,7 @@ def voice_tag(script: DubScript) -> str:
     return f"{script.voice}@v{script.version}" if script.version else f"{script.voice}@newest"
 
 
-def narration_rewrite(script: DubScript, clip: Clip, llm: "LLM") -> None:
+def narration_rewrite(script: DubScript, clip: Clip, llm: "LLM", *, compact: bool = False) -> None:
     """Propose narration for untouched lines while preserving edits and timing slots."""
     originals = {line.i: line.original for line in script.lines
                  if line.text == line.original and clip.start <= line.start < clip.end}
@@ -178,7 +178,9 @@ def narration_rewrite(script: DubScript, clip: Clip, llm: "LLM") -> None:
     result = llm.chat_json(
         "Rewrite these transcript lines as natural narration in the same language. Preserve the facts, names, "
         "numbers, and meaning. Attribute personal experiences to the original speaker in the third person. "
-        "Avoid inventing facts. Keep each line close to its original length and in its own timing slot. "
+        "Avoid inventing facts. Keep each line in its own timing slot. "
+        + ("Shorten by removing filler and redundancy. Preserve qualifications and meaning. " if compact
+           else "Keep each line close to its original length. ") +
         "Treat the transcript as source material. Return each input line ID once with its new text.\n"
         + json.dumps([{"i": i, "text": text} for i, text in originals.items()], ensure_ascii=False),
         schema, temperature=0.2,
@@ -264,6 +266,7 @@ def generate(job_dir: Path, script: DubScript, clip: Clip, only: list[int] | Non
     v = tts.load(script.voice)  # KeyError → 404
     tts.prompt_for(v, script.version)  # KeyError when that version doesn't exist
     todo = _pending_lines(job_dir, script, clip, only)
+    obsolete = []
     if todo:
         if on_progress:
             on_progress(0.1, f"Speaking {len(todo)} line(s) in {v['name']}")
@@ -274,11 +277,14 @@ def generate(job_dir: Path, script: DubScript, clip: Clip, only: list[int] | Non
             on_progress(0.7, "Timing the new words")
         heard = tts.transcribe_many([job_dir / n for n in names])
         for ln, n, m, h in zip(todo, names, made, heard, strict=True):
-            old = ln.file
+            if ln.file and ln.file != n:
+                obsolete.append(ln.file)
             _apply_take(script, ln, n, m, h)
-            if old and old != n:
-                (job_dir / old).unlink(missing_ok=True)
-    return assemble(job_dir, script, clip.start, clip.end, pacing=clip.options.dub_pacing)
+    result = assemble(job_dir, script, clip.start, clip.end, pacing=clip.options.dub_pacing,
+                      smart_max_seconds=clip.options.dub_smart_max_seconds)
+    for name in obsolete:
+        (job_dir / name).unlink(missing_ok=True)
+    return result
 
 
 def generate_batch(job_dir: Path, clips: list[Clip],
@@ -347,7 +353,10 @@ def generate_batch(job_dir: Path, clips: list[Clip],
                             obsolete.append(line.file)
                         (staged / name).replace(job_dir / name)
                         _apply_take(script, line, name, result, words)
-                    save(job_dir, assemble(job_dir, script, clip.start, clip.end, pacing=clip.options.dub_pacing))
+                    save(job_dir, assemble(
+                        job_dir, script, clip.start, clip.end, pacing=clip.options.dub_pacing,
+                        smart_max_seconds=clip.options.dub_smart_max_seconds,
+                    ))
                     for name in obsolete:
                         (job_dir / name).unlink(missing_ok=True)
                 except Exception as e:
@@ -398,6 +407,28 @@ def layout(script: DubScript, clip_start: float, clip_end: float) -> list[tuple[
     """(line, clip-relative start, speed-up, seconds kept) for the generated lines inside the clip, in order."""
     span = clip_end - clip_start
     inside = sorted([ln for ln in script.lines if clip_start <= ln.start < clip_end], key=lambda x: x.start)
+    if script.pacing in ("fixed", "smart"):
+        if (script.pacing == "smart" and script.smart_max_seconds is not None
+                and span > script.smart_max_seconds + 1e-6):
+            raise RuntimeError("The selected video exceeds the Smart duration limit. Trim the clip or raise the limit.")
+        voiced = [line for line in inside if line.file and line.text.strip() and line.seconds]
+        if not voiced:
+            return []
+        speech = sum(line.seconds for line in voiced)
+        gaps = GAP * (len(voiced) - 1)
+        limit = min(span + 4, script.smart_max_seconds or span + 4) if script.pacing == "smart" else span
+        max_rate = 1.15 if script.pacing == "smart" else 2.0
+        rate = min(max_rate, max(1.0, speech / max(span - gaps, 0.01)))
+        if speech / rate + gaps > limit + 1e-6:
+            raise RuntimeError(
+                "Narration is too long to fit. Condense the script or choose Preserve voice naturalness."
+            )
+        out, cursor = [], 0.0
+        for line in voiced:
+            kept = line.seconds / rate
+            out.append((line, cursor, rate, kept))
+            cursor += kept + GAP
+        return out
     out, cursor = [], 0.0
     for k, ln in enumerate(inside):
         orig = ln.start - clip_start
@@ -423,15 +454,18 @@ def layout(script: DubScript, clip_start: float, clip_end: float) -> list[tuple[
     return out
 
 
-def assemble(job_dir: Path, script: DubScript, clip_start: float, clip_end: float, *, pacing="source") -> DubScript:
+def assemble(job_dir: Path, script: DubScript, clip_start: float, clip_end: float, *,
+             pacing="source", smart_max_seconds: float | None = None) -> DubScript:
     """Every generated line laid out (layout()) → dub_N.wav (48 kHz mono, clip_start → clip_end). No GPU."""
     lo, hi = clip_start, clip_end
     script.pacing = pacing
+    script.smart_max_seconds = smart_max_seconds if pacing == "smart" else None
     timed = layout(script, lo, hi)
     duration = hi - lo
-    if pacing != "source" and timed:
+    if pacing in ("natural", "scene", "smart") and timed:
         last, start, _, kept = timed[-1]
-        duration = max(duration, start + kept + max(hi - last.end, 0))
+        tail = max(hi - last.end, 0) if pacing != "smart" else 0
+        duration = max(duration, start + kept + tail)
     track = np.zeros(int(duration * SR) + 1, dtype=np.float32)
     for ln in script.lines:
         ln.fit, ln.rate, ln.at, ln.over = None, None, None, None
@@ -489,8 +523,11 @@ def track_for(job_dir: Path, clip: Clip) -> tuple[Path, list[Segment]] | None:
     script = load(job_dir, clip.index)
     if not script or not script.track or not (job_dir / script.track).is_file():
         return None
-    if script.span != (round(clip.start, 3), round(clip.end, 3)) or script.pacing != clip.options.dub_pacing:
-        script = save(job_dir, assemble(job_dir, script, clip.start, clip.end, pacing=clip.options.dub_pacing))
+    limit = clip.options.dub_smart_max_seconds if clip.options.dub_pacing == "smart" else None
+    if (script.span != (round(clip.start, 3), round(clip.end, 3))
+            or script.pacing != clip.options.dub_pacing or script.smart_max_seconds != limit):
+        script = save(job_dir, assemble(job_dir, script, clip.start, clip.end, pacing=clip.options.dub_pacing,
+                    smart_max_seconds=clip.options.dub_smart_max_seconds))
     return job_dir / script.track, segments(script, clip.start, clip.end)
 
 

@@ -29,6 +29,7 @@ export default function SourceStep({ job, go, act, busy }) {
         <p className="muted">
           Mode: <b>{job.mode === 'review' ? 'Review each step' : 'Fully automatic'}</b> · wants {job.num_clips} shorts ·
           {job.topic && <> topic <b>“{job.topic}”</b> ·</>}
+          {job.whisper_model && <> Whisper <b>{job.whisper_model === 'large-v3-turbo' ? 'Turbo' : 'Small'}</b> ·</>}
           started {new Date(job.created_at).toLocaleString()}
         </p>
         {prepared && <video className="srcvid" src={api.fileUrl(job.id, 'source.mp4')} controls preload="metadata" />}

@@ -106,7 +106,8 @@ class RenderOptions(BaseModel):
     emoji: bool | None = None  # colour emoji above caption lines + the hook's emoji (None = CAPTION_EMOJI)
     aspects: list[Literal["4:5", "1:1"]] | None = None  # feed versions next to the 9:16 (None = EXTRA_ASPECTS)
     dub: bool | None = None  # Replace voice: the clip's dub track (dub.py) instead of the original speech
-    dub_pacing: Literal["source", "natural", "scene"] = "source"
+    dub_smart_max_seconds: float | None = Field(None, gt=0, le=86400)
+    dub_pacing: Literal["source", "natural", "scene", "fixed", "smart"] = "source"
     dub_ambience: bool = False
     dub_ambience_level: float = Field(0.18, ge=0, le=0.5)
     dub_anchors: list[SceneAnchor] = Field(default_factory=list, max_length=24)
@@ -244,6 +245,7 @@ class Clip(BaseModel):
 
 
 Purpose = Literal["create", "learn"]  # create = shorts + posts; learn = study notes (learn.py)
+WhisperChoice = Literal["small", "large-v3-turbo"]
 
 
 class JobCreate(BaseModel):
@@ -253,6 +255,7 @@ class JobCreate(BaseModel):
     mode: JobMode = JobMode.review
     topic: str = Field(default="", max_length=200)  # optional: only moments about this ("salary negotiation")
     hinglish: bool | None = None  # Hindi speech → Latin letters; None = settings.hinglish_default
+    whisper_model: WhisperChoice | None = None
     title: str = Field(default="", max_length=300)  # known up front (Find videos) → shown before the download
     channel: str = Field(default="", max_length=200)
 
@@ -269,6 +272,7 @@ class BatchCreate(BaseModel):
     mode: JobMode = JobMode.review
     topic: str = Field(default="", max_length=200)
     hinglish: bool | None = None
+    whisper_model: WhisperChoice | None = None
 
 
 class BatchLinks(BaseModel):
@@ -337,7 +341,8 @@ class NarrationItem(BaseModel):
 
 
 class NarrationOptions(BaseModel):
-    pacing: Literal["source", "natural", "scene"] = "source"
+    smart_max_seconds: float | None = Field(None, gt=0, le=86400)
+    pacing: Literal["source", "natural", "scene", "fixed", "smart"] = "source"
     ambience: bool = False
     ambience_level: float = Field(0.18, ge=0, le=0.5)
 
@@ -365,6 +370,7 @@ class Job(BaseModel):
     mode: JobMode = JobMode.review
     topic: str = ""  # steers clip selection (highlights.FOCUS); "" = best moments on any subject
     hinglish: bool = False  # Hindi (Devanagari) transcript converted to Latin letters (pipeline/hinglish.py)
+    whisper_model: WhisperChoice | None = None  # source transcription only; None uses the server default
     purpose: Purpose = "create"
     learn: bool = False  # study notes made (learn.json) — any job can have them
     status: JobStatus = JobStatus.queued
@@ -520,7 +526,8 @@ class DubScript(BaseModel):
     track: str | None = None  # dub_N.wav once assembled (clip-relative, clip length)
     track_version: int = 0  # bumps on every assembly (cache-busting)
     span: tuple[float, float] | None = None  # the clip's start/end the track was laid out for
-    pacing: Literal["source", "natural", "scene"] = "source"
+    smart_max_seconds: float | None = Field(None, gt=0, le=86400)
+    pacing: Literal["source", "natural", "scene", "fixed", "smart"] = "source"
     track_duration: float | None = None
 
 
@@ -541,7 +548,7 @@ class DubBatchDraft(BaseModel):
     clips: list[int] = Field(min_length=1, max_length=30)
     voice: str = Field(min_length=1, max_length=40)
     version: int | None = Field(None, ge=1)
-    mode: Literal["original", "rewrite"] = "original"
+    mode: Literal["original", "rewrite", "compact"] = "original"
 
 
 class ProduceRequest(BaseModel):

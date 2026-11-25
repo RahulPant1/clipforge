@@ -63,6 +63,7 @@ from .models import (
     VoiceBuild,
     VoiceCreate,
     VoiceUpdate,
+    WhisperChoice,
     WordEdit,
 )
 from .pipeline import (
@@ -432,7 +433,7 @@ def create_app(pipeline=None, start_worker: bool = True, llm_factory=OllamaClien
             raise HTTPException(400, "url must start with http(s)://")
         hinglish = settings.hinglish_default if body.hinglish is None else body.hinglish
         job = store.create(body.url, body.num_clips, body.mode, body.topic, hinglish=hinglish, title=body.title,
-                           channel=body.channel, purpose=body.purpose)
+                           channel=body.channel, purpose=body.purpose, whisper_model=body.whisper_model)
         worker.submit(job.id, body.url)
         return job
 
@@ -459,7 +460,8 @@ def create_app(pipeline=None, start_worker: bool = True, llm_factory=OllamaClien
         for u in urls:
             known = body.info.get(u)
             job = store.create(u, body.num_clips, body.mode, body.topic, hinglish=hinglish,
-                               title=known.title if known else "", channel=known.channel if known else "")
+                               title=known.title if known else "", channel=known.channel if known else "",
+                               whisper_model=body.whisper_model)
             worker.submit(job.id, u)
             jobs.append(job)
         return {"jobs": jobs}
@@ -467,9 +469,10 @@ def create_app(pipeline=None, start_worker: bool = True, llm_factory=OllamaClien
     @app.post("/api/jobs/upload", response_model=Job, status_code=201)
     def upload_job(file: UploadFile = File(...), num_clips: int = Form(5), mode: JobMode = Form(JobMode.review),
                    topic: str = Form("", max_length=200), hinglish: bool | None = Form(None),
-                   purpose: Purpose = Form("create")) -> Job:
+                   purpose: Purpose = Form("create"), whisper_model: WhisperChoice | None = Form(None)) -> Job:
         job = store.create(file.filename or "upload.mp4", num_clips, mode, topic, title=Path(file.filename or "").stem,
-                           hinglish=settings.hinglish_default if hinglish is None else hinglish, purpose=purpose)
+                           hinglish=settings.hinglish_default if hinglish is None else hinglish, purpose=purpose,
+                           whisper_model=whisper_model)
         d = store.dir(job.id)
         d.mkdir(parents=True, exist_ok=True)
         dest = d / "source.mp4"
@@ -959,6 +962,9 @@ def create_app(pipeline=None, start_worker: bool = True, llm_factory=OllamaClien
         for index in dict.fromkeys(body.clips):
             if index not in clips:
                 raise HTTPException(404, f"Short {index} was not found")
+            if (body.pacing == "smart" and body.smart_max_seconds is not None
+                    and clips[index].duration > body.smart_max_seconds + 1e-6):
+                raise HTTPException(400, f"Short {index} exceeds the Smart duration limit. Trim it or raise the limit.")
             try:
                 dub.activation_script(store.dir(job_id), clips[index])
             except ValueError as e:
@@ -1095,12 +1101,12 @@ def create_app(pipeline=None, start_worker: bool = True, llm_factory=OllamaClien
                 raise HTTPException(400, f"Short {index} has no narration lines in its current range")
             drafts.append((clip, dub.edit(script, body.voice, version)))
 
-        if body.mode == "rewrite":
+        if body.mode in ("rewrite", "compact"):
             def rewrite():
                 llm = llm_factory()
                 try:
                     for clip, script in drafts:
-                        dub.narration_rewrite(script, clip, llm)
+                        dub.narration_rewrite(script, clip, llm, compact=body.mode == "compact")
                 finally:
                     llm.unload()
 
@@ -1210,7 +1216,7 @@ def create_app(pipeline=None, start_worker: bool = True, llm_factory=OllamaClien
                 _, clip = clip_of(job_id, index)
                 if body is not None:
                     clip = clip.model_copy(update={"options": clip.options.model_copy(
-                        update={"dub_pacing": body.pacing})})
+                        update={"dub_pacing": body.pacing, "dub_smart_max_seconds": body.smart_max_seconds})})
                 script = dub.load(d, index)
                 if not script or not script.voice:
                     raise ValueError("Choose a voice before previewing")

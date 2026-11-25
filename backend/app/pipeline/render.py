@@ -1,5 +1,6 @@
 """Step 4 — jump cuts + face-tracking crop + captions + FFmpeg 9:16 render (+ 4:5 / 1:1 feed versions)."""
 import logging
+import math
 import subprocess
 from dataclasses import replace
 from pathlib import Path
@@ -70,6 +71,9 @@ def render_clip(video: Path, clip: Clip, segs: list[Segment], job_dir: Path, *, 
 
     kit = brand.load()
     card = brand.end_card_seconds(kit, o, plan.duration)
+    if dubbed and o.dub_pacing == "smart" and o.dub_smart_max_seconds is not None:
+        room = round(o.dub_smart_max_seconds - plan.duration, 6)
+        card = min(card, room) if room >= 1.0 else 0.0
     total = plan.duration + card
     if preview and total - preview_range[0] < 1 / settings.output_fps:
         raise ValueError(f"Preview start must leave at least one frame in the {total:.2f} second export")
@@ -205,6 +209,11 @@ def _encode(video: Path, clip: Clip, plan: CutPlan, job_dir: Path, name: str, si
     if card:
         vf += brand.freeze_tail(plan.duration, card)
         af = [*af, f"apad=pad_dur={card:.3f}"]
+    if voice_track and o.dub_pacing == "smart" and o.dub_smart_max_seconds is not None:
+        # A frame starting just before the limit can still extend past it at the output frame rate.
+        last_frame = math.floor(o.dub_smart_max_seconds * fps + 1e-6)
+        vf.append(f"trim=end_frame={last_frame}")
+        af.append(f"atrim=duration={o.dub_smart_max_seconds:.6f}")
     if subs:
         vf.append(subs)
     hook_font = font_for(clip.hook, font)

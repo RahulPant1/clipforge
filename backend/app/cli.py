@@ -18,6 +18,8 @@ def main() -> None:
     ap.add_argument("--clips", type=int, default=5)
     ap.add_argument("--out", default="data/cli_run")
     ap.add_argument("--topic", default="", help="only moments about this (optional)")
+    ap.add_argument("--whisper-model", choices=("small", "large-v3-turbo"),
+                    help="override the source transcription model for this run")
     a = ap.parse_args()
 
     last = {"stage": None}
@@ -29,7 +31,7 @@ def main() -> None:
         print(f"\r  {progress * 100:5.1f}%  {message:<60}", end="", flush=True)
 
     out = Path(a.out)
-    clips = run_pipeline(a.source, out, a.clips, report, topic=a.topic)
+    clips = run_pipeline(a.source, out, a.clips, report, topic=a.topic, whisper_model=a.whisper_model)
     print()
     for c in clips:
         print(f"  ✓ {c.file}  [{c.score}/10]  {c.duration:4.1f}s  {c.title}")

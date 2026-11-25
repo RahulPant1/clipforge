@@ -374,21 +374,24 @@ def test_background_narration_retries_only_failed_clips(monkeypatch, failure):
             return [{"words": []}, {"error": "Alignment failed"}]
         return [{"words": []} for _ in paths]
 
-    def assemble(directory, script, start, end, *, pacing):
-        assert pacing == "natural"
+    def assemble(directory, script, start, end, *, pacing, smart_max_seconds):
+        assert pacing == "smart" and smart_max_seconds == 6
         return script
 
     dub_job_id = job.id
     monkeypatch.setattr(tts, "run_worker", speak)
     monkeypatch.setattr(tts, "transcribe_many", align)
     monkeypatch.setattr(dub, "assemble", assemble)
-    queued = endpoints["queue_narration"](job.id, NarrationQueue(clips=[1, 2], pacing="natural"))
+    queued = endpoints["queue_narration"](
+        job.id, NarrationQueue(clips=[1, 2], pacing="smart", smart_max_seconds=6),
+    )
     assert queued.status == JobStatus.queued
     kind, job_id, kwargs = worker.q.get_nowait()
     worker._run(kind, job_id, **kwargs)
     current = store.get(job.id)
     assert {index: item.status for index, item in current.narration.items.items()} == {1: "ready", 2: "failed"}
     assert current.clips[0].options.dub and not current.clips[1].options.dub
+    assert current.clips[0].options.dub_smart_max_seconds == 6
 
     endpoints["retry_narration"](job.id)
     kind, job_id, kwargs = worker.q.get_nowait()
@@ -523,3 +526,64 @@ def test_manual_scene_anchors_validate_timeline_order():
         RenderOptions(dub_anchors=[SceneAnchor(source=1, narration=2), SceneAnchor(source=3, narration=1)])
     options = RenderOptions(dub_anchors=[SceneAnchor(source=3, narration=4), SceneAnchor(source=1, narration=2)])
     assert [anchor.source for anchor in options.dub_anchors] == [1, 3]
+
+
+def test_duration_modes_fit_example_without_dropping_script():
+    script = DubScript(clip=1, lines=[line(0, 0, 66)])
+    script.lines[0].end = 55
+    script.pacing = "fixed"
+    _, start, rate, kept = dub.layout(script, 0, 55)[0]
+    assert start == 0 and rate == pytest.approx(1.2) and kept == pytest.approx(55)
+
+    script.pacing = "natural"
+    assert dub.layout(script, 0, 55)[0][2:] == (1.0, 66)
+
+    script.pacing = "smart"
+    _, start, rate, kept = dub.layout(script, 0, 55)[0]
+    assert rate == 1.15 and 55 < start + kept <= 59
+    script.lines[0].seconds = 80
+    with pytest.raises(RuntimeError, match="Condense"):
+        dub.layout(script, 0, 55)
+
+
+def test_smart_duration_limit_rejects_overflow_without_cutting_words():
+    script = DubScript(clip=1, pacing="smart", smart_max_seconds=57, lines=[line(0, 0, 66)])
+    with pytest.raises(RuntimeError, match="Condense"):
+        dub.layout(script, 0, 55)
+
+    script.smart_max_seconds = 58
+    _, start, _, kept = dub.layout(script, 0, 55)[0]
+    assert start + kept <= script.smart_max_seconds
+
+    script.smart_max_seconds = 54
+    with pytest.raises(RuntimeError, match="Trim the clip"):
+        dub.layout(script, 0, 55)
+
+
+@needs_ffmpeg
+def test_smart_export_limit_includes_end_card(tmp_path, monkeypatch):
+    from app.models import BrandKit
+    from app.pipeline import brand, render
+
+    source = tmp_path / "source.mp4"
+    subprocess.run([
+        "ffmpeg", "-y", "-v", "error", "-f", "lavfi", "-i", "color=s=160x90:r=25:d=4",
+        "-pix_fmt", "yuv420p", str(source),
+    ], check=True)
+    kit = BrandKit(enabled=True, end_card=True, end_text="Thanks", end_seconds=3)
+    monkeypatch.setattr(brand, "load", lambda: kit)
+    monkeypatch.setitem(render.ASPECTS, "9:16", ((180, 320), ""))
+    clip = Clip(index=1, start=0, end=4, title="t", hook="", score=7, options=RenderOptions(
+        dub=True, dub_pacing="smart", dub_smart_max_seconds=5.43, sfx=False, hook=False, aspects=[],
+    ))
+    tone(tmp_path / "l0.wav", 4.8)
+    script = DubScript(clip=1, voice="v", lines=[line(0, 0, 4.8)])
+    dub.save(tmp_path, dub.assemble(tmp_path, script, 0, 4))
+    output = render.render_clip(source, clip, [], tmp_path)
+    result = subprocess.run([
+        "ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0",
+        str(tmp_path / output),
+    ], check=True, capture_output=True, text=True)
+    assert float(result.stdout) == pytest.approx(5.43, abs=0.001)
+    assert clip.out_duration == 5.43
+    assert dub.load(tmp_path, 1).smart_max_seconds == 5.43

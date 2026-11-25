@@ -84,11 +84,12 @@ def source_for(source: str, job_dir: Path, fetch: Callable[[str, Path], Path]) -
     return video
 
 
-def restore_transcript(video: Path, job_dir: Path, build: Callable[[Path], None]) -> None:
+def restore_transcript(video: Path, job_dir: Path, build: Callable[[Path], None], *,
+                       whisper_model: str | None = None) -> None:
     """Copy raw transcript data into the job before any romanization or manual edits."""
     if (job_dir / "transcript.json").is_file():
         return
-    key = _key("whisper-v1", _digest(video), settings.whisper_model, settings.whisper_device,
+    key = _key("whisper-v1", _digest(video), whisper_model or settings.whisper_model, settings.whisper_device,
                settings.whisper_compute_type, settings.whisper_language, settings.whisper_initial_prompt, hotwords())
     entry = _cached("transcripts", key, build)
     for name in ("transcript_info.json", "transcript.json"):

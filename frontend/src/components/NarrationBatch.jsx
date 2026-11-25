@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { api } from '../api.js'
-import DubEditor from './DubEditor.jsx'
+import DubEditor, { SmartDurationLimit } from './DubEditor.jsx'
 
 export default function NarrationBatch({ job, clips, busy, act }) {
   const [open, setOpen] = useState(false)
@@ -8,7 +8,8 @@ export default function NarrationBatch({ job, clips, busy, act }) {
   const [voiceId, setVoiceId] = useState('')
   const [version, setVersion] = useState('')
   const [mode, setMode] = useState('original')
-  const [pacing, setPacing] = useState('source')
+  const [pacing, setPacing] = useState('fixed')
+  const [smartLimit, setSmartLimit] = useState(null)
   const [ambience, setAmbience] = useState(false)
   const [ambienceLevel, setAmbienceLevel] = useState(18)
   const [ambienceAvailable, setAmbienceAvailable] = useState(false)
@@ -41,7 +42,7 @@ export default function NarrationBatch({ job, clips, busy, act }) {
     setWarnings((previous) => previous[index] === count ? previous : { ...previous, [index]: count })
   }, [])
   const prepare = async () => {
-    setWorking(mode === 'rewrite' ? 'Drafting narration…' : 'Preparing scripts…')
+    setWorking(mode !== 'original' ? 'Drafting narration…' : 'Preparing scripts…')
     try {
       const response = await act(() => api.draftDubs(job.id, {
         clips: chosen, voice: voiceId, version: version === '' ? null : Number(version), mode,
@@ -61,6 +62,7 @@ export default function NarrationBatch({ job, clips, busy, act }) {
     try {
       await act(() => api.queueNarration(job.id, {
         clips: prepared.map((clip) => clip.index), pacing, ambience, ambience_level: ambienceLevel / 100,
+        smart_max_seconds: pacing === 'smart' ? smartLimit : null,
       }))
       clearDrafts()
     } catch { /* shown by act() */ } finally {
@@ -99,15 +101,19 @@ export default function NarrationBatch({ job, clips, busy, act }) {
                 onChange={(e) => { setMode(e.target.value); clearDrafts() }}>
           <option value="original">Use transcript wording</option>
           <option value="rewrite">Suggest narration rewrite</option>
+          <option value="compact">Suggest shorter wording</option>
         </select>
       </div>
       <p className="muted small">Existing line edits are kept. Review any suggested wording before generating.</p>
       <div className="row-btns">
-        <select aria-label="Narration pacing" value={pacing} disabled={disabled} onChange={(e) => setPacing(e.target.value)}>
-          <option value="source">Match source timing</option>
-          <option value="natural">Natural pacing · flexible picture</option>
+        <select aria-label="Narration duration" value={pacing} disabled={disabled} onChange={(e) => setPacing(e.target.value)}>
+          <option value="fixed">Preserve video duration</option>
+          <option value="smart">Smart duration fitting</option>
+          <option value="source">Match source cues</option>
+          <option value="natural">Preserve voice naturalness</option>
           <option value="scene">Scene-aware pacing · align to indexed cuts</option>
         </select>
+        {pacing === 'smart' && <SmartDurationLimit value={smartLimit} onChange={setSmartLimit} disabled={disabled} />}
         <label className="small" title={ambienceAvailable ? 'Uses local audio separation on export' : 'Requires Demucs'}>
           <input type="checkbox" checked={ambience} disabled={disabled || !ambienceAvailable}
                  onChange={(e) => setAmbience(e.target.checked)} /> Keep source ambience
@@ -121,6 +127,11 @@ export default function NarrationBatch({ job, clips, busy, act }) {
       </div>
       {pacing === 'natural' && <p className="muted small">
         If the narration needs more time, the picture slows down. Use for B-roll or screen recordings.
+      </p>}
+      {pacing === 'fixed' && <p className="muted small">Keeps the length of the selected video and adjusts speech tempo.</p>}
+      {pacing === 'smart' && <p className="muted small">
+        Tightens pauses, speeds speech up by at most 15%, and adds up to four seconds within the selected limit.
+        Choose Suggest shorter wording above to review a condensed script.
       </p>}
       {pacing === 'scene' && <p className="muted small">
         Uses indexed scene cuts and narration cues when available. Otherwise it slows the picture uniformly.
@@ -145,7 +156,7 @@ export default function NarrationBatch({ job, clips, busy, act }) {
             </span>}
           </summary>
           <DubEditor key={revision} job={job} clip={clip} busy={busy || !!working} act={editAct} fixedVoice
-                     previewPacing={pacing} onWarnings={reportWarnings} />
+                     previewPacing={pacing} previewSmartLimit={smartLimit} onWarnings={reportWarnings} />
         </details>
       ))}
       {prepared.length > 0 && (

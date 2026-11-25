@@ -54,7 +54,17 @@ def preload_cuda_wheels() -> list[str]:
     return loaded
 
 
-def transcribe(video: Path, job_dir: Path, on_progress: ProgressFn | None = None) -> list[Segment]:
+def model_location(whisper_model: str) -> str:
+    """Use a verified local Turbo snapshot when it has been placed in the project's data directory."""
+    if whisper_model in ("turbo", "large-v3-turbo"):
+        local = settings.data_dir / "models" / "whisper" / "large-v3-turbo"
+        if all((local / name).is_file() for name in ("model.bin", "config.json", "tokenizer.json")):
+            return str(local.resolve())
+    return whisper_model
+
+
+def transcribe(video: Path, job_dir: Path, on_progress: ProgressFn | None = None, *,
+               whisper_model: str | None = None) -> list[Segment]:
     cache = job_dir / "transcript.json"
     if cache.exists():
         return [Segment(**s) for s in json.loads(cache.read_text())]
@@ -67,8 +77,9 @@ def transcribe(video: Path, job_dir: Path, on_progress: ProgressFn | None = None
         on_progress(0.0, "Extracting audio")
     audio = load_audio(video)
 
+    selected_model = whisper_model or settings.whisper_model
     model = WhisperModel(
-        settings.whisper_model,
+        model_location(selected_model),
         device=settings.whisper_device,
         compute_type=settings.whisper_compute_type,
     )
@@ -96,7 +107,8 @@ def transcribe(video: Path, job_dir: Path, on_progress: ProgressFn | None = None
 
     cache.write_text(json.dumps([s.model_dump() for s in segs], ensure_ascii=False))
     (job_dir / "transcript_info.json").write_text(json.dumps(  # spoken language, for the history (library.py)
-        {"language": getattr(info, "language", None), "duration": round(getattr(info, "duration", 0) or 0, 1),
+        {"model": selected_model, "language": getattr(info, "language", None),
+         "duration": round(getattr(info, "duration", 0) or 0, 1),
          "probability": round(getattr(info, "language_probability", 0) or 0, 3)}))
     return segs
 

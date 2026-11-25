@@ -4,6 +4,7 @@
     "ms-python.python",
     "ms-python.debugpy",
     "charliermarsh.ruff",
-    "anthropic.claude-code"
+    "anthropic.claude-code",
+    "openai.chatgpt"
   ]
 }

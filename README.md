@@ -87,8 +87,22 @@ YouTube URL / file
   seconds. Optionally set a maximum export duration in seconds. Trim a source clip that already exceeds
   the limit. ClipForge shortens or omits the end card if needed to respect the limit.
   Review the estimated speech duration, tempo and video duration before generating.
+  Estimates use the saved voice version's pace after three distinct completed lines, and use source timing
+  until then. Open a short's script review in a batch to override its duration mode or Smart limit.
+  ClipForge keeps each override when retrying failed narration.
+  **Fit before queueing** shows every prepared short's estimate and flags likely overruns. Review and
+  accept a suggested shorter line directly from the summary.
   Choose **Suggest shorter wording** in batch narration to review a more concise script before generating speech.
   **Match source cues** and **Scene-aware pacing** remain available for cue-based timing.
+- **Pronunciation and speaker voices:** save all-voice or voice-specific spoken spellings under **Voice Library →
+  Pronunciation dictionary**, then test them under **Try it**. Caption spelling stays intact. In a short's
+  script, label the speakers and assign a saved voice to each, with an optional per-line override.
+  **Generate pace sample** under **Voice Library → Try it** measures three lines with the selected version
+  and lets you listen to them before starting a narration batch.
+- **Narration line review:** expand **Compare source and generated audio** beside a flagged or generated
+  line to hear up to 30 seconds of its source audio alongside the generated take before export effects.
+  **Suggest speaker labels** proposes left/right labels from clear mouth movement in two-person shots.
+  Select the suggestions you want to apply. Ambiguous and off-camera speech can be labeled manually.
 - **Preview export:** choose a start and up to 10 seconds on the output timeline to review current captions,
   narration and audio mix at lower resolution. Find the preview next to ready narration or on the Shorts step.
 - **Manual scene anchors:** under **Shorts → Replace voice → Scene-aware pacing**, pair a point in the source

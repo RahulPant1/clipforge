@@ -167,6 +167,8 @@ def test_track_is_laid_out_on_the_clip_and_relaid_after_a_trim(tmp_path):
 @needs_ffmpeg
 def test_generate_speaks_only_what_changed_in_one_load(tmp_path, monkeypatch):
     v = tts.create("Me", consent=True)
+    v["builds"] = [{"version": 1, "prompt": "prompt.pt"}]
+    tts.save(v)
     calls = []
 
     def fake_speak(vid, texts, language=None, out_dir=None, names=None, version=None):
@@ -184,13 +186,23 @@ def test_generate_speaks_only_what_changed_in_one_load(tmp_path, monkeypatch):
     s = dub.edit(dub.draft(segs, clip), voice=v["id"], texts={0: "AI is transforming how businesses operate."})
     s = dub.generate(tmp_path, s, clip)
     assert len(calls) == 1 and calls[0][0][0] == "AI is transforming how businesses operate."
+    assert dub.voice_pace(s)["samples"] == 3
     assert all(ln.file and (tmp_path / ln.file).exists() for ln in s.lines) and s.track == "dub_1.wav"
     old = s.lines[1].file
     s = dub.edit(s, texts={1: "Most teams already feel it."})
     s = dub.generate(tmp_path, s, clip)
     assert calls[-1][0] == ("Most teams already feel it.",) and not (tmp_path / old).exists()
+    assert dub.voice_pace(s)["samples"] == 4
     dub.generate(tmp_path, s, clip, only=[2])  # regenerate one line on purpose
     assert calls[-1][0] == (S[2],)
+    assert dub.voice_pace(s)["samples"] == 4
+    preview = dub.edit(s.model_copy(deep=True), texts={2: "Preview lines do not train the estimate."})
+    dub.generate(tmp_path, preview, clip, only=[2], learn_pace=False)
+    assert dub.voice_pace(s)["samples"] == 4
+    v["builds"].append({"version": 2, "prompt": "new-prompt.pt"})
+    tts.save(v)
+    assert dub.voice_pace(s) is None
+    assert dub.voice_pace(s.model_copy(update={"version": 1}))["samples"] == 4
     with pytest.raises(ValueError):
         dub.generate(tmp_path, DubScript(clip=1), clip)
 
@@ -227,7 +239,7 @@ def test_dub_api(tmp_path, monkeypatch):
     from .test_api import _fake_steps, _wait_status
 
     monkeypatch.setattr(settings, "data_dir", tmp_path)
-    from app.main import create_app
+    from app import main
 
     steps, _ = _fake_steps(tmp_path)
 
@@ -238,7 +250,7 @@ def test_dub_api(tmp_path, monkeypatch):
         return dub.assemble(job_dir, script, clip.start, clip.end)
 
     monkeypatch.setattr(dub, "generate", fake_generate)
-    with TestClient(create_app(steps=steps)) as c:
+    with TestClient(main.create_app(steps=steps)) as c:
         jid = c.post("/api/jobs", json={"url": "https://youtube.com/watch?v=x", "num_clips": 1}).json()["id"]
         _wait_status(c, jid, "review")
         d = tmp_path / "jobs" / jid
@@ -253,6 +265,20 @@ def test_dub_api(tmp_path, monkeypatch):
         r = c.post(f"/api/jobs/{jid}/clips/1/dub/generate")
         assert r.status_code == 200 and r.json()["script"]["track"] == "dub_1.wav" and r.json()["stale"] == []
         assert c.get(f"/api/jobs/{jid}/files/dub_1.wav").status_code == 200
+
+        audio_source = d / "source.wav"
+        tone(audio_source, 35)
+        audio_source.rename(d / "source.mp4")
+        url = f"/api/jobs/{jid}/clips/1/dub"
+        response = c.get(f"{url}/lines/0/source-audio")
+        assert response.status_code == 200 and response.headers["content-type"] == "audio/mpeg"
+        assert c.get(f"{url}/lines/99/source-audio").status_code == 404
+        monkeypatch.setattr(main, "visible_speaker_turns", lambda *args: [(0, 0, 1.7)])
+        suggestion = c.post(f"{url}/speaker-suggestions").json()
+        assert suggestion["speakers"] == {"0": "Left speaker"}
+        assert c.put(url, json={"speakers": {"0": "Host"}}).status_code == 200
+        payload = {**suggestion, "expected_speakers": {"0": ""}}
+        assert c.put(url, json=payload).status_code == 409
 
         c.patch(f"/api/jobs/{jid}/clips/1", json={"options": {"dub": True}})
         c.post(f"/api/jobs/{jid}/produce")
@@ -375,7 +401,7 @@ def test_background_narration_retries_only_failed_clips(monkeypatch, failure):
         return [{"words": []} for _ in paths]
 
     def assemble(directory, script, start, end, *, pacing, smart_max_seconds):
-        assert pacing == "smart" and smart_max_seconds == 6
+        assert (pacing, smart_max_seconds) == (("fixed", None) if script.clip == 1 else ("smart", 6))
         return script
 
     dub_job_id = job.id
@@ -383,7 +409,8 @@ def test_background_narration_retries_only_failed_clips(monkeypatch, failure):
     monkeypatch.setattr(tts, "transcribe_many", align)
     monkeypatch.setattr(dub, "assemble", assemble)
     queued = endpoints["queue_narration"](
-        job.id, NarrationQueue(clips=[1, 2], pacing="smart", smart_max_seconds=6),
+        job.id, NarrationQueue(clips=[1, 2], pacing="fixed",
+                               duration_overrides={2: {"pacing": "smart", "smart_max_seconds": 6}}),
     )
     assert queued.status == JobStatus.queued
     kind, job_id, kwargs = worker.q.get_nowait()
@@ -391,14 +418,16 @@ def test_background_narration_retries_only_failed_clips(monkeypatch, failure):
     current = store.get(job.id)
     assert {index: item.status for index, item in current.narration.items.items()} == {1: "ready", 2: "failed"}
     assert current.clips[0].options.dub and not current.clips[1].options.dub
-    assert current.clips[0].options.dub_smart_max_seconds == 6
+    assert current.clips[0].options.dub_pacing == "fixed"
 
     endpoints["retry_narration"](job.id)
     kind, job_id, kwargs = worker.q.get_nowait()
     worker._run(kind, job_id, **kwargs)
     assert [len(batch) for batch in attempts] == [2, 1] and attempts[1] == [attempts[0][1]]
     assert alignments == ([1, 1] if failure == "synthesis" else [2, 1])
-    assert all(item.status == "ready" for item in store.get(job.id).narration.items.values())
+    finished = store.get(job.id)
+    assert all(item.status == "ready" for item in finished.narration.items.values())
+    assert finished.clips[1].options.dub_smart_max_seconds == 6
 
 
 @needs_ffmpeg
@@ -587,3 +616,93 @@ def test_smart_export_limit_includes_end_card(tmp_path, monkeypatch):
     assert float(result.stdout) == pytest.approx(5.43, abs=0.001)
     assert clip.out_duration == 5.43
     assert dub.load(tmp_path, 1).smart_max_seconds == 5.43
+
+
+@needs_ffmpeg
+def test_speaker_voices_and_pronunciation_synthesize_only_affected_lines(tmp_path, monkeypatch):
+    from app.models import PronunciationDictionary
+
+    monkeypatch.setattr(settings, "data_dir", tmp_path)
+    calls = []
+    monkeypatch.setattr(tts, "load", lambda vid: {"id": vid, "name": vid})
+    monkeypatch.setattr(tts, "prompt_for", lambda voice, version: tmp_path / f"{voice['id']}.pt")
+
+    def speak_batch(requests):
+        calls.extend((Path(item["prompt"]).stem, item["text"]) for item in requests)
+        for item in requests:
+            tone(Path(item["out"]), 0.5)
+        return [{"seconds": 0.5} for _ in requests]
+
+    def speak(vid, texts, out_dir, names, version):
+        return speak_batch([{"text": text, "prompt": tmp_path / f"{vid}.pt", "out": out_dir / name}
+                            for text, name in zip(texts, names, strict=True)])
+
+    monkeypatch.setattr(tts, "speak_batch", speak_batch)
+    monkeypatch.setattr(tts, "speak", speak)
+    monkeypatch.setattr(tts, "transcribe_many", lambda paths: [{"words": []} for _ in paths])
+    script = DubScript(clip=1, voice="host", speaker_voices={"Guest": "guest"}, lines=[
+        line(0, 0, 0.5, text="SQL is useful.").model_copy(update={"file": None, "speaker": "Guest"}),
+        line(1, 1, 0.5, text="SQL is useful.").model_copy(
+            update={"file": None, "speaker": "Guest", "voice_override": "host"}),
+        line(2, 2, 0.5, text="SQLAlchemy is useful.").model_copy(update={"file": None}),
+    ])
+    clip = Clip(index=1, start=0, end=4, title="t", hook="", score=5)
+    dictionary = PronunciationDictionary.model_validate({"aliases": [
+        {"written": "SQL", "spoken": "sequel"},
+        {"written": "SQL", "spoken": "ess cue ell", "voice": "guest"},
+    ]})
+    dub.save_pronunciation_dictionary(dictionary)
+    dub.generate(tmp_path, script, clip)
+    assert calls == [("guest", "ess cue ell is useful."), ("host", "sequel is useful."),
+                     ("host", "SQLAlchemy is useful.")]
+    assert script.lines[0].said == script.lines[0].text == "SQL is useful."
+    assert [word.word.strip() for word in script.lines[0].words][0] == "SQL"
+    assert not any(dub.stale(script, ln) for ln in script.lines)
+
+    dictionary.aliases[1].spoken = "sequel"
+    dub.save_pronunciation_dictionary(dictionary)
+    assert [ln.i for ln in script.lines if dub.stale(script, ln)] == [0]
+    calls.clear()
+    dub.generate(tmp_path, script, clip)
+    assert calls == [("guest", "sequel is useful.")]
+
+
+def test_calibration_sample_learns_selected_voice_version(tmp_path, monkeypatch):
+    monkeypatch.setattr(settings, "data_dir", tmp_path)
+    voice = tts.create("My voice", consent=True)
+    voice["builds"] = [{"version": 1, "prompt": "v1.pt"}, {"version": 2, "prompt": "v2.pt"}]
+    tts.save(voice)
+
+    def speak(vid, texts, version):
+        assert (vid, version) == (voice["id"], 1)
+        return [{"file": f"sample-{i}.wav", "seconds": len("".join(text.split())) / 15}
+                for i, text in enumerate(texts)]
+
+    monkeypatch.setattr(tts, "speak", speak)
+    result = dub.calibrate_pace(voice["id"], 1)
+    assert result["pace"] == {"samples": 3, "units_per_second": 15}
+    assert dub.voice_pace(DubScript(clip=0, voice=voice["id"], version=2)) is None
+
+
+def test_speaker_suggestions_skip_short_mixed_and_manually_labeled_lines():
+    script = DubScript(clip=1, lines=[
+        line(0, 10, 1), line(1, 11, 1), line(2, 12, 1), line(3, 13, 1), line(4, 14, 1),
+    ])
+    script.lines[2].speaker = "Host"
+    turns = [(0, 0, 1.5), (1, 1.5, 3), (1, 3, 4), (0, 4, 4.2)]
+    assert dub.suggest_speakers(script, 10, 15, turns) == {0: "Left speaker", 3: "Right speaker"}
+
+
+@needs_ffmpeg
+def test_source_comparison_audio_uses_source_timestamps(tmp_path):
+    source = tmp_path / "source.wav"
+    tone(source, 3, freq=700)
+    audio = dub.source_line_audio(source, 1.25, 2.0)
+    output = subprocess.run(
+        ["ffmpeg", "-v", "error", "-i", "pipe:0", "-f", "f32le", "-ac", "1", "-ar", "8000", "pipe:1"],
+        input=audio, capture_output=True, check=True,
+    )
+    samples = np.frombuffer(output.stdout, "<f4")
+    assert len(samples) / 8000 == pytest.approx(0.75, abs=0.06)
+    peak = np.fft.rfftfreq(len(samples), 1 / 8000)[np.abs(np.fft.rfft(samples)).argmax()]
+    assert peak == pytest.approx(700, abs=2)

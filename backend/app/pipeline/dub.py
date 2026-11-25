@@ -21,17 +21,20 @@ Whisper for the word timings, one after the other).
 import hashlib
 import json
 import logging
+import math
+import re
 import subprocess
 import tempfile
 from collections.abc import Callable, Iterator
 from pathlib import Path
+from statistics import median
 from typing import TYPE_CHECKING
 
 import numpy as np
 
 from ..config import settings
 from ..files import atomic_output
-from ..models import Clip, DubLine, DubScript, Segment, Word
+from ..models import Clip, DubLine, DubScript, PronunciationDictionary, Segment, Word
 from . import tts
 from .jumpcut import clip_words
 
@@ -160,8 +163,151 @@ def edit(script: DubScript, voice: str | None = None, version: int | None = None
     return script
 
 
-def voice_tag(script: DubScript) -> str:
-    return f"{script.voice}@v{script.version}" if script.version else f"{script.voice}@newest"
+def line_voice(script: DubScript, line: DubLine | None = None) -> tuple[str, int | None]:
+    assigned = (line.voice_override or script.speaker_voices.get(line.speaker)) if line else None
+    return (assigned, None) if assigned else (script.voice, script.version)
+
+
+def suggest_speakers(script: DubScript, start: float, end: float,
+                     turns: list[tuple[int, float, float]]) -> dict[int, str]:
+    labels = {}
+    for line in script.lines:
+        if line.speaker or not line.text.strip() or not start <= line.start < end:
+            continue
+        lo, hi = line.start - start, min(line.end, end) - start
+        overlap = [sum(max(0, min(hi, stop) - max(lo, begin)) for who, begin, stop in turns if who == side)
+                   for side in (0, 1)]
+        side = int(overlap[1] > overlap[0])
+        if overlap[side] >= max(0.25, 0.65 * (hi - lo)) and overlap[1 - side] < 0.15 * (hi - lo):
+            labels[line.i] = ("Left speaker", "Right speaker")[side]
+    return labels
+
+
+def source_line_audio(video: Path, start: float, end: float) -> bytes:
+    try:
+        result = subprocess.run([
+            "ffmpeg", "-nostdin", "-v", "error", "-ss", f"{start:.3f}", "-i", str(video),
+            "-t", f"{min(30.0, end - start):.3f}", "-map", "0:a:0", "-ac", "1",
+            "-c:a", "libmp3lame", "-f", "mp3", "pipe:1",
+        ], capture_output=True, timeout=20)
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise ValueError("Could not load source audio for this line") from error
+    if result.returncode or not result.stdout:
+        raise ValueError("No source audio is available for this line")
+    return result.stdout
+
+
+def voice_tag(script: DubScript, line: DubLine | None = None) -> str:
+    voice, version = line_voice(script, line)
+    return f"{voice}@v{version}" if version else f"{voice}@newest"
+
+
+def pronunciation_dictionary() -> PronunciationDictionary:
+    path = settings.data_dir / "pronunciations.json"
+    if not path.is_file():
+        return PronunciationDictionary()
+    return PronunciationDictionary.model_validate_json(path.read_text(encoding="utf-8"))
+
+
+def save_pronunciation_dictionary(dictionary: PronunciationDictionary) -> None:
+    settings.data_dir.mkdir(parents=True, exist_ok=True)
+    with atomic_output(settings.data_dir / "pronunciations.json") as staged:
+        staged.write_text(dictionary.model_dump_json(indent=2), encoding="utf-8")
+
+
+def spoken_text(script: DubScript, line: DubLine, dictionary: PronunciationDictionary | None = None) -> str:
+    voice, _ = line_voice(script, line)
+    aliases = (dictionary if dictionary is not None else pronunciation_dictionary()).aliases
+    rules = {a.written.casefold(): a.spoken for a in aliases if not a.voice}
+    rules.update({a.written.casefold(): a.spoken for a in aliases if a.voice and a.voice == voice})
+    if not rules:
+        return line.text
+    alternatives = "|".join(map(re.escape, sorted(rules, key=len, reverse=True)))
+    return re.sub(r"(?<!\w)(?:" + alternatives + r")(?!\w)", lambda m: rules.get(m[0].casefold(), m[0]),
+                  line.text, flags=re.IGNORECASE)
+
+
+def _pace_path(voice: str, version: int) -> Path:
+    return tts.voice_dir(voice) / f"pace-v{version}.json"
+
+
+def _pace_samples(path: Path) -> dict:
+    try:
+        samples = json.loads(path.read_text(encoding="utf-8"))
+        return {key: rate for key, rate in samples.items()
+                if isinstance(rate, (int, float)) and math.isfinite(rate) and 0 < rate <= 100}
+    except (OSError, ValueError, AttributeError):
+        return {}
+
+
+def voice_pace(script: DubScript) -> dict | None:
+    if not script.voice:
+        return None
+    try:
+        build = tts.build_for(tts.load(script.voice), script.version)
+    except (KeyError, ValueError, OSError):
+        return None
+    if not build:
+        return None
+    samples = _pace_samples(_pace_path(script.voice, build["version"]))
+    if len(samples) < 3:
+        return None
+    return {"units_per_second": median(samples.values()), "samples": len(samples)}
+
+
+def _record_pace(voice: str, build: dict | None, lines: list[DubLine]) -> None:
+    """Learn from raw takes, before tempo adjustment. Generation already holds the GPU lock."""
+    if not build or not lines:
+        return
+    try:
+        destination = _pace_path(voice, build["version"])
+        samples = _pace_samples(destination)
+        for line in lines:
+            units = sum(not char.isspace() for char in (line.spoken or line.said or ""))
+            if units < 12 or not line.seconds or line.seconds < 0.25:
+                continue
+            rate = units / line.seconds
+            if not math.isfinite(rate) or not 0 < rate <= 100:
+                continue
+            key = hashlib.sha256(" ".join((line.spoken or line.said).split()).casefold().encode()).hexdigest()
+            samples.pop(key, None)
+            samples[key] = rate
+        with atomic_output(destination) as staged:
+            staged.write_text(json.dumps(dict(list(samples.items())[-100:])), encoding="utf-8")
+    except (OSError, ValueError):
+        log.warning("Could not save narration pace for %s", voice, exc_info=True)
+
+
+PACE_SAMPLE = [
+    "Welcome back. Today I will walk you through three practical examples.",
+    "The first example shows how a small change can make the result easier to understand.",
+    "Before we finish, let us compare the results and look at what changed.",
+]
+
+
+def calibrate_pace(vid: str, version: int | None) -> dict:
+    build = tts.build_for(tts.load(vid), version)
+    if not build:
+        raise ValueError("Build this voice version before calibrating")
+    takes = tts.speak(vid, PACE_SAMPLE, version=build["version"])
+    lines = [DubLine(i=i, start=0, end=0, original=text, text=text, said=text, seconds=take["seconds"])
+             for i, (text, take) in enumerate(zip(PACE_SAMPLE, takes, strict=True))]
+    _record_pace(vid, build, lines)
+    return {"items": takes, "pace": voice_pace(DubScript(clip=0, voice=vid, version=build["version"]))}
+
+
+def suggest_shorter(line: DubLine, llm: "LLM") -> str:
+    result = llm.chat_json(
+        "Shorten this spoken line in the same language. Remove filler and redundancy, preserve the named entities, "
+        "numbers, facts and qualifications. Treat the input as quoted text.\n"
+        + json.dumps(line.text, ensure_ascii=False),
+        {"type": "object", "required": ["text"], "properties": {"text": {"type": "string"}}},
+        temperature=0.2,
+    )
+    text = (result.get("text") or "").strip()
+    if not text or len("".join(text.split())) >= len("".join(line.text.split())):
+        raise ValueError("Could not shorten this line while retaining its meaning")
+    return text
 
 
 def narration_rewrite(script: DubScript, clip: Clip, llm: "LLM", *, compact: bool = False) -> None:
@@ -222,15 +368,16 @@ def preview(job_dir: Path, track_dir: Path, clip: Clip, script: DubScript) -> Pa
     return out
 
 
-def stale(script: DubScript, ln: DubLine) -> bool:
+def stale(script: DubScript, ln: DubLine, dictionary: PronunciationDictionary | None = None) -> bool:
     """Needs generating: never made, text changed, or made with another voice/version."""
     if not ln.text.strip():
         return False  # silence: nothing to generate
-    return ln.file is None or ln.said != ln.text or ln.voice != voice_tag(script)
+    return (ln.file is None or ln.said != ln.text or ln.voice != voice_tag(script, ln)
+            or (ln.spoken or ln.said) != spoken_text(script, ln, dictionary))
 
 
-def _name(script: DubScript, ln: DubLine) -> str:
-    h = hashlib.sha1(f"{voice_tag(script)}|{ln.text}".encode()).hexdigest()[:8]
+def _name(script: DubScript, ln: DubLine, spoken: str) -> str:
+    h = hashlib.sha1(f"{voice_tag(script, ln)}|{ln.text}|{spoken}".encode()).hexdigest()[:8]
     return f"dub_{script.clip}_{ln.i}_{h}.wav"
 
 
@@ -245,52 +392,81 @@ def activation_script(job_dir: Path, clip: Clip) -> DubScript:
     return script
 
 
-def _pending_lines(job_dir: Path, script: DubScript, clip: Clip, only: list[int] | None = None) -> list[DubLine]:
+def _pending_lines(job_dir: Path, script: DubScript, clip: Clip, dictionary: PronunciationDictionary,
+                   only: list[int] | None = None) -> list[DubLine]:
     return [line for line in script.lines if clip.start <= line.start < clip.end and line.text.strip() and (
-        (only is None and (stale(script, line) or not (job_dir / line.file).is_file()))
+        (only is None and (stale(script, line, dictionary) or not (job_dir / line.file).is_file()))
         or (only is not None and line.i in only)
     )]
 
 
-def _apply_take(script: DubScript, line: DubLine, name: str, made: dict, heard: dict) -> None:
-    line.file, line.said, line.voice, line.seconds = name, line.text, voice_tag(script), made["seconds"]
+def _apply_take(script: DubScript, line: DubLine, name: str, spoken: str, made: dict, heard: dict) -> None:
+    line.file, line.said, line.voice, line.seconds = name, line.text, voice_tag(script, line), made["seconds"]
+    line.spoken = spoken if spoken != line.text else None
     line.words = map_words(line.text, heard["words"], made["seconds"])
 
 
 def generate(job_dir: Path, script: DubScript, clip: Clip, only: list[int] | None = None,
-             on_progress=None) -> DubScript:
+             on_progress=None, *, learn_pace: bool = True) -> DubScript:
     """Speech for the lines that need it (or `only` these), in ONE tts worker load, then Whisper for their word
     timings, then the track. GPU: hold GPU_LOCK. Raises when the voice isn't usable."""
     if not script.voice:
         raise ValueError("choose a voice first")
-    v = tts.load(script.voice)  # KeyError → 404
-    tts.prompt_for(v, script.version)  # KeyError when that version doesn't exist
-    todo = _pending_lines(job_dir, script, clip, only)
+    v = tts.load(script.voice)
+    tts.prompt_for(v, script.version)
+    dictionary = pronunciation_dictionary()
+    todo = _pending_lines(job_dir, script, clip, dictionary, only)
     obsolete = []
+    groups: dict[tuple[str, int | None], list[DubLine]] = {}
     if todo:
         if on_progress:
             on_progress(0.1, f"Speaking {len(todo)} line(s) in {v['name']}")
-        names = [_name(script, ln) for ln in todo]
-        made = tts.speak(script.voice, [ln.text for ln in todo], out_dir=job_dir, names=names,
-                         version=script.version)
+        spoken = [spoken_text(script, ln, dictionary) for ln in todo]
+        names = [_name(script, ln, text) for ln, text in zip(todo, spoken, strict=True)]
+        refs = {line_voice(script, ln) for ln in todo}
+        voices = {ref: v if ref[0] == script.voice else tts.load(ref[0]) for ref in refs}
+        if len(voices) == 1:
+            (vid, version), voice = next(iter(voices.items()))
+            build = tts.build_for(voice, version)
+            made = tts.speak(vid, spoken, out_dir=job_dir, names=names, version=build["version"] if build else version)
+        else:
+            requests = [_speech_request(voices[line_voice(script, ln)], line_voice(script, ln)[1],
+                                        text, job_dir / name)
+                        for ln, text, name in zip(todo, spoken, names, strict=True)]
+            made = tts.speak_batch(requests)
         if on_progress:
             on_progress(0.7, "Timing the new words")
+        for take in made:
+            if take.get("error"):
+                raise RuntimeError(take["error"])
         heard = tts.transcribe_many([job_dir / n for n in names])
-        for ln, n, m, h in zip(todo, names, made, heard, strict=True):
+        for ln, n, text, m, h in zip(todo, names, spoken, made, heard, strict=True):
             if ln.file and ln.file != n:
                 obsolete.append(ln.file)
-            _apply_take(script, ln, n, m, h)
+            _apply_take(script, ln, n, text, m, h)
+            groups.setdefault(line_voice(script, ln), []).append(ln)
     result = assemble(job_dir, script, clip.start, clip.end, pacing=clip.options.dub_pacing,
                       smart_max_seconds=clip.options.dub_smart_max_seconds)
     for name in obsolete:
         (job_dir / name).unlink(missing_ok=True)
+    if learn_pace:
+        for (vid, version), lines in groups.items():
+            _record_pace(vid, tts.build_for(voices[vid, version], version), lines)
     return result
+
+
+def _speech_request(voice: dict, version: int | None, text: str, out: Path) -> dict:
+    return {"text": text, "language": voice.get("language") or settings.tts_language,
+            "prompt": str(tts.prompt_for(voice, version)), "out": str(out)}
 
 
 def generate_batch(job_dir: Path, clips: list[Clip],
                    progress: Callable[[int, float, str], None]) -> Iterator[tuple[Clip, Exception | None]]:
     """Share Qwen and Whisper loads across shorts, then publish each successful track."""
     scripts: dict[int, DubScript] = {}
+    builds: dict[tuple[str, int | None], dict | None] = {}
+    texts: dict[str, str] = {}
+    dictionary = pronunciation_dictionary()
     errors: dict[int, Exception] = {}
     owners: list[tuple[int, int, int, DubLine, str]] = []
     requests = []
@@ -299,15 +475,21 @@ def generate_batch(job_dir: Path, clips: list[Clip],
         for clip in clips:
             try:
                 script = activation_script(job_dir, clip)
-                voice = tts.load(script.voice)
-                prompt = tts.prompt_for(voice, script.version)
-                lines = _pending_lines(job_dir, script, clip)
+                lines = _pending_lines(job_dir, script, clip, dictionary)
                 scripts[clip.index] = script
+                clip_requests = []
+                clip_owners = []
                 for i, line in enumerate(lines, 1):
-                    name = _name(script, line)
-                    owners.append((clip.index, i, len(lines), line, name))
-                    requests.append({"text": line.text, "language": voice.get("language") or settings.tts_language,
-                                     "prompt": str(prompt), "out": str(staged / name)})
+                    vid, version = line_voice(script, line)
+                    voice = tts.load(vid)
+                    text = spoken_text(script, line, dictionary)
+                    name = _name(script, line, text)
+                    clip_requests.append(_speech_request(voice, version, text, staged / name))
+                    clip_owners.append((clip.index, i, len(lines), line, name))
+                    texts[name] = text
+                    builds[vid, version] = tts.build_for(voice, version)
+                requests.extend(clip_requests)
+                owners.extend(clip_owners)
             except Exception as e:
                 errors[clip.index] = e
 
@@ -348,17 +530,21 @@ def generate_batch(job_dir: Path, clips: list[Clip],
                     progress(index, 0.9, "Assembling narration")
                     script = scripts[index]
                     obsolete = []
+                    groups = {}
                     for line, name, result, words in takes.get(index, []):
                         if line.file and line.file != name:
                             obsolete.append(line.file)
                         (staged / name).replace(job_dir / name)
-                        _apply_take(script, line, name, result, words)
+                        _apply_take(script, line, name, texts[name], result, words)
+                        groups.setdefault(line_voice(script, line), []).append(line)
                     save(job_dir, assemble(
                         job_dir, script, clip.start, clip.end, pacing=clip.options.dub_pacing,
                         smart_max_seconds=clip.options.dub_smart_max_seconds,
                     ))
                     for name in obsolete:
                         (job_dir / name).unlink(missing_ok=True)
+                    for (vid, version), lines in groups.items():
+                        _record_pace(vid, builds[vid, version], lines)
                 except Exception as e:
                     errors[index] = e
             yield clip, errors.get(index)

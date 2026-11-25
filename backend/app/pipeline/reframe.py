@@ -15,6 +15,7 @@ Times here are relative to the clip start in SOURCE time (crop runs before jump-
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
+from threading import Lock
 
 from ..config import settings
 
@@ -111,6 +112,7 @@ class FaceDetector:
         import cv2
 
         self.cv2 = cv2
+        self._detect_lock = Lock()
         self.yunet = None
         model = self._ensure_model(model_dir or settings.data_dir / "models")
         if model:
@@ -144,15 +146,17 @@ class FaceDetector:
     def detect(self, img) -> list[tuple[float, float, float]]:
         h, w = img.shape[:2]
         if self.yunet is not None:
-            self.yunet.setInputSize((w, h))
-            _, faces = self.yunet.detect(img)
+            with self._detect_lock:
+                self.yunet.setInputSize((w, h))
+                _, faces = self.yunet.detect(img)
             if faces is None:
                 return []
             # row: x, y, w, h, right eye xy, left eye xy, nose xy, mouth corners xy ×2, score
             return [((f[0] + f[2] / 2) / w, (f[2] * f[3]) / (w * h), float(f[-1]), (f[1] + f[3] / 2) / h, f[3] / h,
                      head_turn(f[4], f[6], f[8])) for f in faces]
         gray = self.cv2.cvtColor(img, self.cv2.COLOR_BGR2GRAY)
-        rects = self.haar.detectMultiScale(gray, 1.1, 6, minSize=(max(24, w // 25),) * 2)
+        with self._detect_lock:
+            rects = self.haar.detectMultiScale(gray, 1.1, 6, minSize=(max(24, w // 25),) * 2)
         return [((x + fw / 2) / w, (fw * fh) / (w * h), 1.0, (y + fh / 2) / h, fh / h) for x, y, fw, fh in rects]
 
 
@@ -381,22 +385,11 @@ def speaker_activity(samples: list[Sample], left: Speaker, right: Speaker) -> li
     return out
 
 
-def active_speaker_path(samples: list[Sample], acts: list[tuple[float, float]], left: Speaker, right: Speaker,
-                        window: float | None = None, min_shot: float | None = None,
-                        margin: float | None = None, min_turn: float | None = None,
-                        lead: float = 0.0) -> list[Sample]:
-    """Camera path that hard-cuts between the two speakers' fixed positions, following the talker.
-
-    Offline (the whole clip is known), so cuts land where a turn STARTS instead of lagging behind it:
-    1. per sample, the leader is whoever's mouth activity (averaged over `window` s, centred) beats the other's
-       by `margin` and a noise floor — otherwise nobody leads
-    2. turns shorter than `min_turn` s ("mm-hm", a laugh) are ignored
-    3. cut at the start of each other-speaker turn, but never sooner than `min_shot` s after the last cut
-    Starts on the first real turn's speaker (bigger face if nobody talks).
-    `lead` (fraction of source width) shifts each shot toward where that speaker looks (lead room).
-    """
+def speaker_turns(samples: list[Sample], acts: list[tuple[float, float]], *,
+                  window: float | None = None, margin: float | None = None,
+                  min_turn: float | None = None) -> list[tuple[int, float, float]]:
+    """Visible mouth activity only. Leave ambiguous intervals unassigned."""
     window = settings.speaker_window if window is None else window
-    min_shot = settings.speaker_min_shot if min_shot is None else min_shot
     margin = settings.speaker_margin if margin is None else margin
     min_turn = settings.speaker_min_turn if min_turn is None else min_turn
     if not samples:
@@ -430,6 +423,29 @@ def active_speaker_path(samples: list[Sample], acts: list[tuple[float, float]], 
         if leaders[i] is not None and end_t - ts[i] >= min_turn:
             turns.append((leaders[i], ts[i], end_t))
         i = j + 1
+
+    return turns
+
+
+def active_speaker_path(samples: list[Sample], acts: list[tuple[float, float]], left: Speaker, right: Speaker,
+                        window: float | None = None, min_shot: float | None = None,
+                        margin: float | None = None, min_turn: float | None = None,
+                        lead: float = 0.0) -> list[Sample]:
+    """Camera path that hard-cuts between the two speakers' fixed positions, following the talker.
+
+    Offline (the whole clip is known), so cuts land where a turn STARTS instead of lagging behind it:
+    1. per sample, the leader is whoever's mouth activity (averaged over `window` s, centred) beats the other's
+       by `margin` and a noise floor — otherwise nobody leads
+    2. turns shorter than `min_turn` s ("mm-hm", a laugh) are ignored
+    3. cut at the start of each other-speaker turn, but never sooner than `min_shot` s after the last cut
+    Starts on the first real turn's speaker (bigger face if nobody talks).
+    `lead` (fraction of source width) shifts each shot toward where that speaker looks (lead room).
+    """
+    if not samples:
+        return []
+    min_shot = settings.speaker_min_shot if min_shot is None else min_shot
+    ts = [sample.t for sample in samples]
+    turns = speaker_turns(samples, acts, window=window, margin=margin, min_turn=min_turn)
 
     cur = turns[0][0] if turns else (0 if left.fh >= right.fh else 1)
     since = ts[0]
@@ -623,7 +639,7 @@ def get_detector() -> FaceDetector:
     return _detector
 
 
-_samples_cache: dict = {}  # the last clip's face samples: the 4:5 / 1:1 renders reuse them (one detection pass)
+_samples_cache: dict = {}  # the last clip's face samples, shared by renders and speaker review
 
 
 def _cached_samples(video: Path, start: float, end: float, detector: FaceDetector,
@@ -633,10 +649,18 @@ def _cached_samples(video: Path, start: float, end: float, detector: FaceDetecto
     except OSError:
         stamp = 0
     key = (str(video), stamp, round(start, 3), round(end, 3), follow)
-    if _samples_cache.get("key") != key or _samples_cache.get("detector") is not detector:  # (held, so no id reuse)
-        _samples_cache.clear()
-        _samples_cache.update(key=key, detector=detector, value=sample_faces(video, start, end, detector, follow))
-    return _samples_cache["value"]
+    cached = _samples_cache.get("entry")
+    if cached is not None and cached[0] == key and cached[1] is detector:
+        return cached[2]
+    samples = sample_faces(video, start, end, detector, follow)
+    _samples_cache["entry"] = key, detector, samples
+    return samples
+
+
+def visible_speaker_turns(video: Path, start: float, end: float) -> list[tuple[int, float, float]]:
+    samples, width, height = _cached_samples(video, start, end, get_detector(), None)
+    pair = two_speakers(samples, min(1.0, height * 9 / (16 * width)), min_share=0.15) if width else None
+    return speaker_turns(samples, speaker_activity(samples, *pair)) if pair else []
 
 
 def tracked_path(job_dir: Path, name: str, src_w: int, crop_w: int, start: float) -> list[tuple[float, float]]:

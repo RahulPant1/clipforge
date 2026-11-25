@@ -222,6 +222,48 @@ function Versions({ v, busy, run, sampleText }) {
 
 // 🗣 Voice Library: several voice profiles (yours, or others with consent). Recordings → a versioned reference voice
 // prompt (no training) → type anything and hear it in that voice. Runs on the GPU only when asked.
+function Pronunciations({ voices, busy, run }) {
+  const [aliases, setAliases] = useState(null)
+  const update = (index, field, value) =>
+    setAliases((rules) => rules.map((rule, i) => i === index ? { ...rule, [field]: value } : rule))
+  return (
+    <details className="card" onToggle={(e) => {
+      if (e.target.open && aliases === null) run(api.pronunciations, 'Loading pronunciations…')
+        .then((result) => { if (result) setAliases(result.aliases) })
+    }}>
+      <summary>Pronunciation dictionary</summary>
+      <p className="muted small">Use spoken spellings for names and acronyms. Captions keep the written text.
+        Test a phrase under Try it. A voice-specific rule takes priority over an all-voices rule.</p>
+      {aliases?.map((rule, i) => (
+        <div className="row-btns" key={i}>
+          <input aria-label="Written term" placeholder="Written term" maxLength={120} value={rule.written}
+            disabled={busy} onChange={(e) => update(i, 'written', e.target.value)} />
+          <input aria-label="Spoken spelling" placeholder="Spoken spelling" maxLength={200} value={rule.spoken}
+            disabled={busy} onChange={(e) => update(i, 'spoken', e.target.value)} />
+          <select aria-label="Pronunciation scope" value={rule.voice} disabled={busy}
+            onChange={(e) => update(i, 'voice', e.target.value)}>
+            <option value="">All voices</option>
+            {voices.map((voice) => <option key={voice.id} value={voice.id}>{voice.name}</option>)}
+            {rule.voice && !voices.some((voice) => voice.id === rule.voice) &&
+              <option value={rule.voice}>{rule.voice} (deleted)</option>}
+          </select>
+          <button className="btn sm ghost" disabled={busy}
+            onClick={() => setAliases((rules) => rules.filter((_, index) => index !== i))}>Remove</button>
+        </div>
+      ))}
+      {aliases && <div className="row-btns">
+        <button className="btn sm" disabled={busy || aliases.length >= 250}
+          onClick={() => setAliases([...aliases, { written: '', spoken: '', voice: '' }])}>Add pronunciation</button>
+        <button className="btn sm" disabled={busy || aliases.some((a) => !a.written.trim() || !a.spoken.trim())}
+          onClick={async () => {
+            const result = await run(() => api.savePronunciations(aliases))
+            if (result) setAliases(result.aliases)
+          }}>Save dictionary</button>
+      </div>}
+    </details>
+  )
+}
+
 export default function VoiceLab() {
   const [status, setStatus] = useState(null)
   const [list, setList] = useState(null)
@@ -235,6 +277,7 @@ export default function VoiceLab() {
   const [lang, setLang] = useState('Auto')
   const [ver, setVer] = useState('') // '' = newest
   const [samples, setSamples] = useState([])
+  const [calibration, setCalibration] = useState(null)
   const fileRef = useRef(null)
 
   const reload = () => api.voices().then((r) => {
@@ -360,6 +403,19 @@ export default function VoiceLab() {
                 ▶ Say it in this voice
               </button>
             </div>
+            <button className="btn sm" disabled={!!busy || !v.builds?.some((b) => b.prompt)}
+              onClick={async () => {
+                const result = await run(() => api.calibrateVoice(v.id, ver), 'Calibrating narration pace…')
+                if (result) setCalibration({ ...result, voice: v.id, version: ver })
+              }}>Generate pace sample</button>
+            {calibration?.voice === v.id && calibration.version === ver && <>
+              <p className="muted small">{calibration.pace
+                ? `Pace calibrated from ${calibration.pace.samples} samples.`
+                : 'More completed narration lines are needed to estimate this voice’s pace.'}</p>
+              {calibration.items.map((item) => (
+                <audio key={item.file} controls src={api.voiceAudio(v.id, 'samples', item.file)} />
+              ))}
+            </>}
             {samples.map((s) => (
               <div key={s.file} className="vl-sample">
                 <audio controls autoPlay={s === samples[0]} src={api.voiceAudio(v.id, 'samples', s.file)} />
@@ -371,6 +427,7 @@ export default function VoiceLab() {
         </>
       )}
 
+      <Pronunciations voices={list.voices} busy={!!busy} run={run} />
       <RevoicePanel voices={list.voices} Recorder={Recorder} />
     </div>
   )

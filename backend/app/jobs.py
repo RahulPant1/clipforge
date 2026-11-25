@@ -237,9 +237,10 @@ class Worker:
         requested = []
         for index in pending:
             clip = clips[index].model_copy(deep=True)
+            duration = batch.duration_for(index)
             clip.options = clip.options.model_copy(update={
-                "dub": True, "dub_pacing": batch.pacing, "dub_ambience": batch.ambience,
-                "dub_ambience_level": batch.ambience_level, "dub_smart_max_seconds": batch.smart_max_seconds,
+                "dub": True, "dub_pacing": duration.pacing, "dub_ambience": batch.ambience,
+                "dub_ambience_level": batch.ambience_level, "dub_smart_max_seconds": duration.smart_max_seconds,
             })
             requested.append(clip)
         for clip, error in dub.generate_batch(directory, requested, progress):

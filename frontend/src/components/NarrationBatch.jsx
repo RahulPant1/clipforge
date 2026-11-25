@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { api } from '../api.js'
-import DubEditor, { SmartDurationLimit } from './DubEditor.jsx'
+import DubEditor, { NarrationDurationSelect, SmartDurationLimit } from './DubEditor.jsx'
 
 export default function NarrationBatch({ job, clips, busy, act }) {
   const [open, setOpen] = useState(false)
@@ -10,12 +10,19 @@ export default function NarrationBatch({ job, clips, busy, act }) {
   const [mode, setMode] = useState('original')
   const [pacing, setPacing] = useState('fixed')
   const [smartLimit, setSmartLimit] = useState(null)
+  const [durationOverrides, setDurationOverrides] = useState({})
   const [ambience, setAmbience] = useState(false)
   const [ambienceLevel, setAmbienceLevel] = useState(18)
   const [ambienceAvailable, setAmbienceAvailable] = useState(false)
   const [selected, setSelected] = useState([])
   const [drafts, setDrafts] = useState([])
   const [warnings, setWarnings] = useState({})
+  const [fits, setFits] = useState({})
+  const [shorter, setShorter] = useState(null)
+  const reportFit = useCallback((index, result) => {
+    setFits((previous) => JSON.stringify(previous[index]) === JSON.stringify(result)
+      ? previous : { ...previous, [index]: result })
+  }, [])
   const [revision, setRevision] = useState(0)
   const [working, setWorking] = useState('')
   const [editing, setEditing] = useState(0)
@@ -37,7 +44,7 @@ export default function NarrationBatch({ job, clips, busy, act }) {
     return () => { active = false }
   }, [open])
 
-  const clearDrafts = () => { setDrafts([]); setWarnings({}) }
+  const clearDrafts = () => { setDrafts([]); setWarnings({}); setFits({}); setShorter(null) }
   const reportWarnings = useCallback((index, count) => {
     setWarnings((previous) => previous[index] === count ? previous : { ...previous, [index]: count })
   }, [])
@@ -48,6 +55,8 @@ export default function NarrationBatch({ job, clips, busy, act }) {
         clips: chosen, voice: voiceId, version: version === '' ? null : Number(version), mode,
       }))
       setDrafts(response.clips)
+      setShorter(null)
+      setFits({})
       setRevision((n) => n + 1)
     } catch { /* shown by act() */ } finally { setWorking('') }
   }
@@ -63,8 +72,11 @@ export default function NarrationBatch({ job, clips, busy, act }) {
       await act(() => api.queueNarration(job.id, {
         clips: prepared.map((clip) => clip.index), pacing, ambience, ambience_level: ambienceLevel / 100,
         smart_max_seconds: pacing === 'smart' ? smartLimit : null,
+        duration_overrides: Object.fromEntries(prepared.filter((clip) => durationOverrides[clip.index])
+          .map((clip) => [clip.index, durationOverrides[clip.index]])),
       }))
       clearDrafts()
+      setDurationOverrides({})
     } catch { /* shown by act() */ } finally {
       setWorking('')
     }
@@ -106,13 +118,7 @@ export default function NarrationBatch({ job, clips, busy, act }) {
       </div>
       <p className="muted small">Existing line edits are kept. Review any suggested wording before generating.</p>
       <div className="row-btns">
-        <select aria-label="Narration duration" value={pacing} disabled={disabled} onChange={(e) => setPacing(e.target.value)}>
-          <option value="fixed">Preserve video duration</option>
-          <option value="smart">Smart duration fitting</option>
-          <option value="source">Match source cues</option>
-          <option value="natural">Preserve voice naturalness</option>
-          <option value="scene">Scene-aware pacing · align to indexed cuts</option>
-        </select>
+        <NarrationDurationSelect value={pacing} disabled={disabled} onChange={setPacing} />
         {pacing === 'smart' && <SmartDurationLimit value={smartLimit} onChange={setSmartLimit} disabled={disabled} />}
         <label className="small" title={ambienceAvailable ? 'Uses local audio separation on export' : 'Requires Demucs'}>
           <input type="checkbox" checked={ambience} disabled={disabled || !ambienceAvailable}
@@ -148,17 +154,76 @@ export default function NarrationBatch({ job, clips, busy, act }) {
         ))}
       </div>
       <button className="btn sm" disabled={disabled || !voice || !chosen.length} onClick={prepare}>Prepare scripts</button>
-      {prepared.map((clip) => (
-        <details key={clip.index}>
-          <summary>Review short {clip.index} · {clip.title}
-            {warnings[clip.index] > 0 && <span className="small warn">
-              {' '}· {warnings[clip.index]} possible incomplete {warnings[clip.index] === 1 ? 'line' : 'lines'}
-            </span>}
-          </summary>
-          <DubEditor key={revision} job={job} clip={clip} busy={busy || !!working} act={editAct} fixedVoice
-                     previewPacing={pacing} previewSmartLimit={smartLimit} onWarnings={reportWarnings} />
-        </details>
-      ))}
+      {prepared.length > 0 && <section aria-label="Batch duration estimates">
+        <h4>Fit before queueing</h4>
+        <ul>
+          {prepared.map((clip) => {
+            const fit = fits[clip.index]
+            return <li key={clip.index}>
+              <strong>#{clip.index} {clip.title}</strong>
+              {fit ? <> · {fit.duration.toFixed(1)} s before end card
+                {fit.rate ? ` · ${fit.rate.toFixed(2)}× tempo` : ' · tempo varies by line'}
+                {fit.over > 0.000001 && <span className="warn">
+                  {' '}· {fit.over.toFixed(2)} s over limit
+                  {fit.sourceTooLong ? ' · trim the source or raise the limit' : ` · would need ${fit.requiredRate.toFixed(2)}×`}
+                </span>}
+                {fit.over > 0.000001 && !fit.sourceTooLong && <button className="btn sm ghost" disabled={disabled}
+                  onClick={async () => {
+                    setWorking('Drafting a shorter line…')
+                    setShorter(null)
+                    try {
+                      const result = await act(() => api.suggestDubLine(job.id, clip.index, fit.longest, true))
+                      if (result) setShorter({ ...result, clip: clip.index, line: fit.longest })
+                    } catch { /* shown by act() */ } finally { setWorking('') }
+                  }}>Suggest shorter line</button>}
+              </> : ' · Estimate unavailable'}
+              {shorter?.clip === clip.index && <div className="small">
+                <p>Current line — {shorter.original}</p>
+                <p>Suggested line — {shorter.text}</p>
+                <button className="btn sm" disabled={disabled} onClick={async () => {
+                  setWorking('Saving shorter line…')
+                  try {
+                    await act(() => api.putDub(job.id, clip.index, { texts: { [shorter.line]: shorter.text },
+                      expected_texts: { [shorter.line]: shorter.original } }))
+                    setShorter(null)
+                    setRevision((current) => current + 1)
+                  } catch { /* shown by act() */ } finally { setWorking('') }
+                }}>Use shorter line</button>
+                <button className="btn sm ghost" disabled={disabled} onClick={() => setShorter(null)}>Dismiss</button>
+              </div>}
+            </li>
+          })}
+        </ul>
+      </section>}
+      {prepared.map((clip) => {
+        const override = durationOverrides[clip.index]
+        const effectivePacing = override?.pacing ?? pacing
+        const effectiveLimit = override ? override.smart_max_seconds : smartLimit
+        const setDuration = (value, limit) => setDurationOverrides((previous) => ({
+          ...previous, [clip.index]: value ? { pacing: value, smart_max_seconds: value === 'smart' ? limit : null } : null,
+        }))
+        return (
+          <details key={clip.index}>
+            <summary>Review short {clip.index} · {clip.title}
+              {override && <span className="small"> · Custom duration</span>}
+              {warnings[clip.index] > 0 && <span className="small warn">
+                {' '}· {warnings[clip.index]} possible incomplete {warnings[clip.index] === 1 ? 'line' : 'lines'}
+              </span>}
+            </summary>
+            <div className="row-btns">
+              <NarrationDurationSelect inherit value={override?.pacing ?? ''} disabled={disabled}
+                onChange={(value) => setDuration(value, effectivePacing === 'smart' ? effectiveLimit : null)} />
+              {override?.pacing === 'smart' && (
+                <SmartDurationLimit value={effectiveLimit} disabled={disabled}
+                  onChange={(limit) => setDuration('smart', limit)} />
+              )}
+            </div>
+            <DubEditor key={revision} job={job} clip={clip} busy={busy || !!working} act={editAct} fixedVoice
+              previewPacing={effectivePacing} previewSmartLimit={effectiveLimit} onWarnings={reportWarnings}
+              batchVoices={voices ?? []} onFit={reportFit} />
+          </details>
+        )
+      })}
       {prepared.length > 0 && (
         <button className="btn sm" disabled={disabled} onClick={generate}>Queue narration ({prepared.length})</button>
       )}

@@ -458,6 +458,15 @@ publish: PATCH post {status, url}: posted_at set on → posted (cleared when it 
 - [x] **Narration duration controls:** fixed video duration, natural voice pacing, and Smart fitting are
       available in batch narration and per short. Review approximate duration and tempo before generation,
       and optionally set a maximum export duration for Smart mode.
+- [x] **Voice pace calibration and batch duration overrides:** completed narration lines calibrate timing
+      estimates per saved voice version. A short can override the batch's mode or limit, including on retry.
+- [x] **Batch duration review:** see estimated runtimes and speed adjustments before queueing, and request
+      a shorter draft for the longest line when the narration is over budget.
+- [x] **Pronunciation, speaker assignments, and pace samples:** reusable spoken aliases preserve caption
+      spelling. Assign saved voices to manually identified speakers or individual lines. Generate three
+      pace samples for a voice version from the Voice Library.
+- [x] **Narration comparison and suggested speaker labels:** compare source audio with the generated take
+      at the same script line. Review left/right labels suggested from visible speaking turns before saving them.
 - [x] **Natural pacing for narration:** an opt-in mode keeps generated speech at full length and slows the picture
       uniformly if it needs more time. The existing source-timing mode remains the default.
 - [x] **Retain source ambience:** optional CPU Demucs separation caches the non-vocal stem for a clip range and
@@ -583,6 +592,9 @@ For a later discussion (not planned yet):
       placements, scene anchor, ranged preview, square export, captions, and ZIP passed in a temporary job.
 - [ ] **Broader reference coverage:** add independent checks for proper names and word alignment against
       human timings. Evaluate full `large-v3` only if Turbo keeps missing important words.
+- [ ] **Audio-based speaker suggestions:** evaluate speaker labeling on off-camera dialogue and interviews
+      with frequent cuts. Keep manual review before applying labels.
+- [ ] **Batch narration review filters:** jump to unlabeled lines, flagged script lines, and shorts over duration.
 - [ ] **Compare timing versions.** Compare automatic and manual anchors around the same output range.
 - [ ] **Other voice ideas.** Spoken hook intros, Script → Short (script → voice-over → stills with motion or template
       cards), lip-sync, jump cuts on dubbed clips, and re-voicing longer source videos.

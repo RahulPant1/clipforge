@@ -340,14 +340,24 @@ class NarrationItem(BaseModel):
     message: str = ""
 
 
-class NarrationOptions(BaseModel):
+class NarrationDuration(BaseModel):
     smart_max_seconds: float | None = Field(None, gt=0, le=86400)
     pacing: Literal["source", "natural", "scene", "fixed", "smart"] = "source"
+
+
+class NarrationOptions(NarrationDuration):
     ambience: bool = False
     ambience_level: float = Field(0.18, ge=0, le=0.5)
 
 
-class NarrationBatch(NarrationOptions):
+class NarrationBatchOptions(NarrationOptions):
+    duration_overrides: dict[int, NarrationDuration] = Field(default_factory=dict, max_length=30)
+
+    def duration_for(self, index: int) -> NarrationDuration:
+        return self.duration_overrides.get(index, self)
+
+
+class NarrationBatch(NarrationBatchOptions):
     items: dict[int, NarrationItem]
     restore: JobStatus
 
@@ -357,7 +367,7 @@ class NarrationBatch(NarrationOptions):
         return self.model_copy(update={"items": items})
 
 
-class NarrationQueue(NarrationOptions):
+class NarrationQueue(NarrationBatchOptions):
     clips: list[int] = Field(min_length=1, max_length=30)
 
 
@@ -499,9 +509,33 @@ class LearnNotes(BaseModel):
     made_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
 
+class PronunciationAlias(BaseModel):
+    written: str = Field(min_length=1, max_length=120)
+    spoken: str = Field(min_length=1, max_length=200)
+    voice: str = Field("", max_length=40)
+
+    @field_validator("written", "spoken", mode="before")
+    @classmethod
+    def normalize_alias(cls, value):
+        return " ".join(value.split()) if isinstance(value, str) else value
+
+
+class PronunciationDictionary(BaseModel):
+    aliases: list[PronunciationAlias] = Field(default_factory=list, max_length=250)
+
+    @model_validator(mode="after")
+    def unique_aliases(self):
+        if len({(a.voice, a.written.casefold()) for a in self.aliases}) != len(self.aliases):
+            raise ValueError("Use one pronunciation per term and voice")
+        return self
+
+
 class DubLine(BaseModel):
     """One sentence of a clip's dialogue: the original (SOURCE times) and what the chosen voice says instead."""
     i: int
+    speaker: str = Field("", max_length=40)
+    voice_override: str = Field("", max_length=40)
+    spoken: str | None = None  # actual TTS input when pronunciation differs from caption text
     start: float  # SOURCE seconds — where the original sentence starts (the new one starts here too)
     end: float
     original: str = Field(max_length=2000)
@@ -523,6 +557,7 @@ class DubScript(BaseModel):
     voice: str = ""
     version: int | None = None  # None = the voice's newest version
     lines: list[DubLine] = []
+    speaker_voices: dict[str, str] = Field(default_factory=dict, max_length=30)
     track: str | None = None  # dub_N.wav once assembled (clip-relative, clip length)
     track_version: int = 0  # bumps on every assembly (cache-busting)
     span: tuple[float, float] | None = None  # the clip's start/end the track was laid out for
@@ -535,6 +570,10 @@ class DubEdit(BaseModel):
     voice: str | None = Field(None, max_length=40)
     version: int | None = None
     texts: dict[int, str] = {}  # line i → new text ("" = silence there)
+    speakers: dict[int, str] = Field(default_factory=dict, max_length=200)
+    expected_speakers: dict[int, str] = Field(default_factory=dict, max_length=200)
+    line_voices: dict[int, str] = Field(default_factory=dict, max_length=200)
+    speaker_voices: dict[str, str] = Field(default_factory=dict, max_length=30)
     expected_texts: dict[int, str] = {}  # guard acceptance of an earlier suggestion
     reset: bool = False  # start again from the clip's current sentences
 

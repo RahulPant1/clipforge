@@ -14,7 +14,7 @@ from typing import BinaryIO
 
 from fastapi import FastAPI, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 
 from .config import settings
 from .events import job_events
@@ -34,6 +34,8 @@ from .models import (
     DubBatchDraft,
     DubEdit,
     DubGenerate,
+    DubLine,
+    DubScript,
     ExportPreviewRange,
     Insert,
     Job,
@@ -47,6 +49,7 @@ from .models import (
     Post,
     PostEdit,
     ProduceRequest,
+    PronunciationDictionary,
     Purpose,
     QuoteEdit,
     RecordingEdit,
@@ -97,7 +100,7 @@ from .pipeline.ingest_cache import source_cache_usage
 from .pipeline.jumpcut import clean_removed
 from .pipeline.llm import OllamaClient
 from .pipeline.presets import POSITIONS, all_presets, get_preset
-from .pipeline.reframe import people, source_size, tracked_path
+from .pipeline.reframe import people, source_size, tracked_path, visible_speaker_turns
 from .pipeline.render import ASPECTS, FEED, extra_aspects, render_clip
 from .watch import Watcher
 
@@ -329,8 +332,27 @@ def create_app(pipeline=None, start_worker: bool = True, llm_factory=OllamaClien
     def speak_voice(vid: str, body: SpeakRequest) -> dict:
         """Any text in your voice → a wav in the voice's samples (first call downloads the model, ~4 GB)."""
         voice_or_404(vid)
-        out = gpu_work(lambda: tts.speak(vid, [body.text], body.language or None, version=body.version))
+        script = DubScript(clip=0, voice=vid, version=body.version)
+        spoken = dub.spoken_text(script, DubLine(i=0, start=0, end=0, original=body.text, text=body.text))
+        out = gpu_work(lambda: tts.speak(vid, [spoken], body.language or None, version=body.version))
         return {**out[0], "voice": tts.load(vid)}
+
+    @app.get("/api/pronunciations")
+    def get_pronunciations() -> PronunciationDictionary:
+        return dub.pronunciation_dictionary()
+
+    @app.put("/api/pronunciations")
+    def put_pronunciations(body: PronunciationDictionary) -> PronunciationDictionary:
+        saved_scopes = {alias.voice for alias in dub.pronunciation_dictionary().aliases}
+        for vid in {alias.voice for alias in body.aliases if alias.voice} - saved_scopes:
+            voice_or_404(vid)
+        dub.save_pronunciation_dictionary(body)
+        return body
+
+    @app.post("/api/voices/{vid}/pace")
+    def calibrate_voice(vid: str, version: int | None = None) -> dict:
+        voice_or_404(vid)
+        return gpu_work(lambda: dub.calibrate_pace(vid, version))
 
     @app.post("/api/voices/{vid}/compare")
     def compare_voice(vid: str, body: CompareRequest) -> dict:
@@ -958,12 +980,15 @@ def create_app(pipeline=None, start_worker: bool = True, llm_factory=OllamaClien
         if body.ambience and not ambience_available():
             raise HTTPException(400, "Install Demucs to keep source ambience")
         clips = {clip.index: clip for clip in job.clips}
+        if not body.duration_overrides.keys() <= set(body.clips):
+            raise HTTPException(400, "Duration overrides must refer to selected shorts")
         items = {}
         for index in dict.fromkeys(body.clips):
             if index not in clips:
                 raise HTTPException(404, f"Short {index} was not found")
-            if (body.pacing == "smart" and body.smart_max_seconds is not None
-                    and clips[index].duration > body.smart_max_seconds + 1e-6):
+            duration = body.duration_for(index)
+            if (duration.pacing == "smart" and duration.smart_max_seconds is not None
+                    and clips[index].duration > duration.smart_max_seconds + 1e-6):
                 raise HTTPException(400, f"Short {index} exceeds the Smart duration limit. Trim it or raise the limit.")
             try:
                 dub.activation_script(store.dir(job_id), clips[index])
@@ -1126,10 +1151,17 @@ def create_app(pipeline=None, start_worker: bool = True, llm_factory=OllamaClien
         saved = script is not None
         segs = segs_of(job_id)
         script = script or dub.draft(segs, clip)
+        dictionary = dub.pronunciation_dictionary()
+        spoken = {line.i: dub.spoken_text(script, line, dictionary) for line in script.lines}
+        paces = {(vid, version): dub.voice_pace(DubScript(clip=index, voice=vid, version=version))
+                 for vid, version in {dub.line_voice(script, line) for line in script.lines}}
         return {"saved": saved, "script": script.model_dump(mode="json"),
+                "spoken_texts": spoken, "line_paces": {ln.i: paces[dub.line_voice(script, ln)]
+                                                      for ln in script.lines},
                 "stale": [ln.i for ln in script.lines if clip.start <= ln.start < clip.end
-                          and dub.stale(script, ln)] if script.voice else [],
-                "max_rate": dub.MAX_RATE, "warnings": dub.script_warnings(segs, clip, script)}
+                          and dub.stale(script, ln, dictionary)] if script.voice else [],
+                "max_rate": dub.MAX_RATE, "warnings": dub.script_warnings(segs, clip, script),
+                "voice_pace": dub.voice_pace(script)}
 
     @app.put("/api/jobs/{job_id}/clips/{index}/dub")
     def put_dub(job_id: str, index: int, body: DubEdit) -> dict:
@@ -1142,29 +1174,80 @@ def create_app(pipeline=None, start_worker: bool = True, llm_factory=OllamaClien
                 tts.load(body.voice)
             except (KeyError, ValueError):
                 raise HTTPException(404, "voice not found") from None
+        for vid in set(body.line_voices.values()) | set(body.speaker_voices.values()):
+            if vid:
+                voice_or_404(vid)
+        if (any(len(key) > 40 for key in body.speaker_voices)
+                or any(len(value.strip()) > 40 for value in body.speakers.values())):
+            raise HTTPException(400, "Speaker names must be at most 40 characters")
         with dub_lock:
             editable(job_id)
             script = None if body.reset else dub.load(d, index)
             script = script or dub.draft(segs_of(job_id), clip)
             current = {line.i: line.text for line in script.lines}
+            speakers = {line.i: line.speaker for line in script.lines}
+            if any(speakers.get(i) != speaker for i, speaker in body.expected_speakers.items()):
+                raise HTTPException(409, "Speaker labels changed. Request new suggestions.")
             if any(current.get(i) != text for i, text in body.expected_texts.items()):
                 raise HTTPException(409, "The line changed after this suggestion. Request a new suggestion.")
+            for line in script.lines:
+                if line.i in body.speakers:
+                    line.speaker = body.speakers[line.i].strip()
+                if line.i in body.line_voices:
+                    line.voice_override = body.line_voices[line.i]
+            for speaker, vid in body.speaker_voices.items():
+                if vid:
+                    script.speaker_voices[speaker] = vid
+                else:
+                    script.speaker_voices.pop(speaker, None)
+            if len(script.speaker_voices) > 30:
+                raise HTTPException(400, "Use up to 30 speaker assignments")
             dub.save(d, dub.edit(script, body.voice, body.version, body.texts))
         return get_dub(job_id, index)
 
+    @app.get("/api/jobs/{job_id}/clips/{index}/dub/lines/{line_id}/source-audio")
+    def dub_source_line(job_id: str, index: int, line_id: int) -> Response:
+        _, clip = clip_of(job_id, index)
+        script = dub.load(store.dir(job_id), index) or dub.draft(segs_of(job_id), clip)
+        line = next((ln for ln in script.lines if ln.i == line_id and clip.start <= ln.start < clip.end), None)
+        if line is None or line.end <= line.start:
+            raise HTTPException(404, "Source line not found")
+        try:
+            audio = dub.source_line_audio(source_of(job_id), line.start, min(clip.end, line.end))
+        except ValueError as error:
+            raise HTTPException(422, str(error)) from error
+        return Response(audio, media_type="audio/mpeg", headers={"Cache-Control": "no-store"})
+
+    @app.post("/api/jobs/{job_id}/clips/{index}/dub/speaker-suggestions")
+    def suggest_dub_speakers(job_id: str, index: int) -> dict:
+        editable(job_id)
+        _, clip = clip_of(job_id, index)
+        script = dub.load(store.dir(job_id), index) or dub.draft(segs_of(job_id), clip)
+        source = source_of(job_id)
+        try:
+            turns = visible_speaker_turns(source, clip.start, clip.end)
+        except (OSError, ImportError, RuntimeError, ValueError) as error:
+            raise HTTPException(422, "Could not analyze visible speakers for this clip") from error
+        speakers = dub.suggest_speakers(script, clip.start, clip.end, turns)
+        return {"speakers": speakers, "expected_texts": {ln.i: ln.text for ln in script.lines if ln.i in speakers}}
+
     @app.post("/api/jobs/{job_id}/clips/{index}/dub/lines/{line_id}/suggest")
-    def suggest_dub_line(job_id: str, index: int, line_id: int) -> dict:
+    def suggest_dub_line(job_id: str, index: int, line_id: int, shorten: bool = False) -> dict:
         def propose():
             editable(job_id)
             _, clip = clip_of(job_id, index)
             segs = segs_of(job_id)
             script = dub.load(store.dir(job_id), index) or dub.draft(segs, clip)
-            if line_id not in dub.script_warnings(segs, clip, script):
+            if not shorten and line_id not in dub.script_warnings(segs, clip, script):
                 raise ValueError("This line no longer needs a suggested fix")
-            line = next(line for line in script.lines if line.i == line_id)
+            line = next((line for line in script.lines if line.i == line_id and line.text.strip()
+                         and clip.start <= line.start < clip.end), None)
+            if line is None:
+                raise ValueError("This narration line is no longer in the short")
             llm = llm_factory()
             try:
-                return {"original": line.text, "text": dub.suggest_repair(segs, script, line, llm)}
+                text = dub.suggest_shorter(line, llm) if shorten else dub.suggest_repair(segs, script, line, llm)
+                return {"original": line.text, "text": text}
             finally:
                 llm.unload()
 
@@ -1227,7 +1310,7 @@ def create_app(pipeline=None, start_worker: bool = True, llm_factory=OllamaClien
                 sample = script.model_copy(deep=True)
                 for other in sample.lines:
                     other.file, other.seconds = None, None
-                sample = dub.generate(staged, sample, clip, [line.i])
+                sample = dub.generate(staged, sample, clip, [line.i], learn_pace=False)
                 return clip, sample
 
             clip, sample = gpu_work(generate)

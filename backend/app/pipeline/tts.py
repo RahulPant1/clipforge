@@ -438,10 +438,14 @@ def build(vid: str, style: str = "", sample_text: str | None = None) -> dict:
     return save(v)
 
 
+def build_for(v: dict, version: int | None = None) -> dict | None:
+    builds = [b for b in v.get("builds", []) if b.get("prompt")]
+    return builds[-1] if version is None and builds else next((b for b in builds if b["version"] == version), None)
+
+
 def prompt_for(v: dict, version: int | None = None) -> Path:
     """The prompt file of a version (None = the newest)."""
-    builds = [b for b in v.get("builds", []) if b.get("prompt")]
-    b = builds[-1] if version is None and builds else next((x for x in builds if x["version"] == version), None)
+    b = build_for(v, version)
     if b is None or not (voice_dir(v["id"]) / b["prompt"]).is_file():
         raise KeyError(f"version {version}" if version else "no build yet")
     return voice_dir(v["id"]) / b["prompt"]

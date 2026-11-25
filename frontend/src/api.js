@@ -43,6 +43,10 @@ export const api = {
     req(`/voices/${id}/build`, json('POST', { style: style || '', sample_text: sampleText || '' })),
   speak: (id, text, language, version) =>
     req(`/voices/${id}/speak`, json('POST', { text, language: language || '', version: version ?? null })),
+  pronunciations: () => req('/pronunciations'),
+  savePronunciations: (aliases) => req('/pronunciations', json('PUT', { aliases })),
+  calibrateVoice: (id, version) =>
+    req(`/voices/${id}/pace${version ? `?version=${version}` : ''}`, { method: 'POST' }),
   compareVoice: (id, text, versions, language) =>
     req(`/voices/${id}/compare`, json('POST', { text, versions, language: language || '' })),
   voiceAudio: (id, kind, name) => `/api/voices/${id}/audio/${kind}/${name}`,
@@ -118,7 +122,11 @@ export const api = {
   suggestBroll: (id, index) => req(`/jobs/${id}/clips/${index}/broll/suggestions`),
   brollAssetUrl: (asset) => `/api/broll/assets/${asset}`,
   useBroll: (id, index, asset) => req(`/jobs/${id}/clips/${index}/broll/use/${asset}`, { method: 'POST' }),
-  suggestDubLine: (id, index, line) => req(`/jobs/${id}/clips/${index}/dub/lines/${line}/suggest`, { method: 'POST' }),
+  dubSourceAudio: (id, index, line) => `/api/jobs/${id}/clips/${index}/dub/lines/${line}/source-audio`,
+  suggestDubSpeakers: (id, index) =>
+    req(`/jobs/${id}/clips/${index}/dub/speaker-suggestions`, { method: 'POST' }),
+  suggestDubLine: (id, index, line, shorten = false) =>
+    req(`/jobs/${id}/clips/${index}/dub/lines/${line}/suggest${shorten ? '?shorten=true' : ''}`, { method: 'POST' }),
   queueNarration: (id, body) => req(`/jobs/${id}/dub/batch`, json('POST', body)),
   retryNarration: (id) => req(`/jobs/${id}/dub/batch/retry`, { method: 'POST' }),
   deleteDub: (id, index) => req(`/jobs/${id}/clips/${index}/dub`, { method: 'DELETE' }),

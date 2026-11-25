@@ -98,6 +98,7 @@ YouTube URL / file
 - **Pronunciation and speaker voices:** save all-voice or voice-specific spoken spellings under **Voice Library →
   Pronunciation dictionary**, then test them under **Try it**. Caption spelling stays intact. In a short's
   script, label the speakers and assign a saved voice to each, with an optional per-line override.
+  Use **Select lines to label** to apply one speaker label to several script rows at once.
   **Generate pace sample** under **Voice Library → Try it** measures three lines with the selected version
   and lets you listen to them before starting a narration batch.
 - **Narration line review:** expand **Compare source and generated audio** beside a flagged or generated

@@ -60,7 +60,7 @@ function LineComparison({ source, generated, stale, sourceSeconds, assignedVoice
   </details>
 }
 
-export function Line({ ln, stale, busy, maxRate, onText, onRegen, onPreview, onSuggest, src, comparisonSource, comparisonMetadata, rowId, children, warnings = [] }) {
+export function Line({ ln, stale, busy, maxRate, onText, onRegen, onPreview, onSuggest, src, comparisonSource, comparisonMetadata, rowId, selection, children, warnings = [] }) {
   const [text, setText] = useState(ln.text)
   const [suggestion, setSuggestion] = useState(null)
   const [suggesting, setSuggesting] = useState(false)
@@ -75,7 +75,11 @@ export function Line({ ln, stale, busy, maxRate, onText, onRegen, onPreview, onS
   }
   return (
     <li className="dub-line" id={rowId} tabIndex={rowId ? -1 : undefined}>
-      <span className="muted small dub-t">{fmtPrecise(ln.start)}</span>
+      <div className="muted small dub-t">
+        {selection && <input type="checkbox" aria-label={`Select line at ${fmtPrecise(ln.start)}`}
+          checked={selection.checked} onChange={selection.onChange} disabled={busy} />}
+        {fmtPrecise(ln.start)}
+      </div>
       <div className="dub-body">
         <span className="muted small dub-orig" title="What was said">{ln.original}</span>
         <textarea rows={2} value={text} maxLength={2000} disabled={busy} placeholder="(silence here)"
@@ -216,6 +220,8 @@ export default function DubEditor({ job, clip, busy, act, setOpt, fixedVoice = f
   const [working, setWorking] = useState('')
   const [speakerSuggestions, setSpeakerSuggestions] = useState(null)
   const [excludedSpeakers, setExcludedSpeakers] = useState([])
+  const [selectedLines, setSelectedLines] = useState(null)
+  const [bulkSpeaker, setBulkSpeaker] = useState('')
   const [open, setOpen] = useState(fixedVoice || !!clip.options?.dub)
   const [preview, setPreview] = useState('')
   const [previewLine, setPreviewLine] = useState(null)
@@ -236,7 +242,11 @@ export default function DubEditor({ job, clip, busy, act, setOpt, fixedVoice = f
     }
   }, [open, job.id, clip.index, clip.start, clip.end, clip.version, fixedVoice, narrationStatus])
   useEffect(() => setPreview(''), [pacing, smartLimit, clip.start, clip.end])
-  useEffect(() => setSpeakerSuggestions(null), [job.id, clip.index, clip.start, clip.end])
+  useEffect(() => {
+    setSpeakerSuggestions(null)
+    setSelectedLines(null)
+    setBulkSpeaker('')
+  }, [job.id, clip.index, clip.start, clip.end])
   useEffect(() => {
     if (!onIssues) return
     if (!data) {
@@ -272,7 +282,24 @@ export default function DubEditor({ job, clip, busy, act, setOpt, fixedVoice = f
     onFit?.(clip.index, estimateDuration(data, clip, pacing, smartLimit))
   }, [data, clip, pacing, smartLimit, onFit])
   const s = data?.script
+  const reviewLines = (s?.lines ?? []).filter((line) => line.start >= clip.start && line.start < clip.end)
   const speakers = [...new Set((s?.lines ?? []).map((line) => line.speaker).filter(Boolean))]
+  const availableSpeakers = [...new Set(['Host', 'Guest', ...speakers])]
+  const bulkLines = reviewLines.filter((line) => line.text.trim() && selectedLines?.includes(line.i))
+  const applySpeaker = async () => {
+    const speaker = bulkSpeaker.trim()
+    if (!speaker || !bulkLines.length) return
+    const fields = (value) => Object.fromEntries(bulkLines.map((line) => [line.i, value(line)]))
+    const result = await run(() => api.putDub(job.id, clip.index, {
+      speakers: fields(() => speaker),
+      expected_speakers: fields((line) => line.speaker),
+      expected_texts: fields((line) => line.text),
+    }), 'Saving speaker labels…')
+    if (result) {
+      setSelectedLines(null)
+      setBulkSpeaker('')
+    }
+  }
   const speakersList = `dub-speakers-${clip.index}-${fixedVoice ? 'batch' : 'short'}`
   const stale = new Set(data?.stale || [])
   const voice = voices.find((v) => v.id === s?.voice)
@@ -400,7 +427,7 @@ export default function DubEditor({ job, clip, busy, act, setOpt, fixedVoice = f
               <button className="btn sm ghost" onClick={() => setSpeakerSuggestions(null)}>Dismiss</button>
             </>}
           </div>}
-          <datalist id={speakersList}>{speakers.map((speaker) => <option key={speaker} value={speaker} />)}</datalist>
+          <datalist id={speakersList}>{availableSpeakers.map((speaker) => <option key={speaker} value={speaker} />)}</datalist>
           {s.voice && speakers.map((speaker) => (
             <label className="row-btns small" key={speaker}>
               Voice for {speaker}
@@ -409,10 +436,35 @@ export default function DubEditor({ job, clip, busy, act, setOpt, fixedVoice = f
                 onChange={(id) => run(() => api.putDub(job.id, clip.index, { speaker_voices: { [speaker]: id } }), 'Saving…')} />
             </label>
           ))}
+          {s.voice && reviewLines.some((line) => line.text.trim()) && <div className="row-btns">
+            {selectedLines === null ? <button type="button" className="btn sm ghost" disabled={busy || !!working}
+              onClick={() => setSelectedLines([])}>Select lines to label</button> : <>
+              <span className="muted small" role="status">{bulkLines.length} selected</span>
+              <label className="small">
+                Speaker label
+                <input list={speakersList} value={bulkSpeaker} maxLength={40} placeholder="Host, Guest, or a name"
+                  disabled={busy || !!working} onChange={(e) => setBulkSpeaker(e.target.value)} />
+              </label>
+              <button type="button" className="btn sm" disabled={busy || !!working || !bulkLines.length || !bulkSpeaker.trim()}
+                onClick={applySpeaker}>Apply labels</button>
+              <button type="button" className="btn sm ghost" disabled={busy || !!working} onClick={() => {
+                setSelectedLines(null)
+                setBulkSpeaker('')
+              }}>Cancel selection</button>
+            </>}
+          </div>}
           <ul className="dub-lines">
-            {s.lines.filter((l) => l.start >= clip.start && l.start < clip.end).map((ln) => (
+            {reviewLines.map((ln) => (
               <Line key={ln.i} rowId={reviewId ? `${reviewId}-line-${ln.i}` : undefined} ln={ln} stale={stale.has(ln.i)} busy={busy || !!working} maxRate={data.max_rate}
                     warnings={data.warnings?.[ln.i]}
+                    selection={selectedLines !== null && ln.text.trim() ? {
+                      checked: selectedLines.includes(ln.i),
+                      onChange: (e) => {
+                        const checked = e.target.checked
+                        setSelectedLines((previous) => checked
+                          ? [...previous, ln.i] : previous.filter((id) => id !== ln.i))
+                      },
+                    } : null}
                     comparisonSource={(data.warnings?.[ln.i]?.length || ln.fit === 'too_long' || ln.file)
                       ? api.dubSourceAudio(job.id, clip.index, ln.i) : null}
                     comparisonMetadata={comparisonMetadata(ln)}

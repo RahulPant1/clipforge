@@ -467,7 +467,8 @@ publish: PATCH post {status, url}: posted_at set on → posted (cleared when it 
       pace samples for a voice version from the Voice Library.
 - [x] **Narration comparison and suggested speaker labels:** compare source audio with the generated take
       at the same script line. The A/B panel shows voice and timing details. Review left/right labels
-      suggested from visible speaking turns before saving them.
+      suggested from visible speaking turns before saving them. Select several script rows to apply
+      one speaker label in a single edit.
 - [x] **Natural pacing for narration:** an opt-in mode keeps generated speech at full length and slows the picture
       uniformly if it needs more time. The existing source-timing mode remains the default.
 - [x] **Retain source ambience:** optional CPU Demucs separation caches the non-vocal stem for a clip range and

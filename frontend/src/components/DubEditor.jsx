@@ -12,28 +12,55 @@ export function fitChip(ln, stale, maxRate) {
   return null
 }
 
-function LineComparison({ source, generated, stale, sourceSeconds }) {
+function LineComparison({ source, generated, stale, sourceSeconds, assignedVoice, takeVoice, takeSeconds, rate }) {
   const [open, setOpen] = useState(false)
-  const [unavailable, setUnavailable] = useState(false)
+  const [error, setError] = useState('')
   const sourcePlayer = useRef(null)
   const takePlayer = useRef(null)
+  const play = async (player, other) => {
+    if (!player.current) return
+    setError('')
+    other.current?.pause()
+    player.current.currentTime = 0
+    try {
+      await player.current.play()
+    } catch (failure) {
+      if (failure.name !== 'AbortError') setError('Could not play this audio.')
+    }
+  }
+  const takeLabel = stale ? 'Previous generated take' : 'Generated take'
+
   return <details onToggle={(e) => setOpen(e.currentTarget.open)}>
     <summary>Compare source and generated audio</summary>
-    {open && <div className="row-btns">
-      <label className="small">Source{sourceSeconds > 30 && ' (first 30 seconds)'}
-        <audio ref={sourcePlayer} aria-label="Source audio" controls preload="none" src={source}
-          onPlay={() => takePlayer.current?.pause()} onError={() => setUnavailable(true)} />
-        {unavailable && <span className="warn">Source audio unavailable.</span>}
-      </label>
-      <label className="small">{stale && generated ? 'Previous generated take' : 'Generated take'}
-        {generated ? <audio ref={takePlayer} aria-label="Generated take" controls preload="none" src={generated}
-          onPlay={() => sourcePlayer.current?.pause()} /> : <span className="muted"> · Generate this line to compare.</span>}
-      </label>
-    </div>}
+    {open && <>
+      {assignedVoice && <div className="muted small">Assigned voice {assignedVoice}</div>}
+      <div className="dub-comparison">
+        <div>
+          <button type="button" className="btn sm ghost" onClick={() => play(sourcePlayer, takePlayer)}>A · Original</button>
+          {sourceSeconds > 30 && <span className="muted small">First 30 seconds</span>}
+          <audio ref={sourcePlayer} aria-label="Original audio" controls preload="none" src={source}
+            onPlay={() => takePlayer.current?.pause()} onError={() => setError('Source audio unavailable.')} />
+        </div>
+        <div>
+          <button type="button" className="btn sm ghost" disabled={!generated}
+            onClick={() => play(takePlayer, sourcePlayer)}>B · {takeLabel}</button>
+          {generated ? <>
+            <span className="muted small">{[
+              takeVoice && takeVoice !== assignedVoice ? takeVoice : null,
+              takeSeconds != null ? `${takeSeconds.toFixed(1)} s raw` : null,
+              rate != null ? `${rate.toFixed(2)}× in fitted track` : null,
+            ].filter(Boolean).join(' · ')}</span>
+            <audio ref={takePlayer} aria-label={takeLabel} controls preload="none" src={generated}
+              onPlay={() => sourcePlayer.current?.pause()} onError={() => setError('Generated audio unavailable.')} />
+          </> : <span className="muted small">Generate this line to compare.</span>}
+        </div>
+      </div>
+      {error && <p className="warn small" role="status">{error}</p>}
+    </>}
   </details>
 }
 
-export function Line({ ln, stale, busy, maxRate, onText, onRegen, onPreview, onSuggest, src, comparisonSource, rowId, children, warnings = [] }) {
+export function Line({ ln, stale, busy, maxRate, onText, onRegen, onPreview, onSuggest, src, comparisonSource, comparisonMetadata, rowId, children, warnings = [] }) {
   const [text, setText] = useState(ln.text)
   const [suggestion, setSuggestion] = useState(null)
   const [suggesting, setSuggesting] = useState(false)
@@ -71,7 +98,7 @@ export function Line({ ln, stale, busy, maxRate, onText, onRegen, onPreview, onS
         </div>}
         <div className="row-btns">
           {fitChip(ln, stale, maxRate)}
-          {ln.file && !stale && <audio controls preload="none" src={src(ln.file)} />}
+          {ln.file && !stale && !comparisonSource && <audio controls preload="none" src={src(ln.file)} />}
           <button className="btn sm ghost" disabled={busy || !ln.text.trim()} onClick={onRegen}
                   title="Speak just this line again (another take)">↻ this line</button>
           {onPreview && <button className="btn sm ghost" disabled={busy} onClick={onPreview}>
@@ -79,7 +106,8 @@ export function Line({ ln, stale, busy, maxRate, onText, onRegen, onPreview, onS
           </button>}
         </div>
         {comparisonSource && <LineComparison source={comparisonSource} stale={stale}
-          generated={ln.file ? src(ln.file) : null} sourceSeconds={ln.end - ln.start} />}
+          generated={ln.file ? src(ln.file) : null} sourceSeconds={ln.end - ln.start}
+          takeSeconds={ln.seconds} {...comparisonMetadata} />}
         {children}
       </div>
     </li>
@@ -253,6 +281,20 @@ export default function DubEditor({ job, clip, busy, act, setOpt, fixedVoice = f
   const tooLong = s ? s.lines.filter((l) => l.fit === 'too_long').length : 0
   const timingChanged = s?.track && (s.pacing !== pacing || (s.smart_max_seconds ?? null) !== smartLimit || !s.span
     || Math.abs(s.span[0] - clip.start) > 0.001 || Math.abs(s.span[1] - clip.end) > 0.001)
+  const describeVoice = (id, version) => {
+    if (!id) return ''
+    const name = voices.find((item) => item.id === id)?.name ?? id
+    return version ? `${name} · v${version}` : name
+  }
+  const comparisonMetadata = (line) => {
+    const override = line.voice_override || s.speaker_voices[line.speaker]
+    const [takeId, takeVersion] = (line.voice ?? '').split('@v')
+    return {
+      assignedVoice: describeVoice(override || s.voice, override ? null : s.version),
+      takeVoice: describeVoice(takeId.split('@')[0], takeVersion),
+      rate: !timingChanged && !stale.has(line.i) ? line.rate : null,
+    }
+  }
   const makePreview = async () => {
     setWorking('Making video preview…')
     setPreview('')
@@ -373,7 +415,8 @@ export default function DubEditor({ job, clip, busy, act, setOpt, fixedVoice = f
                     warnings={data.warnings?.[ln.i]}
                     comparisonSource={(data.warnings?.[ln.i]?.length || ln.fit === 'too_long' || ln.file)
                       ? api.dubSourceAudio(job.id, clip.index, ln.i) : null}
-                    src={(f) => api.fileUrl(job.id, f)}
+                    comparisonMetadata={comparisonMetadata(ln)}
+                    src={(f) => api.fileUrl(job.id, f, s.track_version)}
                     onPreview={!fixedVoice && on && !timingChanged && !stale.has(ln.i) && ln.at != null
                       ? () => previewExportLine(ln) : undefined}
                     onSuggest={() => act(() => api.suggestDubLine(job.id, clip.index, ln.i))}

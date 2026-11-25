@@ -101,7 +101,8 @@ YouTube URL / file
   **Generate pace sample** under **Voice Library → Try it** measures three lines with the selected version
   and lets you listen to them before starting a narration batch.
 - **Narration line review:** expand **Compare source and generated audio** beside a flagged or generated
-  line to hear up to 30 seconds of its source audio alongside the generated take before export effects.
+  line to replay **A · Original** and **B · Generated take** from the same line start. The panel shows the
+  assigned voice, raw take length, and fitted playback speed when available. Source excerpts are capped at 30 seconds.
   **Suggest speaker labels** proposes left/right labels from clear mouth movement in two-person shots.
   Select the suggestions you want to apply. Ambiguous and off-camera speech can be labeled manually.
 - **Preview export:** choose a start and up to 10 seconds on the output timeline to review current captions,

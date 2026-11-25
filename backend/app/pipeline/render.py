@@ -7,7 +7,7 @@ from pathlib import Path
 from ..config import settings
 from ..files import atomic_output
 from ..models import BrandKit, Clip, RenderOptions, Segment
-from . import brand, dub, emoji, insert_render, inserts, sfx
+from . import ambience, brand, dub, emoji, insert_render, inserts, sfx
 from .captions import _text as caption_text
 from .captions import build_ass, build_hook_ass, build_srt, chunk_words, text_scale
 from .fonts import font_for, fontsdir_option
@@ -56,12 +56,18 @@ def render_clip(video: Path, clip: Clip, segs: list[Segment], job_dir: Path) -> 
     removed = clip.removed
     dubbed = dub.track_for(job_dir, clip)  # Replace voice: the new speech + its words instead of the original
     voice_track = None
+    duration = clip.duration
+    ambience_track = ()
     if dubbed:
         voice_track, segs = dubbed
         jumpcut, removed = False, []  # the new speech has its own pauses; struck words were in the old one
+        if o.dub_pacing == "natural":
+            duration = dub.output_duration(job_dir, clip)
+        if o.dub_ambience:
+            ambience_track = (ambience.track_for(video, job_dir, clip),)
 
     silences = audio_silences(video, clip.start, clip.end) if jumpcut and settings.jumpcut_audio else None
-    plan = plan_cuts(segs, clip.start, clip.end, enabled=jumpcut, silences=silences, removed=removed)
+    plan = plan_cuts(segs, clip.start, clip.start + duration, enabled=jumpcut, silences=silences, removed=removed)
 
     kit = brand.load()
     card = brand.end_card_seconds(kit, o, plan.duration)
@@ -80,7 +86,7 @@ def render_clip(video: Path, clip: Clip, segs: list[Segment], job_dir: Path) -> 
         captions.write_text(build_srt(plan.words), encoding="utf-8")
         try:
             rf = _encode(video, clip, plan, job_dir, name, ASPECTS["9:16"][0], kit, card, fx, timed, used, errors,
-                         voice_track)
+                         voice_track, *ambience_track)
         except RuntimeError as e:
             if not timed:
                 raise
@@ -88,7 +94,7 @@ def render_clip(video: Path, clip: Clip, segs: list[Segment], job_dir: Path) -> 
             errors.append(f"stat cards left out: {e}"[:200])
             timed = []
             rf = _encode(video, clip, plan, job_dir, name, ASPECTS["9:16"][0], kit, card, fx, timed, used, errors,
-                         voice_track)
+                         voice_track, *ambience_track)
     clip.cut_seconds = round(plan.removed, 2)
     clip.reframe = rf.mode
     clip.fit_seconds = round(clip.duration if rf.mode == "fit" else sum(b - a for a, b in rf.fit), 1)
@@ -106,7 +112,7 @@ def render_clip(video: Path, clip: Clip, segs: list[Segment], job_dir: Path) -> 
             continue
         try:
             _encode(video, clip, plan, job_dir, base, ASPECTS[aspect][0], kit, card, fx, timed, used, errors,
-                    voice_track)
+                    voice_track, *ambience_track)
             formats.append(aspect)
         except Exception as e:  # the 9:16 is done and fine; say what's missing
             log.warning("%s %s version failed: %s", name, aspect, e)
@@ -125,7 +131,7 @@ def render_clip(video: Path, clip: Clip, segs: list[Segment], job_dir: Path) -> 
 def _encode(video: Path, clip: Clip, plan: CutPlan, job_dir: Path, name: str, size: tuple[int, int],
             kit: BrandKit, card: float, fx: Path | None, timed: list[inserts.Timed] | None = None,
             used: set[str] | None = None, errors: list[str] | None = None,
-            voice_track: Path | None = None) -> ReframePlan:
+            voice_track: Path | None = None, ambience_track: Path | None = None) -> ReframePlan:
     """One output file `name`.mp4 on a `size` canvas (1080 wide). Returns how it was framed."""
     w, h = size
     o = clip.options
@@ -160,6 +166,10 @@ def _encode(video: Path, clip: Clip, plan: CutPlan, job_dir: Path, name: str, si
 
     fps = settings.output_fps
     vf = [f"fps={fps}", *rf.filters(cmd_file)]
+    stretch = plan.duration / clip.duration if voice_track and o.dub_pacing == "natural" else 1.0
+    if stretch > 1.0001:
+        vf += [f"setpts={stretch:.9f}*PTS", f"fps={fps}",
+               f"tpad=stop_mode=clone:stop_duration={stretch / fps:.6f}", f"trim=duration={plan.duration:.3f}"]
     af = []
     if len(plan.keeps) > 1 or plan.removed > 0.05:
         # Same frame-grid intervals for both streams (see jumpcut.snap_to_frames) → no A/V drift
@@ -219,6 +229,7 @@ def _encode(video: Path, clip: Clip, plan: CutPlan, job_dir: Path, name: str, si
     logo_in = add(logo) if logo else None
     card_in = add(card_png) if card_png else None
     dub_in = add(voice_track) if voice_track else None  # Replace voice: clip-relative, starts at 0 like the cut
+    ambience_in = add(ambience_track) if ambience_track else None
     music = sfx.music_path(settings.music_default if o.music is None else o.music)
     music_in = add(music, loop=True) if music else None
     fx_in = add(fx) if fx else None
@@ -238,7 +249,8 @@ def _encode(video: Path, clip: Clip, plan: CutPlan, job_dir: Path, name: str, si
                                           end=plan.duration, card_from=plan.duration, height=h))
         maps += ["-map", "[v]"]
     if music_in or fx_in or dub_in:
-        graphs.append(sfx.audio_graph(af, music_in, fx_in, total, voice_src=f"{dub_in}:a" if dub_in else "0:a"))
+        graphs.append(sfx.audio_graph(af, music_in, fx_in, total, voice_src=f"{dub_in}:a" if dub_in else "0:a",
+                                      ambience_input=ambience_in, stretch=stretch))
         maps += ["-map", "[aout]"]
     if graphs:
         if "[v]" not in maps:

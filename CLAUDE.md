@@ -118,8 +118,8 @@ backend/                FastAPI + pipeline (Python 3.11, conda env "clipforge")
                         clip span; span stored → re-laid out after a trim, no GPU). Measured: the cloned voice needed
                         34 s for 28.8 s of fast speech — fixed slots + 1.2x cut every line. render: options.dub +
                         track → dub track as the voice input (sfx.audio_graph voice_src), segments() = new words for
-                        captions/.srt/stat cards/sfx, no jump cuts, no strikes. Replaces the WHOLE clip audio (no
-                        source separation model). API /clips/{i}/dub (GET draft|saved, PUT, POST generate under
+                        captions/.srt/stat cards/sfx, no jump cuts, no strikes. Original audio is muted by default;
+                        ambience.py optionally separates and caches a non-vocal stem. API /clips/{i}/dub (GET draft|saved, PUT, POST generate under
                         gpu_work, DELETE → option off + stale). DubEditor.jsx in the Shorts step; 🤖 AI voice badge
     revoice.py          🔁 Re-voice a recording (Phase 3, text-based): data/revoice/<id>/ source.<ext> (audio or video ≤
                         MAX_SECONDS 180, generation runs in the request) → Whisper words → dub.DubScript (clip=1,
@@ -428,6 +428,28 @@ publish: PATCH post {status, url}: posted_at set on → posted (cleared when it 
         (VS Code / CLI); `yt-dlp[default]` for the YouTube challenge solver; caption fonts from Windows on WSL
       - UI: delete disabled while busy, long errors wrap/clamp, failed stage marked ✕, Publish fits phone width
 
+- [x] **29. Voice Library:** Qwen3-TTS reference cloning from several recordings, saved voice versions and
+      sample playback (`tts.py`). Measured: 1.7B Base peak 4.5 GB VRAM, ~2 s to generate 1 s of speech,
+      model load ~20 s warm. On a synthetic test voice, Whisper heard the exact words and speaker similarity
+      was 0.99. Hindi is outside its supported languages.
+- [x] **31. Replace voice on one short:** start from the clip transcript, edit and regenerate individual
+      lines, listen to the assembled voice track, and render captions from the generated speech. The current
+      timing mode fits speech to the picture and flags lines that get cut. The dub replaces the source audio.
+      Shorts can already mix a separate local music track and duck it under the new voice (`dub.py`, `sfx.py`).
+- [x] **31a. Re-voice an uploaded recording:** import audio or video up to 180 seconds, re-speak its transcript
+      in a Voice Library voice, and export with the original picture when the input is video (`revoice.py`).
+      This uses text-based synthesis at the source timing. The model supplies its own delivery.
+- [x] **Narrate selected clips in my voice:** Pick clips applies one saved voice version to approved shorts.
+      Keep the transcript wording or ask for a narration rewrite. Review and edit lines, preview the first line
+      against the source picture, then generate and activate each selected dub. Create shorts & posts uses the
+      activated dubs and captions timed to the generated speech.
+- [x] **Background batch narration:** a Worker task continues while the tab is closed. Job events publish per-short
+      progress; the retry action only requeues failed shorts. Backend restarts leave interrupted items retryable.
+- [x] **Natural pacing for narration:** an opt-in mode keeps generated speech at full length and slows the picture
+      uniformly if it needs more time. The existing source-timing mode remains the default.
+- [x] **Retain source ambience:** optional CPU Demucs separation caches the non-vocal stem for a clip range and
+      mixes it at low volume beneath the dub. Set `DEMUCS_EXECUTABLE` when Demucs is outside the backend path.
+
 ## Roadmap (pick up here)
 0. [x] Jump-cut polish: 10 ms audio crossfades at cut points (`JUMPCUT_CROSSFADE_MS`); optional 5% punch-in
        on alternate segments (`JUMPCUT_ZOOM` / per-clip `options.zoom`, `zoom_graph`).
@@ -491,22 +513,9 @@ For a later discussion (not planned yet):
 27. [ ] ComfyUI as an optional local generator over its HTTP API (workflow JSON in, frames out), behind GPU_LOCK and
         unloaded after use like Gemma (8 GB VRAM: SDXL-class images fine, video models slow): B-roll stills/loops when
         your folder has no match (item 19 / G), stylised cover backgrounds, upscaling. Not ClipForge-as-ComfyUI-nodes.
-31. [x] Replace voice (dub.py): sentence-level re-voicing of a clip in a Voice Library voice, laid out on the
-        original timing, rendered with the existing pipeline. Not done on purpose: lip-sync (needs a heavy model),
-        keeping music/ambience under the new voice (needs a separation model, e.g. Demucs ~80 MB in the TTS env —
-        opt-in later), jump cuts on dubbed clips, whole long videos (clips ≤ 180 s).
-        [x] Phase 3 (a) — re-voice a recording without a new model (revoice.py): timing kept, intonation not.
-        [ ] Phase 3 (b) — true conversion keeping your delivery needs a VC model; not downloaded. Candidates:
-        OpenVoice V2 tone-colour converter (MIT; timbre only, rhythm/intonation from your audio; needs MeloTTS in
-        its setup; community ONNX build ~0.06 RTF on CUDA) — first choice; Seed-VC (zero-shot, 25-200M params,
-        real-time capable; GPL-3.0 per a mirror — verify; GPL matters if ClipForge is ever distributed).
 30. [x] Clip judge + gap detector (judge.py, app.judge_eval), learning mode v1 (learn.py), scene thumbnails
         (scenes/scene_K.jpg, made on request for older indexes). [ ] later: Q&A over a video (BM25 over transcript
         chunks first), search by meaning only if word search falls short (small CPU embedding model).
-29. [x] Your voice: Qwen3-TTS cloning from several recordings (tts.py). Measured: 1.7B Base peak 4.5 GB VRAM, ~2 s
-        to generate 1 s of speech, model load ~20 s warm; Whisper hears the exact words, speaker similarity 0.99 on a
-        synthetic test voice. Hindi isn't one of its 10 languages. [ ] next: use it — spoken hook intro on a short,
-        then Script → Short (scenes → voice-over → stills + motion / template cards → existing captions/render).
 28. [x] Scene index (from the "Video Intelligence v1" review, Nov 2026) — built, see scenes.py. Slim scope only: scene cuts for every video
         (nospeech.analyse already finds them) → ≤ 1 keyframe per scene / ~20-30 s → vision Gemma description →
         scenes.json (start, end, frame, description, transcript text). Main use: scene lines in the SELECTION prompt
@@ -515,3 +524,12 @@ For a later discussion (not planned yet):
         in most samples) so it costs nothing there. ~5 s per frame on gemma4 → ~10-20 min per hour of video
         (estimate). Prove with app.eval on a tutorial-style video before keeping it. Dropped: embedding-based search
         (another model in 8 GB VRAM), video Q&A (different product). Contact sheet = optional debug view.
+
+### Voice roadmap
+
+- [ ] **Other voice ideas.** Spoken hook intros, Script → Short (script → voice-over → stills with motion or template
+      cards), lip-sync, jump cuts on dubbed clips, and re-voicing longer source videos.
+- [ ] **31b. Voice conversion that preserves delivery.** Evaluate the existing OpenVoice V2 and Seed-VC
+      candidates for keeping the source rhythm and intonation. The earlier review listed OpenVoice V2's
+      tone-colour converter with a MeloTTS setup dependency and a community ONNX build, and Seed-VC as a
+      zero-shot alternative. Verify model fit, runtime and licensing before choosing one.

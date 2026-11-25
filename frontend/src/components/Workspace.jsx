@@ -48,9 +48,9 @@ export default function Workspace({ job, onChanged }) {
     if (!hadShort && hasShort && (step === 'pick' || step === 'source')) setStep('shorts')
     if (was === job.status) return
     if (job.status === 'review' && (step === 'source' || step === 'transcript')) setStep('pick')
-    if (job.status === 'done' && (was === 'running' || was === 'queued') && step === 'pick') setStep('shorts')
+    if (job.status === 'done' && job.stage !== 'narrating' && (was === 'running' || was === 'queued') && step === 'pick') setStep('shorts')
     if (job.status === 'done' && step === 'source') setStep(job.purpose === 'learn' ? 'learn' : 'shorts')
-  }, [job.status, hasShort, step])
+  }, [job.status, job.stage, hasShort, step])
 
   // Wrap every action: show errors in one place, refresh after
   const act = async (fn) => {
@@ -110,6 +110,26 @@ export default function Workspace({ job, onChanged }) {
         </div>
       )}
       {job.error && !busy && <div className="banner error">⚠ {job.error}</div>}
+      {job.narration && (
+        <section className="card" aria-label="Narration progress">
+          <h3>Narration progress</h3>
+          <ul>
+            {Object.entries(job.narration.items).map(([index, item]) => (
+              <li key={index} className={item.status === 'failed' ? 'err' : ''}>
+                Short {index} · {item.status === 'queued' ? 'Queued' : item.message}
+                {item.status === 'running' && ` (${Math.round(item.progress * 100)}%)`}
+              </li>
+            ))}
+          </ul>
+          {Object.values(job.narration.items).some((item) => item.status === 'failed') && (
+            <button className="btn sm" disabled={busy}
+                    onClick={() => act(() => api.retryNarration(job.id)).catch(() => {})}>Retry failed narrations</button>
+          )}
+          {Object.values(job.narration.items).some((item) => item.status === 'ready') && (
+            <p className="muted small">Export ready narration using Create shorts &amp; posts or Re-render.</p>
+          )}
+        </section>
+      )}
       {actionErr && (
         <div className="banner error" onClick={() => setActionErr('')}>
           ⚠ {actionErr} <span className="muted">(click to dismiss)</span>

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { api } from '../../api.js'
 import { MAX_SHORT, clipText, fmtPrecise, moveEdge, timelineWindow } from '../../util.js'
 import CaptionEditor from '../CaptionEditor.jsx'
+import NarrationBatch from '../NarrationBatch.jsx'
 import Timeline from '../Timeline.jsx'
 
 const KEY_SAVE_MS = 600 // keyboard / button nudges are saved once you pause
@@ -391,6 +392,7 @@ export default function PickStep({ job, busy, act, go, transcript, reloadTranscr
         ))}
       </div>
 
+      <NarrationBatch job={job} clips={approved} busy={busy} act={act} />
       <div className="footer-bar">
         {pending.length > 0 ? (
           <>

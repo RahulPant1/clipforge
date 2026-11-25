@@ -159,6 +159,7 @@ class Settings(BaseSettings):
     tts_attn: str = "sdpa"  # sdpa (built in) | flash_attention_2 (needs flash-attn in the TTS env)
     tts_language: str = "Auto"  # English, Chinese, ... (10 languages; no Hindi) or Auto
     tts_timeout: float = 900.0  # s per worker run (the first one downloads the model)
+    demucs_executable: str = "demucs"  # optional local CLI for source ambience; absolute path or on PATH
     tts_max_new_tokens: int = 2048  # ≈ 2.7 min of speech per line at 12.5 codes/s
     tts_sample_text: str = "Here is a quick test of this voice. If it sounds right, the new version worked."
     # Inserts (inserts.py): motion-graphics cards burned in when a number is spoken (stat_counter). Only approved

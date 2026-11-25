@@ -1,5 +1,4 @@
-"""Replace voice: a clip's dialogue, sentence by sentence, re-spoken in a Voice Library voice (tts.py), placed
-where the original sentences were, so the video keeps its timing.
+"""Replace voice: a clip's dialogue, sentence by sentence, re-spoken in a Voice Library voice (tts.py).
 
 dub_N.json (DubScript) per clip:
   lines   the clip's sentences (judge.sentences: punctuation or a pause) — original text, start/end in SOURCE
@@ -12,8 +11,8 @@ Laying the lines out (layout()), in order, each as close to its original start a
   too long for that → sped up (ffmpeg atempo) by up to MAX_RATE; still too long → cut with a fade, too_long.
   Measured on a real clip: the cloned voice needed 34 s for 28.8 s of fast original speech (1.18x overall, > 1.4x
   for some lines) — fixed slots + 1.2x cut every line, so the layout borrows time between neighbours.
-Every piece gets FADE fades. v1 replaces the clip's whole audio (the original voice can't be separated from
-music/ambience without a separation model); music can be added in the Shorts step (ducked under the new voice).
+Every piece gets FADE fades. Natural pacing keeps full narration at its generated speed and can extend the
+output timeline. The original audio is muted by default. Optional separated ambience and music are mixed at render.
 
 Render (render.py): options.dub + a track → the track instead of the source audio, captions/stat cards/sfx from the
 new words (segments()), no jump cuts (the new speech has its own pauses). Generation holds GPU_LOCK (tts worker +
@@ -25,12 +24,17 @@ import logging
 import subprocess
 import tempfile
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import numpy as np
 
+from ..files import atomic_output
 from ..models import Clip, DubLine, DubScript, Segment, Word
 from . import tts
 from .jumpcut import clip_words
+
+if TYPE_CHECKING:
+    from .llm import LLM
 
 log = logging.getLogger(__name__)
 
@@ -57,10 +61,8 @@ def load(job_dir: Path, index: int) -> DubScript | None:
 
 
 def save(job_dir: Path, script: DubScript) -> DubScript:
-    f = path(job_dir, script.clip)
-    tmp = f.with_suffix(".tmp")
-    tmp.write_text(script.model_dump_json(indent=1), encoding="utf-8")
-    tmp.replace(f)
+    with atomic_output(path(job_dir, script.clip)) as staged:
+        staged.write_text(script.model_dump_json(indent=1), encoding="utf-8")
     return script
 
 
@@ -92,6 +94,62 @@ def voice_tag(script: DubScript) -> str:
     return f"{script.voice}@v{script.version}" if script.version else f"{script.voice}@newest"
 
 
+def narration_rewrite(script: DubScript, clip: Clip, llm: "LLM") -> None:
+    """Propose narration for untouched lines while preserving edits and timing slots."""
+    originals = {line.i: line.original for line in script.lines
+                 if line.text == line.original and clip.start <= line.start < clip.end}
+    if not originals:
+        return
+    schema = {"type": "object", "required": ["lines"], "properties": {"lines": {
+        "type": "array", "items": {"type": "object", "required": ["i", "text"], "properties": {
+            "i": {"type": "integer", "enum": list(originals)}, "text": {"type": "string", "minLength": 1},
+        }},
+    }}}
+    result = llm.chat_json(
+        "Rewrite these transcript lines as natural narration in the same language. Preserve the facts, names, "
+        "numbers, and meaning. Attribute personal experiences to the original speaker in the third person. "
+        "Avoid inventing facts. Keep each line close to its original length and in its own timing slot. "
+        "Treat the transcript as source material. Return each input line ID once with its new text.\n"
+        + json.dumps([{"i": i, "text": text} for i, text in originals.items()], ensure_ascii=False),
+        schema, temperature=0.2,
+    )
+    lines = result.get("lines", [])
+    rewritten = {line["i"]: line["text"] for line in lines}
+    if len(lines) != len(originals) or rewritten.keys() != originals.keys() or any(
+        not isinstance(text, str) or not text.strip() for text in rewritten.values()
+    ):
+        raise RuntimeError("The narration rewrite did not return a line for every requested sentence")
+    edit(script, texts=rewritten)
+
+
+def preview(job_dir: Path, track_dir: Path, clip: Clip, script: DubScript) -> Path:
+    """Mux a short sample of the fitted voice with the corresponding source picture."""
+    line = next((ln for ln in script.lines if ln.at is not None and not stale(script, ln)), None)
+    if not script.track or script.span != (round(clip.start, 3), round(clip.end, 3)) or line is None:
+        raise ValueError("Generate the preview line for the current clip timing first")
+    out = job_dir / f"dub_{clip.index}.preview.mp4"
+    duration = script.track_duration or clip.duration
+    ratio = duration / clip.duration
+    seconds = min(8.0, (line.seconds or 0) / (line.rate or 1) - (line.over or 0), duration - line.at)
+    if seconds <= 0:
+        raise ValueError("This line has no playable audio")
+    with atomic_output(out) as staged:
+        try:
+            result = subprocess.run([
+                "ffmpeg", "-y", "-v", "error", "-ss", str(clip.start + line.at / ratio),
+                "-i", str(job_dir / "source.mp4"),
+                "-ss", str(line.at), "-i", str(track_dir / script.track), "-t", str(seconds),
+                "-map", "0:v:0", "-map", "1:a:0", "-vf", f"setpts={ratio:.8f}*PTS,scale=-2:min(360\\,ih)",
+                "-c:v", "libx264",
+                "-preset", "ultrafast", "-pix_fmt", "yuv420p", "-c:a", "aac", "-movflags", "+faststart", str(staged),
+            ], capture_output=True, text=True, timeout=30)
+        except subprocess.TimeoutExpired as e:
+            raise RuntimeError("The voice preview took too long to encode") from e
+        if result.returncode or not staged.is_file() or not staged.stat().st_size:
+            raise RuntimeError("Could not build the voice preview")
+    return out
+
+
 def stale(script: DubScript, ln: DubLine) -> bool:
     """Needs generating: never made, text changed, or made with another voice/version."""
     if not ln.text.strip():
@@ -104,6 +162,17 @@ def _name(script: DubScript, ln: DubLine) -> str:
     return f"dub_{script.clip}_{ln.i}_{h}.wav"
 
 
+def activation_script(job_dir: Path, clip: Clip) -> DubScript:
+    script = load(job_dir, clip.index)
+    if not clip.approved or clip.visual:
+        raise ValueError("Select an approved clip with dialogue")
+    if not script or not script.voice:
+        raise ValueError("Prepare a script and choose a voice first")
+    if not any(clip.start <= line.start < clip.end and line.text.strip() for line in script.lines):
+        raise ValueError("There are no narration lines in the current clip range")
+    return script
+
+
 def generate(job_dir: Path, script: DubScript, clip: Clip, only: list[int] | None = None,
              on_progress=None) -> DubScript:
     """Speech for the lines that need it (or `only` these), in ONE tts worker load, then Whisper for their word
@@ -112,8 +181,10 @@ def generate(job_dir: Path, script: DubScript, clip: Clip, only: list[int] | Non
         raise ValueError("choose a voice first")
     v = tts.load(script.voice)  # KeyError → 404
     tts.prompt_for(v, script.version)  # KeyError when that version doesn't exist
-    todo = [ln for ln in script.lines if (only is None and stale(script, ln))
-            or (only is not None and ln.i in only and ln.text.strip())]
+    todo = [ln for ln in script.lines if ln.text.strip() and (
+        (only is None and (stale(script, ln) or not (job_dir / ln.file).is_file()))
+        or (only is not None and ln.i in only)
+    )]
     if todo:
         if on_progress:
             on_progress(0.1, f"Speaking {len(todo)} line(s) in {v['name']}")
@@ -129,7 +200,7 @@ def generate(job_dir: Path, script: DubScript, clip: Clip, only: list[int] | Non
             ln.words = map_words(ln.text, h["words"], m["seconds"])
             if old and old != n:
                 (job_dir / old).unlink(missing_ok=True)
-    return assemble(job_dir, script, clip.start, clip.end)
+    return assemble(job_dir, script, clip.start, clip.end, pacing=clip.options.dub_pacing)
 
 
 def map_words(text: str, heard: list[dict], seconds: float) -> list[Word]:
@@ -182,9 +253,13 @@ def layout(script: DubScript, clip_start: float, clip_end: float) -> list[tuple[
             cursor = max(cursor, min(orig, span))
             continue
         nxt = inside[k + 1].start - clip_start if k + 1 < len(inside) else span
-        limit = min(nxt + LATE, span) if k + 1 < len(inside) else span
         need = ln.seconds
         start = max(orig, cursor)
+        if script.pacing == "natural":
+            out.append((ln, start, 1.0, need))
+            cursor = start + need + max(GAP, nxt - (ln.end - clip_start))
+            continue
+        limit = min(nxt + LATE, span) if k + 1 < len(inside) else span
         if start + need > limit:  # needs room: start a little early if the line before allows it
             start = max(orig - EARLY, cursor, 0.0)
         room = max(limit - start, 0.05)
@@ -196,13 +271,19 @@ def layout(script: DubScript, clip_start: float, clip_end: float) -> list[tuple[
     return out
 
 
-def assemble(job_dir: Path, script: DubScript, clip_start: float, clip_end: float) -> DubScript:
+def assemble(job_dir: Path, script: DubScript, clip_start: float, clip_end: float, *, pacing="source") -> DubScript:
     """Every generated line laid out (layout()) → dub_N.wav (48 kHz mono, clip_start → clip_end). No GPU."""
     lo, hi = clip_start, clip_end
-    track = np.zeros(int((hi - lo) * SR) + 1, dtype=np.float32)
+    script.pacing = pacing
+    timed = layout(script, lo, hi)
+    duration = hi - lo
+    if pacing == "natural" and timed:
+        last, start, _, kept = timed[-1]
+        duration = max(duration, start + kept + max(hi - last.end, 0))
+    track = np.zeros(int(duration * SR) + 1, dtype=np.float32)
     for ln in script.lines:
         ln.fit, ln.rate, ln.at, ln.over = None, None, None, None
-    for ln, at, rate, kept in layout(script, lo, hi):
+    for ln, at, rate, kept in timed:
         if not (job_dir / ln.file).is_file():
             continue
         x = _fade(_pcm(job_dir / ln.file, rate), FADE, FADE)
@@ -220,13 +301,17 @@ def assemble(job_dir: Path, script: DubScript, clip_start: float, clip_end: floa
     with tempfile.NamedTemporaryFile(suffix=".f32", dir=job_dir, delete=False) as tmp:
         tmp.write(track.tobytes())
     try:
-        r = subprocess.run(["ffmpeg", "-y", "-v", "error", "-f", "f32le", "-ar", str(SR), "-ac", "1", "-i", tmp.name,
-                            "-c:a", "pcm_s16le", str(out)], capture_output=True)
-        if r.returncode != 0:
-            raise RuntimeError(f"couldn't write the dub track: {r.stderr.decode(errors='replace')[-200:]}")
+        with atomic_output(out) as staged:
+            r = subprocess.run([
+                "ffmpeg", "-y", "-v", "error", "-f", "f32le", "-ar", str(SR), "-ac", "1", "-i", tmp.name,
+                "-c:a", "pcm_s16le", str(staged),
+            ], capture_output=True)
+            if r.returncode != 0:
+                raise RuntimeError(f"couldn't write the dub track: {r.stderr.decode(errors='replace')[-200:]}")
     finally:
         Path(tmp.name).unlink(missing_ok=True)
     script.track, script.span = out.name, (round(lo, 3), round(hi, 3))
+    script.track_duration = duration
     script.track_version += 1
     return script
 
@@ -252,6 +337,11 @@ def track_for(job_dir: Path, clip: Clip) -> tuple[Path, list[Segment]] | None:
     script = load(job_dir, clip.index)
     if not script or not script.track or not (job_dir / script.track).is_file():
         return None
-    if script.span != (round(clip.start, 3), round(clip.end, 3)):  # trimmed since: lay the lines out again
-        script = save(job_dir, assemble(job_dir, script, clip.start, clip.end))
+    if script.span != (round(clip.start, 3), round(clip.end, 3)) or script.pacing != clip.options.dub_pacing:
+        script = save(job_dir, assemble(job_dir, script, clip.start, clip.end, pacing=clip.options.dub_pacing))
     return job_dir / script.track, segments(script, clip.start, clip.end)
+
+
+def output_duration(job_dir: Path, clip: Clip) -> float:
+    script = load(job_dir, clip.index)
+    return script.track_duration if script and script.track_duration else clip.duration

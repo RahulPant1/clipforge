@@ -7,6 +7,8 @@ import shutil
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
+from tempfile import TemporaryDirectory
+from threading import Lock
 
 from fastapi import FastAPI, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
@@ -26,6 +28,7 @@ from .models import (
     ClipEdit,
     CompareRequest,
     CoverEdit,
+    DubBatchDraft,
     DubEdit,
     DubGenerate,
     Insert,
@@ -33,6 +36,10 @@ from .models import (
     JobCreate,
     JobMode,
     JobStatus,
+    NarrationBatch,
+    NarrationItem,
+    NarrationOptions,
+    NarrationQueue,
     Post,
     PostEdit,
     ProduceRequest,
@@ -75,6 +82,7 @@ from .pipeline import (
     voice,
     waveform,
 )
+from .pipeline.ambience import available as ambience_available
 from .pipeline.content import ANGLES, NAMES, ContentContext, clip_text, generate_post, load_meta, write_posts_md
 from .pipeline.export import build_pack
 from .pipeline.history import get_history
@@ -94,7 +102,7 @@ SAFE_NAME = re.compile(r"^[\w.\-]+$")
 
 def create_app(pipeline=None, start_worker: bool = True, llm_factory=OllamaClient, steps=None) -> FastAPI:
     store = JobStore(settings.data_dir)
-    worker = Worker(store, pipeline, steps)
+    worker = Worker(store, pipeline, steps, llm_factory=llm_factory)
     library = Library(store, fetch_meta=settings.library_fetch_meta)
     store.listeners.append(library.touch)
     watcher = Watcher(store, worker.submit)
@@ -930,11 +938,85 @@ def create_app(pipeline=None, start_worker: bool = True, llm_factory=OllamaClien
             GPU_LOCK.release()
 
     # ---------------------------------------------------------------- Replace voice (dub.py)
+    dub_lock = Lock()
+
+    @app.get("/api/narration/options")
+    def narration_options() -> dict:
+        return {"ambience_available": ambience_available()}
+
+    @app.post("/api/jobs/{job_id}/dub/batch", response_model=Job, status_code=202)
+    def queue_narration(job_id: str, body: NarrationQueue) -> Job:
+        job = editable(job_id)
+        if body.ambience and not ambience_available():
+            raise HTTPException(400, "Install Demucs to keep source ambience")
+        clips = {clip.index: clip for clip in job.clips}
+        items = {}
+        for index in dict.fromkeys(body.clips):
+            if index not in clips:
+                raise HTTPException(404, f"Short {index} was not found")
+            try:
+                dub.activation_script(store.dir(job_id), clips[index])
+            except ValueError as e:
+                raise HTTPException(400, f"Short {index}: {e}") from None
+            items[index] = NarrationItem()
+        batch = NarrationBatch(items=items, pacing=body.pacing, ambience=body.ambience, restore=job.status)
+        return worker.submit_narration(job, batch)
+
+    @app.post("/api/jobs/{job_id}/dub/batch/retry", response_model=Job, status_code=202)
+    def retry_narration(job_id: str) -> Job:
+        job = editable(job_id)
+        batch = job.narration
+        if batch is None or not any(item.status == "failed" for item in batch.items.values()):
+            raise HTTPException(400, "No failed narrations to retry")
+        items = {index: NarrationItem() if item.status == "failed" else item for index, item in batch.items.items()}
+        return worker.submit_narration(job, batch.model_copy(update={"items": items, "restore": job.status}))
+
     def segs_of(job_id: str) -> list[Segment]:
         f = store.dir(job_id) / "transcript.json"
         if not f.is_file():
             raise HTTPException(400, "no transcript yet")
         return [Segment(**x) for x in json.loads(f.read_text())]
+
+    @app.post("/api/jobs/{job_id}/dub/drafts")
+    def draft_dubs(job_id: str, body: DubBatchDraft) -> dict:
+        job = editable(job_id)
+        voice = voice_or_404(body.voice)
+        try:
+            prompt = tts.prompt_for(voice, body.version)
+        except KeyError:
+            raise HTTPException(400, "Choose a voice with an available build") from None
+        prompt_name = prompt.relative_to(tts.voice_dir(body.voice)).as_posix()
+        version = next(build["version"] for build in voice["builds"] if build.get("prompt") == prompt_name)
+        eligible = {clip.index: clip for clip in job.clips if clip.approved and not clip.visual}
+        if not set(body.clips) <= eligible.keys():
+            raise HTTPException(400, "Select approved clips with dialogue")
+        d = store.dir(job_id)
+        segs = segs_of(job_id)
+        previous = {index: dub.load(d, index) for index in dict.fromkeys(body.clips)}
+        drafts = []
+        for index, saved in previous.items():
+            clip = eligible[index]
+            script = saved.model_copy(deep=True) if saved else dub.draft(segs, clip)
+            if not any(clip.start <= line.start < clip.end and line.text.strip() for line in script.lines):
+                raise HTTPException(400, f"Short {index} has no narration lines in its current range")
+            drafts.append((clip, dub.edit(script, body.voice, version)))
+
+        if body.mode == "rewrite":
+            def rewrite():
+                llm = llm_factory()
+                try:
+                    for clip, script in drafts:
+                        dub.narration_rewrite(script, clip, llm)
+                finally:
+                    llm.unload()
+
+            gpu_work(rewrite)
+        with dub_lock:
+            if editable(job_id) is not job or any(dub.load(d, index) != saved for index, saved in previous.items()):
+                raise HTTPException(409, "The clips or scripts changed while preparing drafts. Try again.")
+            for _, script in drafts:
+                dub.save(d, script)
+        return {"clips": [clip.index for clip, _ in drafts]}
 
     @app.get("/api/jobs/{job_id}/clips/{index}/dub")
     def get_dub(job_id: str, index: int) -> dict:
@@ -958,25 +1040,81 @@ def create_app(pipeline=None, start_worker: bool = True, llm_factory=OllamaClien
                 tts.load(body.voice)
             except (KeyError, ValueError):
                 raise HTTPException(404, "voice not found") from None
-        script = None if body.reset else dub.load(d, index)
-        script = script or dub.draft(segs_of(job_id), clip)
-        dub.save(d, dub.edit(script, body.voice, body.version, body.texts))
+        with dub_lock:
+            editable(job_id)
+            script = None if body.reset else dub.load(d, index)
+            script = script or dub.draft(segs_of(job_id), clip)
+            dub.save(d, dub.edit(script, body.voice, body.version, body.texts))
         return get_dub(job_id, index)
 
     @app.post("/api/jobs/{job_id}/clips/{index}/dub/generate")
     def generate_dub(job_id: str, index: int, body: DubGenerate | None = None) -> dict:
         """Speak the lines that need it (or just `lines`) in the chosen voice and lay out the dub track.
         A short rendered with it is marked to re-render."""
-        editable(job_id)
-        _, clip = clip_of(job_id, index)
         d = store.dir(job_id)
-        script = dub.load(d, index)
-        if script is None:
-            raise HTTPException(400, "choose a voice first")
-        dub.save(d, gpu_work(lambda: dub.generate(d, script, clip, body.lines if body else None)))
-        if clip.file and clip.options.dub:
-            store.update_clip(job_id, index, lambda c: setattr(c, "stale", True))
+
+        def generate():
+            editable(job_id)
+            _, clip = clip_of(job_id, index)
+            activate = bool(body and body.activate)
+            script = dub.activation_script(d, clip) if activate else dub.load(d, index)
+            if script is None:
+                raise ValueError("choose a voice first")
+            if activate and body.lines is not None:
+                raise ValueError("Generate all narration lines before using this voice in the short")
+            script = dub.save(d, dub.generate(d, script, clip, body.lines if body else None))
+
+            def use_voice(c: Clip) -> None:
+                if activate:
+                    c.options = c.options.model_copy(update={"dub": True})
+                if c.file and c.options.dub:
+                    c.stale = True
+
+            if activate or clip.options.dub:
+                store.update_clip(job_id, index, use_voice)
+
+        def locked_generate():
+            with dub_lock:
+                generate()
+
+        gpu_work(locked_generate)
         return get_dub(job_id, index)
+
+    @app.post("/api/jobs/{job_id}/clips/{index}/dub/preview")
+    def preview_dub(job_id: str, index: int, body: NarrationOptions | None = None) -> dict:
+        editable(job_id)
+        clip_of(job_id, index)
+        d = store.dir(job_id)
+        with TemporaryDirectory(prefix=".dub-preview-", dir=d) as folder:
+            staged = Path(folder)
+
+            def generate():
+                editable(job_id)
+                _, clip = clip_of(job_id, index)
+                if body is not None:
+                    clip = clip.model_copy(update={"options": clip.options.model_copy(
+                        update={"dub_pacing": body.pacing})})
+                script = dub.load(d, index)
+                if not script or not script.voice:
+                    raise ValueError("Choose a voice before previewing")
+                line = next((ln for ln in script.lines
+                             if clip.start <= ln.start < clip.end and ln.text.strip()), None)
+                if line is None:
+                    raise ValueError("There are no narration lines in the current clip range")
+                sample = script.model_copy(deep=True)
+                for other in sample.lines:
+                    other.file, other.seconds = None, None
+                sample = dub.generate(staged, sample, clip, [line.i])
+                return clip, sample
+
+            clip, sample = gpu_work(generate)
+            try:
+                file = dub.preview(d, staged, clip, sample)
+            except ValueError as e:
+                raise HTTPException(400, str(e)) from None
+            except RuntimeError as e:
+                raise HTTPException(502, str(e)) from None
+        return {"file": file.name}
 
     @app.delete("/api/jobs/{job_id}/clips/{index}/dub")
     def delete_dub(job_id: str, index: int) -> Job:
@@ -984,16 +1122,18 @@ def create_app(pipeline=None, start_worker: bool = True, llm_factory=OllamaClien
         editable(job_id)
         _, clip = clip_of(job_id, index)
         d = store.dir(job_id)
-        for f in d.glob(f"dub_{index}_*.wav"):
-            f.unlink(missing_ok=True)
-        for f in (d / f"dub_{index}.wav", dub.path(d, index)):
-            f.unlink(missing_ok=True)
 
         def off(c: Clip) -> None:
             if c.options.dub:
                 c.options = c.options.model_copy(update={"dub": None})
                 c.stale = bool(c.file)
-        return store.update_clip(job_id, index, off)
+        with dub_lock:
+            editable(job_id)
+            for f in d.glob(f"dub_{index}_*.wav"):
+                f.unlink(missing_ok=True)
+            for f in (d / f"dub_{index}.wav", d / f"dub_{index}.preview.mp4", dub.path(d, index)):
+                f.unlink(missing_ok=True)
+            return store.update_clip(job_id, index, off)
 
     @app.get("/api/jobs/{job_id}/clips/{index}/people")
     def clip_people(job_id: str, index: int) -> list[dict]:

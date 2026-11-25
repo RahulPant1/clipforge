@@ -3,6 +3,7 @@
 import json
 import shutil
 import subprocess
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -208,3 +209,178 @@ def test_dub_api(tmp_path, monkeypatch):
         job = c.delete(f"/api/jobs/{jid}/clips/1/dub").json()
         clip = job["clips"][0]
         assert clip["options"]["dub"] is None and clip["stale"] is True and not (d / "dub_1.wav").exists()
+
+
+@needs_ffmpeg
+def test_batch_drafts_preview_and_activation(monkeypatch):
+    from app.main import create_app
+    from app.models import DubBatchDraft, DubGenerate, JobStatus
+
+    class NarrationLLM:
+        def unload(self):
+            pass
+
+        def chat_json(self, prompt, schema, **kwargs):
+            assert "Attribute personal experiences" in prompt
+            ids = schema["properties"]["lines"]["items"]["properties"]["i"]["enum"]
+            return {"lines": [{"i": i, "text": f"Suggested narration {i}."} for i in ids]}
+
+    app = create_app(start_worker=False, llm_factory=NarrationLLM)
+    endpoints = {route.name: route.endpoint for route in app.routes if hasattr(route, "endpoint")}
+    store = app.state.store
+    job = store.create("source", 2)
+    clips = [
+        Clip(index=i, start=0, end=5, title="t", hook="h", score=5, approved=True, file=f"short_{i}.mp4")
+        for i in (1, 2)
+    ]
+    store.update(job.id, status=JobStatus.done, clips=clips)
+    d = store.dir(job.id)
+    segs = talk("I started a company.", "It grew quickly.")
+    (d / "transcript.json").write_text(json.dumps([s.model_dump() for s in segs]))
+    dub.save(d, dub.edit(dub.draft(segs, clips[0]), texts={0: "I manually rewrote this line."}))
+
+    voice = tts.create("Me", consent=True)
+    voice["builds"] = [{"version": 2, "prompt": "prompts/v2.pt"}]
+    prompt = tts.voice_dir(voice["id"]) / "prompts" / "v2.pt"
+    prompt.parent.mkdir(exist_ok=True)
+    prompt.touch()
+    tts.save(voice)
+
+    request = DubBatchDraft(clips=[1, 2], voice=voice["id"], mode="rewrite")
+    assert endpoints["draft_dubs"](job.id, request) == {"clips": [1, 2]}
+    first, second = dub.load(d, 1), dub.load(d, 2)
+    assert first.version == second.version == 2 and first.voice == second.voice == voice["id"]
+    assert [line.text for line in first.lines] == ["I manually rewrote this line.", "Suggested narration 1."]
+    assert second.lines[0].text == "Suggested narration 0."
+
+    subprocess.run([
+        "ffmpeg", "-y", "-v", "error", "-f", "lavfi", "-i", "color=s=160x90:r=25:d=5",
+        "-pix_fmt", "yuv420p", str(d / "source.mp4"),
+    ], check=True)
+
+    def speak(vid, texts, *, out_dir, names, version):
+        assert version == 2
+        for name in names:
+            tone(out_dir / name, 0.5)
+        return [{"seconds": 0.5} for _ in names]
+
+    monkeypatch.setattr(tts, "speak", speak)
+    monkeypatch.setattr(tts, "transcribe_many", lambda paths: [{"words": []} for _ in paths])
+    response = endpoints["preview_dub"](job.id, 1)
+    assert (d / response["file"]).stat().st_size > 0
+    assert dub.load(d, 1) == first and not store.get(job.id).clips[0].options.dub
+
+    endpoints["generate_dub"](job.id, 1, DubGenerate(activate=True))
+    updated = store.get(job.id).clips
+    assert updated[0].options.dub and updated[0].stale
+    assert not updated[1].options.dub and not updated[1].stale
+    assert all(not dub.stale(dub.load(d, 1), line) for line in dub.load(d, 1).lines)
+
+
+def test_background_narration_retries_only_failed_clips(monkeypatch):
+    from app.main import create_app
+    from app.models import JobStatus, NarrationQueue
+
+    class LocalLLM:
+        def unload(self):
+            pass
+
+    app = create_app(start_worker=False, llm_factory=LocalLLM)
+    endpoints = {route.name: route.endpoint for route in app.routes if hasattr(route, "endpoint")}
+    store, worker = app.state.store, app.state.worker
+    job = store.create("source", 2)
+    clips = [Clip(index=i, start=0, end=5, title="t", hook="h", score=5, approved=True) for i in (1, 2)]
+    store.update(job.id, status=JobStatus.review, clips=clips)
+    directory = store.dir(job.id)
+    for clip in clips:
+        dub.save(directory, DubScript(clip=clip.index, voice="v", lines=[line(0, 0, 2)]))
+    attempts = []
+
+    def generate(directory, script, clip, on_progress):
+        attempts.append(clip.index)
+        assert clip.options.dub_pacing == "natural"
+        on_progress(0.5, "Synthesis in progress")
+        item = store.get(job.id).narration.items[clip.index]
+        assert item.status == "running" and item.progress == 0.5
+        if attempts == [1, 2]:
+            raise RuntimeError("Voice engine interrupted")
+        return script
+
+    monkeypatch.setattr(dub, "generate", generate)
+    queued = endpoints["queue_narration"](job.id, NarrationQueue(clips=[1, 2], pacing="natural"))
+    assert queued.status == JobStatus.queued
+    kind, job_id, kwargs = worker.q.get_nowait()
+    worker._run(kind, job_id, **kwargs)
+    current = store.get(job.id)
+    assert {index: item.status for index, item in current.narration.items.items()} == {1: "ready", 2: "failed"}
+    assert current.clips[0].options.dub and not current.clips[1].options.dub
+
+    endpoints["retry_narration"](job.id)
+    kind, job_id, kwargs = worker.q.get_nowait()
+    worker._run(kind, job_id, **kwargs)
+    assert attempts == [1, 2, 2]
+    assert all(item.status == "ready" for item in store.get(job.id).narration.items.values())
+
+
+@needs_ffmpeg
+def test_natural_dub_extends_the_picture_and_mixes_ambience(tmp_path, monkeypatch):
+    from app.pipeline import ambience, render
+
+    source = tmp_path / "source.mp4"
+    subprocess.run([
+        "ffmpeg", "-y", "-v", "error", "-f", "lavfi", "-i", "color=s=160x90:r=25:d=3",
+        "-pix_fmt", "yuv420p", str(source),
+    ], check=True)
+    stem = tmp_path / "room.wav"
+    tone(stem, 3, freq=200)
+    tone(tmp_path / "l0.wav", 5, freq=1000)
+    monkeypatch.setattr(ambience, "track_for", lambda *args: stem)
+    monkeypatch.setitem(render.ASPECTS, "9:16", ((180, 320), ""))
+    clip = Clip(index=1, start=0, end=3, title="t", hook="", score=7, options=RenderOptions(
+        dub=True, dub_pacing="natural", dub_ambience=True, sfx=False, hook=False, aspects=[],
+    ))
+    dub.save(tmp_path, dub.assemble(tmp_path, DubScript(clip=1, voice="v", lines=[line(0, 0, 5)]), 0, 3))
+    render.render_clip(source, clip, [], tmp_path)
+
+    script = dub.load(tmp_path, 1)
+    assert clip.out_duration == script.track_duration == 7
+    assert script.lines[0].fit == "ok" and script.lines[0].rate == 1
+    assert "00:00:05,000" in (tmp_path / "short_1.srt").read_text()
+    result = subprocess.run([
+        "ffprobe", "-v", "error", "-show_entries", "stream=duration", "-of", "csv=p=0",
+        str(tmp_path / "short_1.mp4"),
+    ], capture_output=True, text=True, check=True)
+    durations = [float(s) for s in result.stdout.splitlines()]
+    assert len(durations) == 2 and all(abs(seconds - 7) < 0.08 for seconds in durations)
+    raw = subprocess.run([
+        "ffmpeg", "-v", "error", "-ss", "1", "-t", "1", "-i", str(tmp_path / "short_1.mp4"),
+        "-ac", "1", "-ar", "8000", "-f", "f32le", "-",
+    ], capture_output=True, check=True).stdout
+    spectrum = np.abs(np.fft.rfft(np.frombuffer(raw, "<f4")))
+    assert spectrum[1000] > spectrum[200] > spectrum[300] * 10
+
+
+def test_ambience_separates_each_clip_range_once(tmp_path, monkeypatch):
+    from app.pipeline import ambience
+
+    calls = []
+
+    def run(command, failure, timeout):
+        calls.append(command)
+        if command[0] == "/test/bin/demucs":
+            folder = Path(command[command.index("-o") + 1]) / ambience.MODEL / "source"
+            folder.mkdir(parents=True)
+            (folder / "no_vocals.wav").write_bytes(b"ambient audio")
+
+    monkeypatch.setattr(ambience.shutil, "which", lambda _: "/test/bin/demucs")
+    monkeypatch.setattr(ambience, "_run", run)
+    source = tmp_path / "source.mp4"
+    source.touch()
+    clip = Clip(index=1, start=2, end=6, title="t", hook="", score=7)
+    stem = ambience.track_for(source, tmp_path, clip)
+    assert stem.read_bytes() == b"ambient audio"
+    assert ambience.track_for(source, tmp_path, clip) == stem
+    assert len(calls) == 2 and "--two-stems" in calls[1]
+
+    trimmed = ambience.track_for(source, tmp_path, clip.model_copy(update={"end": 5}))
+    assert trimmed != stem and trimmed.is_file() and len(calls) == 4

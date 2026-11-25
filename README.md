@@ -64,6 +64,14 @@ YouTube URL / file
 - **🔁 Re-voice a recording:** in the Voice Library, record or import your narration (audio or video, up to 3 min)
   and have it spoken again in any library voice — every sentence starts where you said it, so the timing and pauses
   stay (your intonation doesn't: the voice reads the words its own way). A video keeps its picture
+- **Narrate in my voice:** in Pick clips, select approved shorts and one saved voice version. Prepare scripts
+  from the transcript or request a narration rewrite, then review the wording and preview the first line over
+  the picture. Queue narration and follow each short's progress in the workspace. ClipForge continues with the
+  tab closed while its backend is running. Use **Retry failed narrations** for failed or interrupted shorts,
+  then choose **Create shorts & posts** to export.
+- **Narration pacing:** choose **Match source timing** for picture-locked footage or **Natural pacing** for B-roll
+  and screen recordings. Natural pacing keeps the generated speech at its original speed and slows the picture
+  uniformly if the short needs more time. Captions follow the new speech timing.
 - **Check before creating:** the Pick step opens with the judge's verdict on the whole job — how many of the shorts
   you asked for can be complete within 59 s, how long the incomplete ideas would need, and what to do (create fewer,
   allow longer clips, or skip a video that has no self-contained moment). It only recommends: **Approve only the
@@ -246,6 +254,14 @@ reference take) that is cached and reused — the Qwen3-TTS model is not trained
 It runs only when you ask (one process per build or line, then the GPU is free again) and takes ~4.5 GB of GPU
 memory. Measured on an RTX 4060 laptop: ~2 s to make 1 s of speech, plus ~20 s to load the model each time.
 Clone only your own voice, and mark realistic AI voice-overs as altered/synthetic when you upload to YouTube.
+
+### Optional source ambience
+
+Install [Demucs](https://github.com/facebookresearch/demucs#installation) in a separate Python environment.
+Set `DEMUCS_EXECUTABLE` in `backend/.env` to the full path to its `demucs` command if it is outside the backend's
+`PATH`, then restart the backend. Enable **Keep source ambience** in the narration panel or the short's voice
+settings. The first export may download model weights. Separation runs locally on CPU, caches the result for that
+clip range, and mixes it quietly under the new voice. Listen to the export for residual dialogue.
 
 ### Ollama on Windows, app in WSL
 Either enable mirrored networking (`%UserProfile%\.wslconfig` → `[wsl2]` `networkingMode=mirrored`, then `wsl --shutdown`),

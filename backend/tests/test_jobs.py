@@ -6,7 +6,7 @@ import pytest
 
 from app.config import settings
 from app.jobs import GPU_LOCK, JobStore, QueueConflict, Worker
-from app.models import Clip, JobStatus, Post
+from app.models import Clip, JobStatus, NarrationBatch, NarrationItem, Post, Stage
 
 
 def test_failed_job_replace_keeps_saved_and_in_memory_state(tmp_path, monkeypatch):
@@ -41,6 +41,21 @@ def test_bad_job_record_does_not_block_startup(tmp_path):
 
     assert [item.id for item in reopened.list()] == [job.id]
     assert bad.read_text() == "{"
+
+
+def test_restart_preserves_ready_narrations_and_makes_interrupted_ones_retryable(tmp_path):
+    store = JobStore(tmp_path)
+    job = store.create("source", 2)
+    batch = NarrationBatch(restore=JobStatus.done, items={
+        1: NarrationItem(status="ready", progress=1),
+        2: NarrationItem(status="running", progress=0.5),
+    })
+    store.update(job.id, status=JobStatus.running, stage=Stage.narrating, narration=batch)
+
+    restarted = JobStore(tmp_path).get(job.id)
+    assert restarted.status == JobStatus.done
+    assert restarted.narration.items[1].status == "ready"
+    assert restarted.narration.items[2].status == "failed"
 
 
 def test_concurrent_submissions_claim_job_once(tmp_path):

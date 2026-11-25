@@ -15,7 +15,7 @@ from pathlib import Path
 
 from .config import settings
 from .files import atomic_output
-from .models import Clip, Job, JobMode, JobStatus, Stage
+from .models import Clip, Job, JobMode, JobStatus, NarrationBatch, NarrationItem, Stage
 
 log = logging.getLogger(__name__)
 
@@ -59,7 +59,12 @@ class JobStore:
             except (OSError, ValueError):
                 log.exception("Skipping unreadable job record %s", f)
                 continue
-            if job.status == JobStatus.queued and not job.clips:
+            if job.status in (JobStatus.queued, JobStatus.running) and job.stage == Stage.narrating and job.narration:
+                job.narration = job.narration.fail_pending("Interrupted by server restart")
+                job.status = job.narration.restore
+                job.message = "Narration interrupted — retry failed shorts"
+                self._write(job)
+            elif job.status == JobStatus.queued and not job.clips:
                 job.message = "Queued (kept across a server restart)"  # never started: create_app re-submits it
                 self._write(job)
             elif job.status in (JobStatus.queued, JobStatus.running):
@@ -170,14 +175,17 @@ class JobStore:
 class Worker:
     """Runs one task at a time. Task kinds:
     run      — new job: auto mode = everything; review mode = prepare (stops at "review")
+    narrate  — speak approved scripts and activate successful takes
     produce  — posts + renders for approved clips
     render   — re-render one clip after you changed it
     """
 
-    def __init__(self, store: JobStore, pipeline: PipelineFn | None = None, steps=None):
+    def __init__(self, store: JobStore, pipeline: PipelineFn | None = None, steps=None, llm_factory=None):
+        from .pipeline.llm import OllamaClient
         from .pipeline.orchestrator import Steps
 
         self.store = store
+        self.llm_factory = llm_factory or OllamaClient
         self.steps = steps or Steps()
         if pipeline is not None:  # legacy/tests: a single callable for auto mode
             self.steps.run = pipeline
@@ -199,6 +207,56 @@ class Worker:
 
     def submit_render(self, job: Job, index: int) -> Job:
         return self._submit_editable("render", job, f"Queued: re-render short {index}", index=index)
+
+    def submit_narration(self, job: Job, batch: NarrationBatch) -> Job:
+        queued, prev = self.store.queue_job(job.id, (JobStatus.review, JobStatus.done), expected=job,
+                                            narration=batch, message="Queued: narration",
+                                            stage=Stage.narrating, progress=0.0)
+        self.q.put(("narrate", job.id, {"restore": prev}))
+        return queued
+
+    def _narrate(self, job: Job, directory: Path) -> None:
+        from .pipeline import dub
+
+        batch = job.narration
+        items = dict(batch.items)
+        pending = [index for index, item in items.items() if item.status == "queued"]
+        clips = {clip.index: clip for clip in job.clips}
+        try:
+            self.llm_factory().unload()
+        except Exception:
+            log.debug("Could not unload the language model before narration", exc_info=True)
+
+        def save() -> None:
+            self.store.update(job.id, narration=batch.model_copy(update={"items": items.copy()}))
+
+        for done, index in enumerate(pending):
+            def progress(value, message, *, index=index, done=done):
+                items[index] = NarrationItem(status="running", progress=value, message=message)
+                self.store.update(job.id, narration=batch.model_copy(update={"items": items.copy()}),
+                                  progress=(done + value) / len(pending), message=f"Short {index}: {message}")
+
+            progress(0, "Generating narration")
+            try:
+                clip = clips[index].model_copy(deep=True)
+                clip.options = clip.options.model_copy(update={
+                    "dub": True, "dub_pacing": batch.pacing, "dub_ambience": batch.ambience,
+                })
+                script = dub.activation_script(directory, clip)
+                dub.save(directory, dub.generate(directory, script, clip, on_progress=progress))
+                clip.stale = bool(clip.file)
+            except Exception as e:
+                log.exception("Narration failed for job %s short %s", job.id, index)
+                items[index] = NarrationItem(status="failed", message=str(e)[:300] or "Narration failed")
+                save()
+            else:
+                clips[index] = clip
+                items[index] = NarrationItem(status="ready", progress=1, message="Ready to render")
+                self.store.update(job.id, clips=list(clips.values()),
+                                  narration=batch.model_copy(update={"items": items.copy()}))
+        failed = sum(item.status == "failed" for item in items.values())
+        self.store.update(job.id, status=batch.restore, progress=1.0,
+                          message=f"{failed} narration(s) failed" if failed else "Narration ready")
 
     def _submit_editable(self, kind: str, job: Job, message: str, **kwargs) -> Job:
         queued, prev = self.store.queue_job(job.id, (JobStatus.review, JobStatus.done), expected=job, message=message,
@@ -268,7 +326,9 @@ class Worker:
                 steer = {"topic": job.topic} if job.topic else {}
                 if job.hinglish:
                     steer["romanize"] = True
-                if kind == "learn" or (kind == "run" and job.purpose == "learn"):
+                if kind == "narrate":
+                    self._narrate(job, d)
+                elif kind == "learn" or (kind == "run" and job.purpose == "learn"):
                     self.steps.learn(source or job.source, d, report,
                                      **({"romanize": True} if job.hinglish else {}))
                     done = JobStatus.done if kind == "run" else (before or JobStatus.done)
@@ -307,7 +367,10 @@ class Worker:
                 shutil.rmtree(d, ignore_errors=True)
                 return
             log.error("job %s %s failed\n%s", job_id, kind, traceback.format_exc())
-            if kind == "run":
+            if kind == "narrate":
+                batch = self.store.get(job_id).narration.fail_pending(str(e)[:300] or "Narration failed")
+                self.store.update(job_id, status=batch.restore, narration=batch, error=str(e), message="")
+            elif kind == "run":
                 self.store.update(job_id, status=JobStatus.failed, error=str(e))
             else:  # keep the job reviewable — nothing you edited is lost
                 self.store.update(job_id, status=before or JobStatus.review, error=str(e), message="")

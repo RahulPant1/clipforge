@@ -158,7 +158,7 @@ def write_track(evts: list[tuple[float, str]], duration: float, out: Path) -> Pa
 
 
 def audio_graph(af: list[str], music_input: int | None, sfx_input: int | None, duration: float,
-                voice_src: str = "0:a") -> str:
+                voice_src: str = "0:a", ambience_input: int | None = None, stretch: float = 1.0) -> str:
     """filter_complex for audio → [aout]. af = the voice chain (cuts, crossfades, end-card pad) as for -af.
     voice_src: the speech stream — the source's audio, or a Replace-voice dub track input ("3:a")."""
     voice = ",".join(af) if af else "anull"
@@ -178,6 +178,16 @@ def audio_graph(af: list[str], music_input: int | None, sfx_input: int | None, d
     if sfx_input is not None:
         parts.append(f"[{sfx_input}:a]{fmt}[fx]")
         mix.append("[fx]")
+    if ambience_input is not None:
+        tempo = 1 / max(stretch, 1.0)
+        filters = [fmt, "volume=0.18"]
+        while tempo < 0.5:
+            filters.append("atempo=0.5")
+            tempo *= 2
+        if tempo < 0.9999:
+            filters.append(f"atempo={tempo:.8f}")
+        parts.append(f"[{ambience_input}:a]{','.join(filters)}[room]")
+        mix.append("[room]")
     if len(mix) == 1:
         parts.append("[vo]anull[aout]")
     else:

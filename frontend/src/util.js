@@ -23,6 +23,7 @@ export const STAGES = ['downloading', 'transcribing', 'selecting', 'rendering', 
 
 export function overallProgress(job) {
   if (job.status === 'done' || job.status === 'review') return 1
+  if (job.stage === 'narrating') return job.progress
   const i = STAGES.indexOf(job.stage)
   if (i < 0) return 0
   return (i + job.progress) / (STAGES.length - 1)

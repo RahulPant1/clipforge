@@ -26,6 +26,7 @@ class Stage(str, Enum):
     downloading = "downloading"
     transcribing = "transcribing"
     selecting = "selecting"
+    narrating = "narrating"
     writing = "writing"  # Content Studio: per-platform posts
     rendering = "rendering"
     done = "done"
@@ -86,6 +87,8 @@ class RenderOptions(BaseModel):
     emoji: bool | None = None  # colour emoji above caption lines + the hook's emoji (None = CAPTION_EMOJI)
     aspects: list[Literal["4:5", "1:1"]] | None = None  # feed versions next to the 9:16 (None = EXTRA_ASPECTS)
     dub: bool | None = None  # Replace voice: the clip's dub track (dub.py) instead of the original speech
+    dub_pacing: Literal["source", "natural"] = "source"
+    dub_ambience: bool = False
 
 
 class Insert(BaseModel):
@@ -278,6 +281,31 @@ class PostEdit(BaseModel):
     url: str | None = Field(default=None, max_length=500)  # link to the live post ("" clears it)
 
 
+class NarrationItem(BaseModel):
+    status: Literal["queued", "running", "ready", "failed"] = "queued"
+    progress: float = 0.0
+    message: str = ""
+
+
+class NarrationOptions(BaseModel):
+    pacing: Literal["source", "natural"] = "source"
+    ambience: bool = False
+
+
+class NarrationBatch(NarrationOptions):
+    items: dict[int, NarrationItem]
+    restore: JobStatus
+
+    def fail_pending(self, message: str) -> "NarrationBatch":
+        items = {index: NarrationItem(status="failed", message=message)
+                 if item.status in ("queued", "running") else item for index, item in self.items.items()}
+        return self.model_copy(update={"items": items})
+
+
+class NarrationQueue(NarrationOptions):
+    clips: list[int] = Field(min_length=1, max_length=30)
+
+
 class Job(BaseModel):
     id: str
     source: str  # URL or uploaded filename
@@ -295,6 +323,7 @@ class Job(BaseModel):
     message: str = ""
     error: str | None = None
     clips: list[Clip] = []
+    narration: NarrationBatch | None = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
@@ -441,6 +470,8 @@ class DubScript(BaseModel):
     track: str | None = None  # dub_N.wav once assembled (clip-relative, clip length)
     track_version: int = 0  # bumps on every assembly (cache-busting)
     span: tuple[float, float] | None = None  # the clip's start/end the track was laid out for
+    pacing: Literal["source", "natural"] = "source"
+    track_duration: float | None = None
 
 
 class DubEdit(BaseModel):
@@ -452,6 +483,14 @@ class DubEdit(BaseModel):
 
 class DubGenerate(BaseModel):
     lines: list[int] | None = None  # None = every line that needs it; else regenerate just these
+    activate: bool = False
+
+
+class DubBatchDraft(BaseModel):
+    clips: list[int] = Field(min_length=1, max_length=30)
+    voice: str = Field(min_length=1, max_length=40)
+    version: int | None = Field(None, ge=1)
+    mode: Literal["original", "rewrite"] = "original"
 
 
 class ProduceRequest(BaseModel):

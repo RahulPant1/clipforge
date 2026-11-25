@@ -157,8 +157,22 @@ def write_track(evts: list[tuple[float, str]], duration: float, out: Path) -> Pa
     return out
 
 
+def _tempo(tempo: float) -> list[str]:
+    filters = []
+    while tempo < 0.5:
+        filters.append("atempo=0.5")
+        tempo *= 2
+    while tempo > 2:
+        filters.append("atempo=2")
+        tempo /= 2
+    if abs(tempo - 1) > 0.0001:
+        filters.append(f"atempo={tempo:.8f}")
+    return filters
+
+
 def audio_graph(af: list[str], music_input: int | None, sfx_input: int | None, duration: float,
-                voice_src: str = "0:a", ambience_input: int | None = None, stretch: float = 1.0) -> str:
+                voice_src: str = "0:a", ambience_input: int | None = None, stretch: float = 1.0,
+                ambience_timing: list[tuple[float, float]] | None = None, ambience_level: float = 0.18) -> str:
     """filter_complex for audio → [aout]. af = the voice chain (cuts, crossfades, end-card pad) as for -af.
     voice_src: the speech stream — the source's audio, or a Replace-voice dub track input ("3:a")."""
     voice = ",".join(af) if af else "anull"
@@ -179,14 +193,22 @@ def audio_graph(af: list[str], music_input: int | None, sfx_input: int | None, d
         parts.append(f"[{sfx_input}:a]{fmt}[fx]")
         mix.append("[fx]")
     if ambience_input is not None:
-        tempo = 1 / max(stretch, 1.0)
-        filters = [fmt, "volume=0.18"]
-        while tempo < 0.5:
-            filters.append("atempo=0.5")
-            tempo *= 2
-        if tempo < 0.9999:
-            filters.append(f"atempo={tempo:.8f}")
-        parts.append(f"[{ambience_input}:a]{','.join(filters)}[room]")
+        source = f"[{ambience_input}:a]"
+        gain = f"volume={ambience_level:.4f}"
+        if ambience_timing:
+            spans = list(zip(ambience_timing, ambience_timing[1:], strict=False))
+            inputs = "".join(f"[room_in{i}]" for i in range(len(spans)))
+            parts.append(f"{source}{fmt},{gain},asplit={len(spans)}{inputs}")
+            for i, ((start, start_out), (end, end_out)) in enumerate(spans):
+                length = end_out - start_out
+                filters = [f"atrim=start={start:.6f}:end={end:.6f}", "asetpts=PTS-STARTPTS",
+                           *_tempo((end - start) / length), "apad", f"atrim=duration={length:.6f}"]
+                parts.append(f"[room_in{i}]{','.join(filters)}[room_part{i}]")
+            outputs = "".join(f"[room_part{i}]" for i in range(len(spans)))
+            parts.append(f"{outputs}concat=n={len(spans)}:v=0:a=1[room]")
+        else:
+            filters = [fmt, gain, *_tempo(1 / max(stretch, 1.0))]
+            parts.append(f"{source}{','.join(filters)}[room]")
         mix.append("[room]")
     if len(mix) == 1:
         parts.append("[vo]anull[aout]")

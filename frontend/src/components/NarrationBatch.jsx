@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { api } from '../api.js'
 import DubEditor from './DubEditor.jsx'
 
@@ -10,9 +10,11 @@ export default function NarrationBatch({ job, clips, busy, act }) {
   const [mode, setMode] = useState('original')
   const [pacing, setPacing] = useState('source')
   const [ambience, setAmbience] = useState(false)
+  const [ambienceLevel, setAmbienceLevel] = useState(18)
   const [ambienceAvailable, setAmbienceAvailable] = useState(false)
   const [selected, setSelected] = useState([])
   const [drafts, setDrafts] = useState([])
+  const [warnings, setWarnings] = useState({})
   const [revision, setRevision] = useState(0)
   const [working, setWorking] = useState('')
   const [editing, setEditing] = useState(0)
@@ -34,7 +36,10 @@ export default function NarrationBatch({ job, clips, busy, act }) {
     return () => { active = false }
   }, [open])
 
-  const clearDrafts = () => setDrafts([])
+  const clearDrafts = () => { setDrafts([]); setWarnings({}) }
+  const reportWarnings = useCallback((index, count) => {
+    setWarnings((previous) => previous[index] === count ? previous : { ...previous, [index]: count })
+  }, [])
   const prepare = async () => {
     setWorking(mode === 'rewrite' ? 'Drafting narration…' : 'Preparing scripts…')
     try {
@@ -55,7 +60,7 @@ export default function NarrationBatch({ job, clips, busy, act }) {
     setWorking('Queueing narration…')
     try {
       await act(() => api.queueNarration(job.id, {
-        clips: prepared.map((clip) => clip.index), pacing, ambience,
+        clips: prepared.map((clip) => clip.index), pacing, ambience, ambience_level: ambienceLevel / 100,
       }))
       clearDrafts()
     } catch { /* shown by act() */ } finally {
@@ -101,15 +106,24 @@ export default function NarrationBatch({ job, clips, busy, act }) {
         <select aria-label="Narration pacing" value={pacing} disabled={disabled} onChange={(e) => setPacing(e.target.value)}>
           <option value="source">Match source timing</option>
           <option value="natural">Natural pacing · flexible picture</option>
+          <option value="scene">Scene-aware pacing · align to indexed cuts</option>
         </select>
         <label className="small" title={ambienceAvailable ? 'Uses local audio separation on export' : 'Requires Demucs'}>
           <input type="checkbox" checked={ambience} disabled={disabled || !ambienceAvailable}
                  onChange={(e) => setAmbience(e.target.checked)} /> Keep source ambience
           {!ambienceAvailable && ' (Demucs required)'}
         </label>
+        {ambience && <label className="small">
+          Ambience level {ambienceLevel}%
+          <input type="range" min="0" max="50" value={ambienceLevel} disabled={disabled}
+                 onChange={(e) => setAmbienceLevel(Number(e.target.value))} />
+        </label>}
       </div>
       {pacing === 'natural' && <p className="muted small">
         If the narration needs more time, the picture slows down. Use for B-roll or screen recordings.
+      </p>}
+      {pacing === 'scene' && <p className="muted small">
+        Uses indexed scene cuts and narration cues when available. Otherwise it slows the picture uniformly.
       </p>}
       <div className="row-btns" role="group" aria-label="Approved shorts">
         {eligible.map((clip) => (
@@ -125,9 +139,13 @@ export default function NarrationBatch({ job, clips, busy, act }) {
       <button className="btn sm" disabled={disabled || !voice || !chosen.length} onClick={prepare}>Prepare scripts</button>
       {prepared.map((clip) => (
         <details key={clip.index}>
-          <summary>Review short {clip.index} · {clip.title}</summary>
+          <summary>Review short {clip.index} · {clip.title}
+            {warnings[clip.index] > 0 && <span className="small warn">
+              {' '}· {warnings[clip.index]} possible incomplete {warnings[clip.index] === 1 ? 'line' : 'lines'}
+            </span>}
+          </summary>
           <DubEditor key={revision} job={job} clip={clip} busy={busy || !!working} act={editAct} fixedVoice
-                     previewPacing={pacing} />
+                     previewPacing={pacing} onWarnings={reportWarnings} />
         </details>
       ))}
       {prepared.length > 0 && (

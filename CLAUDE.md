@@ -428,6 +428,9 @@ publish: PATCH post {status, url}: posted_at set on → posted (cleared when it 
         (VS Code / CLI); `yt-dlp[default]` for the YouTube challenge solver; caption fonts from Windows on WSL
       - UI: delete disabled while busy, long errors wrap/clamp, failed stage marked ✕, Publish fits phone width
 
+- [x] **Render and job reliability:** ClipForge publishes shorts as they finish, then generates posts and covers.
+      Failed encodes preserve existing exports. Atomic job saves, startup recovery and queue claims protect job
+      state. New jobs share cached source media and raw transcripts while keeping their own edits.
 - [x] **29. Voice Library:** Qwen3-TTS reference cloning from several recordings, saved voice versions and
       sample playback (`tts.py`). Measured: 1.7B Base peak 4.5 GB VRAM, ~2 s to generate 1 s of speech,
       model load ~20 s warm. On a synthetic test voice, Whisper heard the exact words and speaker similarity
@@ -445,10 +448,27 @@ publish: PATCH post {status, url}: posted_at set on → posted (cleared when it 
       activated dubs and captions timed to the generated speech.
 - [x] **Background batch narration:** a Worker task continues while the tab is closed. Job events publish per-short
       progress; the retry action only requeues failed shorts. Backend restarts leave interrupted items retryable.
+- [x] **Shared model loads and script checks:** one Qwen load and one Whisper alignment load per narration batch.
+      The two real v2 baseline excerpts took 72.0 s together vs 121.2 s in separate runs on the RTX 4060.
+      The editor flags likely mid-sentence starts and unfinished lines before queueing.
+- [x] **Suggested fixes for flagged lines:** nearby transcript and adjacent draft lines inform one proposed
+      rewrite. The script changes only on acceptance, and a proposal based on older wording cannot overwrite
+      a newer line. A live local Gemma trial completed the tutorial's cut-off line by removing a trailing
+      connector and keeping the complete statement.
 - [x] **Natural pacing for narration:** an opt-in mode keeps generated speech at full length and slows the picture
       uniformly if it needs more time. The existing source-timing mode remains the default.
 - [x] **Retain source ambience:** optional CPU Demucs separation caches the non-vocal stem for a clip range and
       mixes it at low volume beneath the dub. Set `DEMUCS_EXECUTABLE` when Demucs is outside the backend path.
+- [x] **Export preview, scene-aware pacing, and ambience level:** render a sample at 360×640 with
+      the export settings. Scene-aware pacing retimes indexed cuts around narration cues and applies the same
+      timing to separated ambience. The ambience level can be set for the batch or the individual short.
+- [x] **Selectable preview range and manual scene anchors:** preview any output start for up to 10 seconds.
+      Pair source and narration positions in the Shorts editor. Retiming uses valid manual anchors first and
+      fits automatic cuts between them.
+- [x] **Preview from a narration line:** open a short export preview around a generated line's output time.
+- [x] **Manual local B-roll:** choose up to 12 MP4 cutaways per short and set separate output ranges. Cutaways
+      run below captions and branding while preserving the original or dubbed audio mix. Legacy single
+      placements remain usable.
 
 ## Roadmap (pick up here)
 0. [x] Jump-cut polish: 10 ms audio crossfades at cut points (`JUMPCUT_CROSSFADE_MS`); optional 5% punch-in
@@ -476,7 +496,10 @@ publish: PATCH post {status, url}: posted_at set on → posted (cleared when it 
 8. [x] Content: brand-voice profile (🎙 Brand voice screen: paste up to 5 posts per platform, or take your hand-edited /
        posted ones → few-shot examples in PROMPT; voice notes replace CONTENT_VOICE).
 9. [ ] Content: weekly posting calendar view (spread shorts + posts across days/platforms, .ics export).
-10. [ ] Content: Hinglish mode tuned prompt + language detection from transcript.
+10. [x] Whisper detects the spoken language when no language is forced, and optional romanization turns
+        Devanagari captions into Latin-script Hinglish.
+        [ ] Content: use the detected language to choose a per-job post language and tune Hinglish prompts.
+        [ ] Bilingual captions and reliable spoken Hindi/Hinglish cloning are separate open features.
 11. [ ] Auto-publish to own channels (YouTube Data API upload + scheduled publish).
 
 From the review against OpusClip / Vizard / Submagic / Descript / CapCut (Nov 2026). Suggested order: A → C → B → E → K.
@@ -491,17 +514,20 @@ Keep it local: no cloud stock/B-roll/TTS APIs.
 16. [x] K. Reel/Shorts cover image: `cover_text` (already generated) on the best frame (Pillow).
 17. [x] D. Reframe override: pick which face to follow (Shorts step); crop keyframes dragged by hand (✋ Adjust crop).
 18. [x] F. Colour emoji as PNG overlays (libass is monochrome) + optional auto-emoji per caption line (= roadmap 4).
-19. [ ] G. B-roll from your own folder, matched to the clip by Gemma keywords.
+19. [x] G. Select local B-roll and place it in the short. Optional suggestions rank MP4 file and folder names
+        in `BROLL_DIR` (default `data/broll`) using the title, hook, keywords, narration, and indexed scene
+        descriptions. The user previews and explicitly attaches a match.
+        [x] Add, edit and remove multiple non-overlapping placements per short.
+        [ ] Index footage by visual content for libraries with generic filenames.
 20. [x] H. Brand kit: logo watermark, end card with CTA, brand colour (covers/quotes/carousels/captions).
 21. [x] I. Multi-aspect export: 1:1 and 4:5 alongside 9:16 (own face-tracked crop, captions re-placed).
 22. [x] L. Several title/hook variants to choose from.
 23. [x] N. Batch: several links / a playlist / a channel / Find-videos picks as a queue of jobs; watched folder.
-24. [ ] Motion-graphics inserts (stat_counter). [x] phases 1-2: numbers.py, inserts.py, insert_render.py (Pillow),
+24. [x] Motion-graphics inserts (stat_counter). [x] phases 1-2: numbers.py, inserts.py, insert_render.py (Pillow),
         render overlay, Clip.inserts via PATCH. [x] 3: Gemma picks + labels (checked on real jobs with gemma4: skips
         ages / "ten years later", keeps 70% / 99%; ~1 s per clip warm). [x] 4: InsertEditor.jsx in the Shorts step
         (count-up preview, label, Show/Suggested, Auto/Top/Low, ±0.2 s, your own card; statText() in util.js mirrors
-        numbers.fmt). [ ] later: Blender renderer (Windows
-        blender.exe via wslpath) behind the same InsertRenderer protocol.
+        numbers.fmt). [ ] later: optional Blender renderer (item 25).
 (M = Hinglish/bilingual captions → item 10; O = calendar + auto-publish → items 9 and 11.)
 
 For a later discussion (not planned yet):
@@ -522,14 +548,65 @@ For a later discussion (not planned yet):
         so visual payoffs (demos, screens, before/after) get picked; then descriptions in transcript search, B-roll
         matching (G), cover / shown-whole hints. Auto-skip vision for single-camera talking heads (few cuts/min, face
         in most samples) so it costs nothing there. ~5 s per frame on gemma4 → ~10-20 min per hour of video
-        (estimate). Prove with app.eval on a tutorial-style video before keeping it. Dropped: embedding-based search
-        (another model in 8 GB VRAM), video Q&A (different product). Contact sheet = optional debug view.
+        (estimate). Prove with app.eval on a tutorial-style video before keeping it. Embedding search and video
+        Q&A are outside scene index v1 (see item 30). Contact sheet = optional debug view.
 
 ### Voice roadmap
 
+- [x] **Initial narration baseline:** saved voice v2 rendered two 13-second real source excerpts (tutorial and
+      interview). Synthesis and line timing took 59.7 s and 61.5 s. Whisper read back the tutorial script
+      unchanged and differed on one interview word (`lie` / `live`). Export audio and video durations differed
+      by less than 0.05 s. The short test windows ended mid-thought. Read-back tests leave delivery and the
+      original transcript's accuracy open for listening and review.
+- [x] **Initial Whisper Turbo comparison:** two 35-second English interview excerpts ran on the RTX 4060
+      with `int8_float16` and the same decoding settings. Small took 1.53 s and 1.33 s, Turbo took 1.15 s
+      and 1.48 s after loading. Peak whole-GPU usage was 1,401 MiB and 2,096 MiB. Turbo produced the more
+      plausible phrase “role in question” where Small produced “rolling question.” Keep Small as the default
+      pending broader accuracy checks.
+- [x] **Broader YouTube evaluation:** seven excerpts included an official Stanford transcript check,
+      tutorial, interviews, actual Hindi and Hinglish speech, and a music-only interval. Both models matched
+      all 20 Stanford reference words after excluding fillers and produced no words on the music interval.
+      The Hindi example took 15.89 s with Small and 2.83 s with Turbo. Turbo used about 500 MiB more peak
+      whole-GPU memory in this run. Model name and default language settings were kept unchanged.
+- [x] **Reference-scored Hinglish evaluation:** scored eight published CoSHE-500 clips (678 reference words).
+      With automatic language selection, WER fell from 88.8% (Small) to 68.1% (Turbo). With Hindi forced,
+      WER was 93.1% and 66.5%, respectively. Mixed-script scoring kept Devanagari marks and did not
+      transliterate. The sample favors an optional Turbo mode for mixed-language jobs, with manual review.
+- [x] **Real narration-to-export smoke test:** local Gemma repair, saved v2 voice batch, two B-roll matches and
+      placements, scene anchor, ranged preview, square export, captions, and ZIP passed in a temporary job.
+- [ ] **Broader reference coverage:** add independent checks for proper names and word alignment against
+      human timings. Evaluate full `large-v3` only if Turbo keeps missing important words.
+- [ ] **Compare timing versions.** Compare automatic and manual anchors around the same output range.
 - [ ] **Other voice ideas.** Spoken hook intros, Script → Short (script → voice-over → stills with motion or template
       cards), lip-sync, jump cuts on dubbed clips, and re-voicing longer source videos.
 - [ ] **31b. Voice conversion that preserves delivery.** Evaluate the existing OpenVoice V2 and Seed-VC
       candidates for keeping the source rhythm and intonation. The earlier review listed OpenVoice V2's
       tone-colour converter with a MeloTTS setup dependency and a community ONNX build, and Seed-VC as a
       zero-shot alternative. Verify model fit, runtime and licensing before choosing one.
+
+For narration, use the quality baseline to pick the next change. Local B-roll can cover mismatched mouth
+movements and give the voice room to breathe. Visual indexing (item 19) can follow when file names are too
+generic to suggest useful cutaways.
+Voice conversion is worth a separate trial if preserving the original delivery matters. Calendar, auto-publish,
+desktop packaging, video Q&A, Blender and ComfyUI can wait until the narration workflow is reliable.
+
+### Local model evaluation
+
+- **Machine check:** RTX 4060 Laptop GPU, 8,188 MiB VRAM (6,879 MiB free during the check), 8.7 GiB visible
+  system RAM. Evaluate one GPU model at a time. ClipForge normally unloads the language model before Whisper
+  or Qwen3-TTS work. Published benchmark figures are estimates for this setup until measured on this machine.
+- **Whisper:** the local setup currently uses `small` on CUDA with `int8_float16`. The installed
+  faster-whisper recognizes `large-v3-turbo`, and the initial weights-only trial fit on this machine.
+  Keep `small` as the default until broader results justify changing it. Use separate fresh transcript
+  outputs so job-local edits stay intact.
+  Compare word corrections, names, timing, runtime and peak VRAM. The current global Whisper setting also
+  affects Voice Library transcription and generated speech alignment, so measure both before switching it.
+  [Faster-whisper benchmarks and model loading](https://github.com/SYSTRAN/faster-whisper#benchmark)
+- **Qwen3-TTS:** changing Whisper affects recognition and subtitle alignment. The current voice clone
+  generates the speech. Its supported languages exclude Hindi. If spoken Hindi/Hinglish is required,
+  evaluate a local Hindi-capable cloning model on actual code-switched lines before integrating it.
+  [Qwen3-TTS supported languages](https://github.com/QwenLM/Qwen3-TTS#released-models-description-and-download)
+- **Demucs:** support is implemented and the executable was absent during this check. Install it in a
+  separate environment only if keeping source ambience matters. Try it on CPU on a short sample and
+  listen for residual original dialogue before using it across a batch.
+  [Demucs setup](README.md#optional-source-ambience)

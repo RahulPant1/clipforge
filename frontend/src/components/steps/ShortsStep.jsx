@@ -1,7 +1,9 @@
 import { useEffect, useState } from 'react'
 import { api } from '../../api.js'
 import CropEditor from '../CropEditor.jsx'
+import BrollEditor from '../BrollEditor.jsx'
 import DubEditor from '../DubEditor.jsx'
+import ExportPreview from '../ExportPreview.jsx'
 import InsertEditor from '../InsertEditor.jsx'
 import { FEED, feedFile, fmt } from '../../util.js'
 
@@ -338,12 +340,14 @@ function ShortCard({ job, clip, busy, act, presets, kit, sounds }) {
         )}
 
         {!clip.visual && <DubEditor job={job} clip={clip} busy={busy} act={act} setOpt={setOpt} />}
+        <BrollEditor jobId={job.id} clip={clip} busy={busy} act={act} />
 
         <CoverPanel job={job} clip={clip} busy={busy} act={act}
                     defaultText={clip.content?.instagram?.extra?.cover_text || clip.hook} />
         <QuotePanel job={job} clip={clip} busy={busy} act={act} />
 
         {clip.render_error && <p className="err">Render failed: {clip.render_error}</p>}
+        <ExportPreview key={job.updated_at} jobId={job.id} index={clip.index} act={act} busy={busy} />
         <div className="actions">
           {(clip.stale || !clip.file || clip.render_error || oldKit) && (
             <button className="btn primary-link" disabled={busy}

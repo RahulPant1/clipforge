@@ -90,9 +90,19 @@ def speak(job: dict) -> dict:
         return prompts[path]
 
     model = load(job["model"], job.get("attn", "sdpa"))
-    out = [say(model, voice(it.get("prompt") or job["prompt"]), it, job.get("gen", {}))  # one at a time: 8 GB
-           for it in job["items"]]
-    return {"items": out, "sample_rate": out[-1]["sr"] if out else None,
+    out = []
+    for it in job["items"]:  # one at a time: 8 GB
+        try:
+            result = say(model, voice(it.get("prompt") or job["prompt"]), it, job.get("gen", {}))
+        except Exception as e:
+            if not job.get("continue_on_error"):
+                raise
+            result = {"out": it["out"], "error": f"{type(e).__name__}: {e}"[:300]}
+        out.append(result)
+        if job.get("progress"):
+            with Path(job["progress"]).open("ab") as progress:
+                progress.write(b".")
+    return {"items": out, "sample_rate": next((item["sr"] for item in reversed(out) if "sr" in item), None),
             "peak_vram_mb": round(torch.cuda.max_memory_allocated() / 2**20)}
 
 

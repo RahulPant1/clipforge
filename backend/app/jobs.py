@@ -227,33 +227,31 @@ class Worker:
         except Exception:
             log.debug("Could not unload the language model before narration", exc_info=True)
 
-        def save() -> None:
-            self.store.update(job.id, narration=batch.model_copy(update={"items": items.copy()}))
+        def progress(index: int, value: float, message: str) -> None:
+            items[index] = NarrationItem(status="running", progress=value, message=message)
+            fraction = sum(1 if items[i].status == "failed" else items[i].progress for i in pending) / len(pending)
+            self.store.update(job.id, narration=batch.model_copy(update={"items": items.copy()}),
+                              progress=fraction, message=f"Short {index}: {message}")
 
-        for done, index in enumerate(pending):
-            def progress(value, message, *, index=index, done=done):
-                items[index] = NarrationItem(status="running", progress=value, message=message)
-                self.store.update(job.id, narration=batch.model_copy(update={"items": items.copy()}),
-                                  progress=(done + value) / len(pending), message=f"Short {index}: {message}")
-
-            progress(0, "Generating narration")
-            try:
-                clip = clips[index].model_copy(deep=True)
-                clip.options = clip.options.model_copy(update={
-                    "dub": True, "dub_pacing": batch.pacing, "dub_ambience": batch.ambience,
-                })
-                script = dub.activation_script(directory, clip)
-                dub.save(directory, dub.generate(directory, script, clip, on_progress=progress))
-                clip.stale = bool(clip.file)
-            except Exception as e:
-                log.exception("Narration failed for job %s short %s", job.id, index)
-                items[index] = NarrationItem(status="failed", message=str(e)[:300] or "Narration failed")
-                save()
+        requested = []
+        for index in pending:
+            clip = clips[index].model_copy(deep=True)
+            clip.options = clip.options.model_copy(update={
+                "dub": True, "dub_pacing": batch.pacing, "dub_ambience": batch.ambience,
+                "dub_ambience_level": batch.ambience_level,
+            })
+            requested.append(clip)
+        for clip, error in dub.generate_batch(directory, requested, progress):
+            index = clip.index
+            if error is not None:
+                log.error("Narration failed for job %s short %s: %s", job.id, index, error)
+                items[index] = NarrationItem(status="failed", message=str(error)[:300] or "Narration failed")
             else:
+                clip.stale = bool(clip.file)
                 clips[index] = clip
                 items[index] = NarrationItem(status="ready", progress=1, message="Ready to render")
-                self.store.update(job.id, clips=list(clips.values()),
-                                  narration=batch.model_copy(update={"items": items.copy()}))
+            self.store.update(job.id, clips=list(clips.values()),
+                              narration=batch.model_copy(update={"items": items.copy()}))
         failed = sum(item.status == "failed" for item in items.values())
         self.store.update(job.id, status=batch.restore, progress=1.0,
                           message=f"{failed} narration(s) failed" if failed else "Narration ready")

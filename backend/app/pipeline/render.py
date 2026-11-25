@@ -7,7 +7,7 @@ from pathlib import Path
 from ..config import settings
 from ..files import atomic_output
 from ..models import BrandKit, Clip, RenderOptions, Segment
-from . import ambience, brand, dub, emoji, insert_render, inserts, sfx
+from . import ambience, brand, broll, dub, emoji, insert_render, inserts, sfx
 from .captions import _text as caption_text
 from .captions import build_ass, build_hook_ass, build_srt, chunk_words, text_scale
 from .fonts import font_for, fontsdir_option
@@ -44,13 +44,14 @@ def aspect_file(index: int, aspect: str) -> str:
     return f"short_{index}{ASPECTS[aspect][1]}.mp4"
 
 
-def render_clip(video: Path, clip: Clip, segs: list[Segment], job_dir: Path) -> str:
+def render_clip(video: Path, clip: Clip, segs: list[Segment], job_dir: Path, *, preview: bool = False,
+                preview_range: tuple[float, float] = (0, 10)) -> str:
     """Renders short_<n>.mp4 (+ .srt export, .jpg thumbnail) in job_dir, plus the feed versions the short asks for
     (short_<n>.45.mp4 / .11.mp4; a failed feed version never fails the short — it's left out of clip.formats).
 
     Also fills clip.cut_seconds / out_duration / reframe / fit_seconds / formats. Returns the mp4 filename.
     """
-    name = f"short_{clip.index}"
+    name = f"short_{clip.index}" + (".preview" if preview else "")
     o = clip.options
     jumpcut = settings.jumpcut_enabled if o.jumpcut is None else o.jumpcut
     removed = clip.removed
@@ -61,10 +62,8 @@ def render_clip(video: Path, clip: Clip, segs: list[Segment], job_dir: Path) -> 
     if dubbed:
         voice_track, segs = dubbed
         jumpcut, removed = False, []  # the new speech has its own pauses; struck words were in the old one
-        if o.dub_pacing == "natural":
+        if o.dub_pacing != "source":
             duration = dub.output_duration(job_dir, clip)
-        if o.dub_ambience:
-            ambience_track = (ambience.track_for(video, job_dir, clip),)
 
     silences = audio_silences(video, clip.start, clip.end) if jumpcut and settings.jumpcut_audio else None
     plan = plan_cuts(segs, clip.start, clip.start + duration, enabled=jumpcut, silences=silences, removed=removed)
@@ -72,6 +71,10 @@ def render_clip(video: Path, clip: Clip, segs: list[Segment], job_dir: Path) -> 
     kit = brand.load()
     card = brand.end_card_seconds(kit, o, plan.duration)
     total = plan.duration + card
+    if preview and total - preview_range[0] < 1 / settings.output_fps:
+        raise ValueError(f"Preview start must leave at least one frame in the {total:.2f} second export")
+    if dubbed and o.dub_ambience and o.dub_ambience_level > 0:
+        ambience_track = (ambience.track_for(video, job_dir, clip),)
     # Sound design: effects pre-mixed on one track (sfx.py), shared by every format
     timed = inserts.schedule(clip, plan, segs)  # stat cards: output-time windows, same in every format
     want_fx = settings.sfx_default if o.sfx is None else o.sfx
@@ -82,6 +85,10 @@ def render_clip(video: Path, clip: Clip, segs: list[Segment], job_dir: Path) -> 
 
     errors: list[str] = []
     used: set[str] = set()  # insert frame folders this render uses (the rest are pruned)
+    if preview:
+        _encode(video, clip, plan, job_dir, name, (360, 640), kit, card, fx, timed, used, errors,
+                voice_track, *ambience_track, preview_range=preview_range)
+        return f"{name}.mp4"
     with atomic_output(job_dir / f"{name}.srt") as captions:
         captions.write_text(build_srt(plan.words), encoding="utf-8")
         try:
@@ -128,10 +135,20 @@ def render_clip(video: Path, clip: Clip, segs: list[Segment], job_dir: Path) -> 
     return f"{name}.mp4"
 
 
+def _retime_expression(anchors: list[tuple[float, float]]) -> str:
+    expression = ""
+    for (start, out), (end, out_end) in reversed(list(zip(anchors, anchors[1:], strict=False))):
+        rate = (out_end - out) / (end - start)
+        segment = f"({out:.8f}+(T-{start:.8f})*{rate:.8f})/TB"
+        expression = f"if(lt(T,{end:.8f}),{segment},{expression})" if expression else segment
+    return expression
+
+
 def _encode(video: Path, clip: Clip, plan: CutPlan, job_dir: Path, name: str, size: tuple[int, int],
             kit: BrandKit, card: float, fx: Path | None, timed: list[inserts.Timed] | None = None,
             used: set[str] | None = None, errors: list[str] | None = None,
-            voice_track: Path | None = None, ambience_track: Path | None = None) -> ReframePlan:
+            voice_track: Path | None = None, ambience_track: Path | None = None, *,
+            preview_range: tuple[float, float] | None = None) -> ReframePlan:
     """One output file `name`.mp4 on a `size` canvas (1080 wide). Returns how it was framed."""
     w, h = size
     o = clip.options
@@ -166,10 +183,14 @@ def _encode(video: Path, clip: Clip, plan: CutPlan, job_dir: Path, name: str, si
 
     fps = settings.output_fps
     vf = [f"fps={fps}", *rf.filters(cmd_file)]
-    stretch = plan.duration / clip.duration if voice_track and o.dub_pacing == "natural" else 1.0
-    if stretch > 1.0001:
-        vf += [f"setpts={stretch:.9f}*PTS", f"fps={fps}",
-               f"tpad=stop_mode=clone:stop_duration={stretch / fps:.6f}", f"trim=duration={plan.duration:.3f}"]
+    stretch = plan.duration / clip.duration if voice_track and o.dub_pacing != "source" else 1.0
+    timing = dub.scene_timing(job_dir, clip, plan.duration) if voice_track and o.dub_pacing == "scene" else []
+    if timing or stretch > 1.0001:
+        expression = _retime_expression(timing) if timing else f"{stretch:.9f}*PTS"
+        tail_stretch = ((timing[-1][1] - timing[-2][1]) / (timing[-1][0] - timing[-2][0])) if timing else stretch
+        vf += [f"setpts='{expression}'", f"fps={fps}",
+               f"tpad=stop_mode=clone:stop_duration={max(tail_stretch, 1) / fps:.6f}",
+               f"trim=duration={plan.duration:.3f}"]
     af = []
     if len(plan.keeps) > 1 or plan.removed > 0.05:
         # Same frame-grid intervals for both streams (see jumpcut.snap_to_frames) → no A/V drift
@@ -178,6 +199,7 @@ def _encode(video: Path, clip: Clip, plan: CutPlan, job_dir: Path, name: str, si
     vf += [f"scale={w}:{h}:force_original_aspect_ratio=decrease", f"pad={w}:{h}:(ow-iw)/2:(oh-ih)/2", "setsar=1"]
     if zoom and af:  # punch-in on alternate segments; output time, before captions so text never zooms
         vf.append(zoom_graph(plan.keeps, fps, settings.jumpcut_zoom_scale, size))
+    picture_filters = len(vf)
     # Brand kit end card: the last frame held, blurred + darkened, after the last word (before captions, so
     # no caption freezes on it); the card itself is overlaid below. Never past max_clip_seconds.
     if card:
@@ -233,11 +255,37 @@ def _encode(video: Path, clip: Clip, plan: CutPlan, job_dir: Path, name: str, si
     music = sfx.music_path(settings.music_default if o.music is None else o.music)
     music_in = add(music, loop=True) if music else None
     fx_in = add(fx) if fx else None
+    cutaways = []
+    for cutaway in o.cutaways():
+        cutoff = min(cutaway.end, plan.duration)
+        if cutoff - cutaway.start < 1 / fps:
+            raise RuntimeError("B-roll starts beyond the usable picture. Move it earlier or remove it.")
+        footage = broll.path(job_dir, clip.index, cutaway.asset)
+        if not footage.is_file():
+            raise RuntimeError("The local B-roll file is missing. Replace or remove it before rendering.")
+        cutaway_in = add(footage, loop=True, opts=("-protocol_whitelist", "file", "-f", "mov",
+                                                   "-t", f"{cutoff - cutaway.start:.3f}"))
+        cutaways.append((cutaway_in, cutaway.start, cutoff))
 
     graphs, maps = [], []
-    if logo_in or card_in or placed or layers:  # images need their own inputs → filter_complex instead of -vf
+    if logo_in or card_in or placed or layers or cutaways:
         logo_from = min(settings.hook_seconds, plan.duration) if hook_ass else 0.0  # the hook card owns the top
-        graphs.append(f"[0:v]{','.join(vf)}[b]")
+        if cutaways:
+            picture = "picture"
+            graphs.append(f"[0:v]{','.join(vf[:picture_filters])}[{picture}]")
+            for i, (cutaway_in, start, end) in enumerate(cutaways):
+                overlay = f"cutaway{i}"
+                mixed = f"withroll{i}"
+                graphs.extend([
+                    f"[{cutaway_in}:v]fps={fps},scale={w}:{h}:force_original_aspect_ratio=increase,"
+                    f"crop={w}:{h},setsar=1,setpts=PTS-STARTPTS+{start:.3f}/TB[{overlay}]",
+                    f"[{picture}][{overlay}]overlay=eof_action=pass:enable='gte(t,{start:.3f})*"
+                    f"lt(t,{end:.3f})'[{mixed}]",
+                ])
+                picture = mixed
+            graphs.append(f"[{picture}]{','.join(vf[picture_filters:]) or 'null'}[b]")
+        else:
+            graphs.append(f"[0:v]{','.join(vf)}[b]")
         base = "b"
         if layers:  # stat cards: over captions + hook card, under emoji / logo / end card
             g, base = inserts.graph(base, layers)
@@ -250,7 +298,8 @@ def _encode(video: Path, clip: Clip, plan: CutPlan, job_dir: Path, name: str, si
         maps += ["-map", "[v]"]
     if music_in or fx_in or dub_in:
         graphs.append(sfx.audio_graph(af, music_in, fx_in, total, voice_src=f"{dub_in}:a" if dub_in else "0:a",
-                                      ambience_input=ambience_in, stretch=stretch))
+                                      ambience_input=ambience_in, stretch=stretch, ambience_timing=timing,
+                                      ambience_level=o.dub_ambience_level))
         maps += ["-map", "[aout]"]
     if graphs:
         if "[v]" not in maps:
@@ -265,7 +314,13 @@ def _encode(video: Path, clip: Clip, plan: CutPlan, job_dir: Path, name: str, si
         cmd += ["-vf", ",".join(vf)]
         if af:
             cmd += ["-af", ",".join(af)]
-    cmd += [*_encoder_args(), "-c:a", "aac", "-b:a", "160k", "-movflags", "+faststart"]
+    if preview_range is not None:
+        start, length = preview_range
+        cmd += ["-ss", f"{start:.3f}", "-t", f"{min(length, total - start):.3f}",
+                "-c:v", "libx264", "-preset", "ultrafast", "-crf", "24"]
+    else:
+        cmd += _encoder_args()
+    cmd += ["-c:a", "aac", "-b:a", "160k", "-movflags", "+faststart"]
     with atomic_output(job_dir / f"{name}.mp4") as staged:
         res = subprocess.run([*cmd, str(staged.relative_to(job_dir))], cwd=job_dir, capture_output=True, text=True)
         if res.returncode != 0:

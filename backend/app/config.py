@@ -9,6 +9,7 @@ class Settings(BaseSettings):
 
     # Storage
     data_dir: Path = Path("data")
+    broll_dir: Path | None = None  # local MP4 library (defaults to data/broll)
     # History of every video + its shorts (library.py): readable folders + "ClipForge history.xlsx".
     # Default data/library; e.g. /mnt/c/Users/<you>/Videos/ClipForge to browse it in Windows (files copied there).
     library_dir: Path | None = None

@@ -71,16 +71,50 @@ def status() -> dict:
             **{k: res.get(k) for k in ("torch", "cuda", "gpu")}}
 
 
-def run_worker(job: dict, timeout: float | None = None) -> dict:
+def run_worker(job: dict, timeout: float | None = None, *, on_item=None) -> dict:
     """One worker run (its own process: the model's VRAM is gone when it exits)."""
     with tempfile.TemporaryDirectory() as tmp:
         f = Path(tmp) / "job.json"
+        progress = Path(tmp) / "progress"
+        if on_item is not None:
+            job = {**job, "progress": str(progress)}
         f.write_text(json.dumps(job), encoding="utf-8")
         env = {**os.environ, "HF_HUB_DISABLE_IMPLICIT_TOKEN": "1", "PYTHONUNBUFFERED": "1"}
         env.pop("LD_LIBRARY_PATH", None)  # ClipForge's CUDA 12 wheels for Whisper must not leak into the TTS env
         try:
-            p = subprocess.run([str(python()), str(WORKER), str(f)], capture_output=True, text=True, env=env,
-                               timeout=timeout or settings.tts_timeout)
+            command = [str(python()), str(WORKER), str(f)]
+            limit = timeout or settings.tts_timeout
+            if on_item is None:
+                p = subprocess.run(command, capture_output=True, text=True, env=env, timeout=limit)
+            else:
+                with subprocess.Popen(
+                    command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env,
+                ) as child:
+                    deadline = time.monotonic() + limit
+                    reported = 0
+                    try:
+                        while True:
+                            remaining = deadline - time.monotonic()
+                            if remaining <= 0:
+                                raise subprocess.TimeoutExpired(command, limit)
+                            try:
+                                stdout, stderr = child.communicate(timeout=min(1, remaining))
+                                finished = True
+                            except subprocess.TimeoutExpired:
+                                finished = False
+                            count = progress.stat().st_size if progress.exists() else 0
+                            for index in range(reported, count):
+                                on_item(index)
+                            if count > reported:
+                                deadline = time.monotonic() + limit
+                            reported = count
+                            if finished:
+                                p = subprocess.CompletedProcess(command, child.returncode, stdout, stderr)
+                                break
+                    except BaseException:
+                        child.kill()
+                        child.communicate()
+                        raise
         except FileNotFoundError:
             return {"ok": False, "error": f"TTS env not found at {python()}"}
         except subprocess.TimeoutExpired:
@@ -232,7 +266,7 @@ def score(rec: dict) -> float:
     return round(s - (30 if rec.get("clipping", 0) > 0.001 else 0), 1)
 
 
-def transcribe_many(paths: list[Path]) -> list[dict]:
+def transcribe_many(paths: list[Path], *, continue_on_error: bool = False) -> list[dict]:
     """Whisper once for all the new recordings: words (with times, for splitting) + confidence."""
     if not paths:
         return []
@@ -249,9 +283,15 @@ def transcribe_many(paths: list[Path]) -> list[dict]:
     out = []
     try:
         for p in paths:
-            segs, info = model.transcribe(str(p), word_timestamps=True, vad_filter=False,
-                                          language=settings.whisper_language)
-            segs = list(segs)
+            try:
+                iterator, info = model.transcribe(str(p), word_timestamps=True, vad_filter=False,
+                                                  language=settings.whisper_language)
+                segs = list(iterator)
+            except Exception as e:
+                if not continue_on_error:
+                    raise
+                out.append({"error": f"Could not time the generated words: {e}"[:300]})
+                continue
             words = [{"start": w.start, "end": w.end, "word": w.word} for s in segs for w in (s.words or [])]
             lp = float(np.mean([s.avg_logprob for s in segs])) if segs else -2.0
             out.append({"text": " ".join(s.text.strip() for s in segs).strip(), "words": words, "logprob": lp,
@@ -446,3 +486,16 @@ def compare(vid: str, text: str, versions: list[int], language: str | None = Non
         raise RuntimeError(res.get("error") or "compare failed")
     return [{"version": n, "file": Path(i["out"]).name, "seconds": i["seconds"]}
             for n, i in zip(versions, res["items"], strict=True)]
+
+
+def speak_batch(items: list[dict], on_item=None) -> list[dict]:
+    """Speak prepared items with one model load and isolate individual synthesis failures."""
+    if not items:
+        return []
+    result = run_worker({
+        "cmd": "speak", "model": settings.tts_model, "attn": settings.tts_attn,
+        "items": items, "continue_on_error": True, "gen": {"max_new_tokens": settings.tts_max_new_tokens},
+    }, on_item=on_item)
+    if not result.get("ok"):
+        raise RuntimeError(result.get("error") or "Narration synthesis failed")
+    return result["items"]

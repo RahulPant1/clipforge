@@ -33,13 +33,14 @@ export function overallProgress(job) {
 export function stepStates(job) {
   const hasClips = job.clips.length > 0
   const rendered = job.clips.some((c) => c.file)
+  const narrated = job.clips.some((c) => c.options?.dub)
   const hasPosts = job.clips.some((c) => Object.keys(c.content || {}).length > 0)
   return {
     source: 'ready',
     transcript: hasClips || job.learn ? 'ready' : 'locked',
     learn: job.learn ? 'ready' : 'locked',
     pick: hasClips ? 'ready' : 'locked',
-    shorts: rendered ? 'ready' : 'locked',
+    shorts: rendered || narrated ? 'ready' : 'locked',
     posts: hasPosts ? 'ready' : 'locked',
     publish: rendered ? 'ready' : 'locked',
   }

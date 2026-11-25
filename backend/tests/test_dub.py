@@ -10,7 +10,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.config import settings
-from app.models import Clip, DubLine, DubScript, RenderOptions, Segment, Word
+from app.models import Clip, DubLine, DubScript, RenderOptions, SceneAnchor, Segment, Word
 from app.pipeline import dub, tts
 
 needs_ffmpeg = pytest.mark.skipif(not shutil.which("ffmpeg"), reason="ffmpeg not installed")
@@ -61,6 +61,57 @@ def test_draft_edit_and_what_needs_generating():
     assert dub.stale(s2, s2.lines[1])  # another version → speak it again
     s.lines[2].text = ""
     assert not dub.stale(s, s.lines[2])  # empty = silence there
+
+
+def test_script_flags_clipped_thoughts_without_rewriting():
+    segments = talk("Before the clip starts because the sentence continues.")
+    clip = Clip(index=1, start=0.4, end=1.97, title="t", hook="", score=5)
+    script = dub.draft(segments, clip)
+    assert script.lines[0].text.endswith("because")
+    warnings = dub.script_warnings(segments, clip, script)
+    assert "mid-sentence" in warnings[0][0] and "connecting word" in warnings[0][1]
+    dub.edit(script, texts={0: "This is the complete thought."})
+    assert not dub.script_warnings(segments, clip, script)
+
+
+def test_repair_uses_context_and_preserves_script_until_review():
+    from fastapi import HTTPException
+
+    from app.main import create_app
+    from app.models import DubEdit, JobStatus
+
+    class FakeNarrator:
+        def unload(self):
+            pass
+
+        def chat_json(self, prompt, schema, **kwargs):
+            context = json.loads(prompt.split("\n", 1)[1])
+            assert context["source_before"] == "Before"
+            assert context["source_after"] == "the sentence continues."
+            return {"text": "The sentence continues after the clip starts."}
+
+    app = create_app(start_worker=False, llm_factory=FakeNarrator)
+    endpoints = {route.name: route.endpoint for route in app.routes if hasattr(route, "endpoint")}
+    store = app.state.store
+    job = store.create("source", 1)
+    clip = Clip(index=1, start=0.4, end=1.97, title="t", hook="", score=5, approved=True)
+    store.update(job.id, status=JobStatus.review, clips=[clip])
+    segments = talk("Before the clip starts because the sentence continues.")
+    directory = store.dir(job.id)
+    (directory / "transcript.json").write_text(json.dumps([segment.model_dump() for segment in segments]))
+    script = dub.save(directory, dub.draft(segments, clip))
+
+    proposal = endpoints["suggest_dub_line"](job.id, 1, 0)
+    assert proposal["original"] == script.lines[0].text
+    assert dub.load(directory, 1) == script
+
+    edit = DubEdit(texts={0: proposal["text"]}, expected_texts={0: proposal["original"]})
+    saved = endpoints["put_dub"](job.id, 1, edit)
+    assert saved["script"]["lines"][0]["text"] == proposal["text"]
+    assert not saved["warnings"]
+    with pytest.raises(HTTPException) as stale:
+        endpoints["put_dub"](job.id, 1, edit)
+    assert stale.value.status_code == 409
 
 
 def test_captions_show_the_typed_words_timed_by_what_was_heard():
@@ -277,7 +328,8 @@ def test_batch_drafts_preview_and_activation(monkeypatch):
     assert all(not dub.stale(dub.load(d, 1), line) for line in dub.load(d, 1).lines)
 
 
-def test_background_narration_retries_only_failed_clips(monkeypatch):
+@pytest.mark.parametrize("failure", ["synthesis", "alignment"])
+def test_background_narration_retries_only_failed_clips(monkeypatch, failure):
     from app.main import create_app
     from app.models import JobStatus, NarrationQueue
 
@@ -295,18 +347,41 @@ def test_background_narration_retries_only_failed_clips(monkeypatch):
     for clip in clips:
         dub.save(directory, DubScript(clip=clip.index, voice="v", lines=[line(0, 0, 2)]))
     attempts = []
+    alignments = []
+    monkeypatch.setattr(tts, "load", lambda _: {"name": "Saved voice"})
+    monkeypatch.setattr(tts, "prompt_for", lambda *args: directory / "voice.pt")
 
-    def generate(directory, script, clip, on_progress):
-        attempts.append(clip.index)
-        assert clip.options.dub_pacing == "natural"
-        on_progress(0.5, "Synthesis in progress")
-        item = store.get(job.id).narration.items[clip.index]
-        assert item.status == "running" and item.progress == 0.5
-        if attempts == [1, 2]:
-            raise RuntimeError("Voice engine interrupted")
+    def speak(job, *, on_item):
+        attempts.append([Path(item["out"]).name for item in job["items"]])
+        results = []
+        for i, item in enumerate(job["items"]):
+            path = Path(item["out"])
+            index = int(path.name.split("_")[1])
+            on_item(i)
+            status = store.get(dub_job_id).narration.items[index]
+            assert status.status == "running" and status.progress == 0.65
+            if failure == "synthesis" and len(attempts) == 1 and index == 2:
+                results.append({"error": "Voice engine interrupted"})
+            else:
+                path.write_bytes(b"test take")
+                results.append({"seconds": 1})
+        return {"ok": True, "items": results}
+
+    def align(paths, *, continue_on_error):
+        assert continue_on_error
+        alignments.append(len(paths))
+        if failure == "alignment" and len(alignments) == 1:
+            return [{"words": []}, {"error": "Alignment failed"}]
+        return [{"words": []} for _ in paths]
+
+    def assemble(directory, script, start, end, *, pacing):
+        assert pacing == "natural"
         return script
 
-    monkeypatch.setattr(dub, "generate", generate)
+    dub_job_id = job.id
+    monkeypatch.setattr(tts, "run_worker", speak)
+    monkeypatch.setattr(tts, "transcribe_many", align)
+    monkeypatch.setattr(dub, "assemble", assemble)
     queued = endpoints["queue_narration"](job.id, NarrationQueue(clips=[1, 2], pacing="natural"))
     assert queued.status == JobStatus.queued
     kind, job_id, kwargs = worker.q.get_nowait()
@@ -318,7 +393,8 @@ def test_background_narration_retries_only_failed_clips(monkeypatch):
     endpoints["retry_narration"](job.id)
     kind, job_id, kwargs = worker.q.get_nowait()
     worker._run(kind, job_id, **kwargs)
-    assert attempts == [1, 2, 2]
+    assert [len(batch) for batch in attempts] == [2, 1] and attempts[1] == [attempts[0][1]]
+    assert alignments == ([1, 1] if failure == "synthesis" else [2, 1])
     assert all(item.status == "ready" for item in store.get(job.id).narration.items.values())
 
 
@@ -384,3 +460,66 @@ def test_ambience_separates_each_clip_range_once(tmp_path, monkeypatch):
 
     trimmed = ambience.track_for(source, tmp_path, clip.model_copy(update={"end": 5}))
     assert trimmed != stem and trimmed.is_file() and len(calls) == 4
+
+
+@needs_ffmpeg
+def test_export_preview_uses_scene_pacing_without_replacing_published_files(tmp_path, monkeypatch):
+    from app.pipeline import ambience, render, scenes
+
+    source = tmp_path / "source.mp4"
+    pattern = ("color=c=red:s=160x90:r=25:d=2[a];color=c=blue:s=160x90:r=25:d=2[b];"
+               "[a][b]concat=n=2:v=1:a=0")
+    subprocess.run([
+        "ffmpeg", "-y", "-v", "error", "-f", "lavfi", "-i", pattern, "-pix_fmt", "yuv420p", str(source),
+    ], check=True)
+    tone(tmp_path / "l0.wav", 3, freq=1000)
+    tone(tmp_path / "l1.wav", 1, freq=1000)
+    room = tmp_path / "room.wav"
+    tone(room, 4, freq=200)
+    monkeypatch.setattr(ambience, "track_for", lambda *args: room)
+    scenes.save(scenes.SceneIndex(mode="skipped", cuts=[2]), tmp_path)
+    script = DubScript(clip=1, voice="v", lines=[line(0, 0, 3), line(1, 2, 1)])
+    dub.save(tmp_path, dub.assemble(tmp_path, script, 0, 4))
+    clip = Clip(index=1, start=0, end=4, title="t", hook="", score=7, stale=True, options=RenderOptions(
+        dub=True, dub_pacing="scene", dub_ambience=True, dub_ambience_level=0.3, sfx=False, hook=False,
+    ))
+    export = tmp_path / "short_1.mp4"
+    captions = tmp_path / "short_1.srt"
+    export.write_bytes(b"previous export")
+    captions.write_text("previous captions")
+
+    preview = tmp_path / render.render_clip(source, clip, [], tmp_path, preview=True)
+    assert dub.scene_timing(tmp_path, clip, 6) == [(0, 0), (2, 4), (4, 6)]
+    assert export.read_bytes() == b"previous export" and captions.read_text() == "previous captions"
+    assert clip.stale and clip.version == 0
+
+    def pixel(seconds):
+        return subprocess.run([
+            "ffmpeg", "-v", "error", "-ss", str(seconds), "-i", str(preview), "-frames:v", "1",
+            "-vf", "crop=2:2:180:240,format=rgb24", "-f", "rawvideo", "-",
+        ], capture_output=True, check=True).stdout[:3]
+
+    red = pixel(3.4)
+    blue = pixel(4.3)
+    assert red[0] > 200 and red[2] < 30
+    assert blue[2] > 200 and blue[0] < 30
+
+    clip.options.dub_anchors = [SceneAnchor(source=2, narration=3.2)]
+    assert dub.scene_timing(tmp_path, clip, 6) == [(0, 0), (2, 3.2), (4, 6)]
+    render.render_clip(source, clip, [], tmp_path, preview=True, preview_range=(3.4, 0.8))
+    sample = pixel(0)
+    assert sample[2] > 200 and sample[0] < 30
+    result = subprocess.run([
+        "ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", str(preview),
+    ], capture_output=True, text=True, check=True)
+    assert abs(float(result.stdout) - 0.8) < 0.08
+    with pytest.raises(ValueError, match="Preview start"):
+        render.render_clip(source, clip, [], tmp_path, preview=True, preview_range=(12, 1))
+    assert export.read_bytes() == b"previous export" and captions.read_text() == "previous captions"
+
+
+def test_manual_scene_anchors_validate_timeline_order():
+    with pytest.raises(ValueError, match="must advance"):
+        RenderOptions(dub_anchors=[SceneAnchor(source=1, narration=2), SceneAnchor(source=3, narration=1)])
+    options = RenderOptions(dub_anchors=[SceneAnchor(source=3, narration=4), SceneAnchor(source=1, narration=2)])
+    assert [anchor.source for anchor in options.dub_anchors] == [1, 3]

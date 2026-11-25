@@ -69,9 +69,26 @@ YouTube URL / file
   the picture. Queue narration and follow each short's progress in the workspace. ClipForge continues with the
   tab closed while its backend is running. Use **Retry failed narrations** for failed or interrupted shorts,
   then choose **Create shorts & posts** to export.
+- **Narration script check:** likely mid-sentence openings and incomplete lines are flagged during review.
+  Use **Suggest a fix** beside a flagged line to review a rewrite based on the surrounding transcript. Changes
+  apply only when you accept them. A batch shares one voice-model load and one word-timing model load for
+  the lines that need generation.
 - **Narration pacing:** choose **Match source timing** for picture-locked footage or **Natural pacing** for B-roll
   and screen recordings. Natural pacing keeps the generated speech at its original speed and slows the picture
-  uniformly if the short needs more time. Captions follow the new speech timing.
+  uniformly if the short needs more time. **Scene-aware pacing** adjusts indexed scenes around narration cues
+  and uses uniform pacing when there are no suitable cues. Captions follow the new speech timing.
+- **Preview export:** choose a start and up to 10 seconds on the output timeline to review current captions,
+  narration and audio mix at lower resolution. Find the preview next to ready narration or on the Shorts step.
+- **Manual scene anchors:** under **Shorts → Replace voice → Scene-aware pacing**, pair a point in the source
+  video with a point in the generated voice track. Manual anchors take priority over nearby automatic cuts.
+- **Preview a narration line:** use **Preview this line in export** beside a generated line in an active dub
+  to open the final mix and captions around that line.
+- **Local B-roll:** in **Shorts**, add up to 12 local MP4 cutaways per short and set their output start and end
+  times. Cutaways use separate ranges. The footage loops if needed, fills the picture, and leaves the short's
+  captions and audio mix in place.
+  To get suggestions, put descriptively named MP4s in `backend/data/broll` or set `BROLL_DIR` in `backend/.env`.
+  **Find matches in local B-roll** compares file and folder names with the short's title, keywords, narration,
+  and available scene descriptions. Review a match and choose **Use cutaway** to attach it.
 - **Check before creating:** the Pick step opens with the judge's verdict on the whole job — how many of the shorts
   you asked for can be complete within 59 s, how long the incomplete ideas would need, and what to do (create fewer,
   allow longer clips, or skip a video that has no self-contained moment). It only recommends: **Approve only the
@@ -260,8 +277,8 @@ Clone only your own voice, and mark realistic AI voice-overs as altered/syntheti
 Install [Demucs](https://github.com/facebookresearch/demucs#installation) in a separate Python environment.
 Set `DEMUCS_EXECUTABLE` in `backend/.env` to the full path to its `demucs` command if it is outside the backend's
 `PATH`, then restart the backend. Enable **Keep source ambience** in the narration panel or the short's voice
-settings. The first export may download model weights. Separation runs locally on CPU, caches the result for that
-clip range, and mixes it quietly under the new voice. Listen to the export for residual dialogue.
+settings. The first preview or export may download model weights. Separation runs locally on CPU and caches the
+result for that clip range. Adjust **Ambience level** to control the mix and listen for residual dialogue.
 
 ### Ollama on Windows, app in WSL
 Either enable mirrored networking (`%UserProfile%\.wslconfig` → `[wsl2]` `networkingMode=mirrored`, then `wsl --shutdown`),

@@ -1,6 +1,7 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { api } from '../api.js'
 import { fmtPrecise } from '../util.js'
+import SceneAnchors from './SceneAnchors.jsx'
 
 export function fitChip(ln, stale, maxRate) {
   if (!ln.text.trim()) return <span className="chip">silence</span>
@@ -11,9 +12,19 @@ export function fitChip(ln, stale, maxRate) {
   return null
 }
 
-export function Line({ ln, stale, busy, maxRate, onText, onRegen, src }) {
+export function Line({ ln, stale, busy, maxRate, onText, onRegen, onPreview, onSuggest, src, children, warnings = [] }) {
   const [text, setText] = useState(ln.text)
-  useEffect(() => setText(ln.text), [ln.text])
+  const [suggestion, setSuggestion] = useState(null)
+  const [suggesting, setSuggesting] = useState(false)
+  useEffect(() => {
+    setText(ln.text)
+    setSuggestion(null)
+  }, [ln.text])
+  const suggest = async () => {
+    setSuggesting(true)
+    setSuggestion(null)
+    try { setSuggestion(await onSuggest()) } catch { /* shown by act() */ } finally { setSuggesting(false) }
+  }
   return (
     <li className="dub-line">
       <span className="muted small dub-t">{fmtPrecise(ln.start)}</span>
@@ -21,24 +32,46 @@ export function Line({ ln, stale, busy, maxRate, onText, onRegen, src }) {
         <span className="muted small dub-orig" title="What was said">{ln.original}</span>
         <textarea rows={2} value={text} maxLength={2000} disabled={busy} placeholder="(silence here)"
                   onChange={(e) => setText(e.target.value)} onBlur={() => text !== ln.text && onText(text)} />
+        {warnings.map((warning) => <span key={warning} className="small warn">{warning}</span>)}
+        {warnings.length > 0 && onSuggest && <div>
+          <button className="btn sm ghost" disabled={busy || suggesting || text !== ln.text} onClick={suggest}>
+            {suggesting ? 'Finding a fix…' : 'Suggest a fix'}
+          </button>
+          {suggestion && <div>
+            <p className="small">{suggestion.text}</p>
+            <div className="row-btns">
+              <button className="btn sm" disabled={busy || text !== suggestion.original}
+                      onClick={async () => {
+                        if (await onText(suggestion.text, suggestion.original)) setSuggestion(null)
+                      }}>Use suggested wording</button>
+              <button className="btn sm ghost" onClick={() => setSuggestion(null)}>Dismiss</button>
+            </div>
+          </div>}
+        </div>}
         <div className="row-btns">
           {fitChip(ln, stale, maxRate)}
           {ln.file && !stale && <audio controls preload="none" src={src(ln.file)} />}
           <button className="btn sm ghost" disabled={busy || !ln.text.trim()} onClick={onRegen}
                   title="Speak just this line again (another take)">↻ this line</button>
+          {onPreview && <button className="btn sm ghost" disabled={busy} onClick={onPreview}>
+            Preview this line in export
+          </button>}
         </div>
+        {children}
       </div>
     </li>
   )
 }
 
 // 🎙 Replace voice: the clip's sentences re-spoken in a Voice Library voice, laid out where the originals were.
-export default function DubEditor({ job, clip, busy, act, setOpt, fixedVoice = false, previewPacing }) {
+export default function DubEditor({ job, clip, busy, act, setOpt, fixedVoice = false, previewPacing, onWarnings }) {
   const [data, setData] = useState(null)
   const [voices, setVoices] = useState([])
   const [working, setWorking] = useState('')
   const [open, setOpen] = useState(fixedVoice || !!clip.options?.dub)
   const [preview, setPreview] = useState('')
+  const [previewLine, setPreviewLine] = useState(null)
+  const audio = useRef(null)
   const [ambienceAvailable, setAmbienceAvailable] = useState(false)
   const pacing = previewPacing ?? clip.options?.dub_pacing ?? 'source'
   const narrationStatus = job.narration?.items[clip.index]?.status
@@ -52,11 +85,19 @@ export default function DubEditor({ job, clip, busy, act, setOpt, fixedVoice = f
     }
   }, [open, job.id, clip.index, clip.start, clip.end, clip.version, fixedVoice, narrationStatus])
   useEffect(() => setPreview(''), [pacing, clip.start, clip.end])
+  useEffect(() => {
+    onWarnings?.(clip.index, Object.keys(data?.warnings || {}).length)
+  }, [clip.index, data?.warnings, onWarnings])
 
   const run = async (fn, label) => {
     setPreview('')
     setWorking(label)
-    try { const r = await act(fn); if (r?.script) setData(r); else await load() } catch { /* shown by act() */ } finally { setWorking('') }
+    try {
+      const result = await act(fn)
+      if (result?.script) setData(result)
+      else await load()
+      return result
+    } catch { /* shown by act() */ } finally { setWorking('') }
   }
   const s = data?.script
   const stale = new Set(data?.stale || [])
@@ -64,14 +105,31 @@ export default function DubEditor({ job, clip, busy, act, setOpt, fixedVoice = f
   const on = !!clip.options?.dub
   const faceFraming = ['face', 'speaker', 'split'].includes(clip.reframe)
   const tooLong = s ? s.lines.filter((l) => l.fit === 'too_long').length : 0
+  const timingChanged = s?.track && (s.pacing !== pacing || !s.span
+    || Math.abs(s.span[0] - clip.start) > 0.001 || Math.abs(s.span[1] - clip.end) > 0.001)
   const makePreview = async () => {
     setWorking('Making video preview…')
     setPreview('')
+    setPreviewLine(null)
     try {
       const { file } = await act(() => api.previewDub(job.id, clip.index, pacing))
       setPreview(api.fileUrl(job.id, file, Date.now()))
     } catch { /* shown by act() */ } finally { setWorking('') }
   }
+  const previewExportLine = async (line) => {
+    setWorking('Rendering line preview…')
+    setPreview('')
+    setPreviewLine(line.i)
+    const start = Math.max(0, line.at - 0.5)
+    const length = Math.min(10, Math.max(2, (line.seconds || 0) / (line.rate || 1) + 1))
+    try {
+      const { file } = await act(() => api.exportPreview(job.id, clip.index, { start, length }))
+      setPreview(api.fileUrl(job.id, file, Date.now()))
+    } catch { /* shown by act() */ } finally { setWorking('') }
+  }
+  const player = preview && <video key={preview}
+    aria-label={previewLine == null ? 'First narration line over source video' : `Export preview of line ${previewLine + 1}`}
+    controls playsInline preload="metadata" style={{ width: '100%', maxWidth: 480 }} src={preview} />
 
   if (!open) {
     return (
@@ -111,22 +169,28 @@ export default function DubEditor({ job, clip, busy, act, setOpt, fixedVoice = f
             </button>
             {working && <span className="muted small">{working} (~2 s per second of speech + ~20 s to load)</span>}
           </div>
-          {preview && <video key={preview} aria-label="First narration line over source video"
-                             controls playsInline preload="metadata" style={{ width: '100%', maxWidth: 480 }}
-                             src={preview} />}
           <ul className="dub-lines">
             {s.lines.filter((l) => l.start >= clip.start && l.start < clip.end).map((ln) => (
               <Line key={ln.i} ln={ln} stale={stale.has(ln.i)} busy={busy || !!working} maxRate={data.max_rate}
+                    warnings={data.warnings?.[ln.i]}
                     src={(f) => api.fileUrl(job.id, f)}
-                    onText={(t) => run(() => api.putDub(job.id, clip.index, { texts: { [ln.i]: t } }), 'Saving…')}
-                    onRegen={() => run(() => api.generateDub(job.id, clip.index, [ln.i]), 'Speaking 1 line…')} />
+                    onPreview={!fixedVoice && on && !timingChanged && !stale.has(ln.i) && ln.at != null
+                      ? () => previewExportLine(ln) : undefined}
+                    onSuggest={() => act(() => api.suggestDubLine(job.id, clip.index, ln.i))}
+                    onText={(t, expected) => run(() => api.putDub(job.id, clip.index, {
+                      texts: { [ln.i]: t }, expected_texts: expected === undefined ? {} : { [ln.i]: expected },
+                    }), 'Saving…')}
+                    onRegen={() => run(() => api.generateDub(job.id, clip.index, [ln.i]), 'Speaking 1 line…')}>
+                {previewLine === ln.i && player}
+              </Line>
             ))}
           </ul>
+          {previewLine == null && player}
           {tooLong > 0 && <p className="err small">{tooLong} line(s) don't fit their time and get cut — shorten them.</p>}
           {s.track && (
             <div className="dub-track">
               <span className="muted small">🤖 AI voice track</span>
-              <audio controls preload="none" src={`${api.fileUrl(job.id, s.track)}?v=${s.track_version}`} />
+              <audio ref={audio} controls preload="none" src={`${api.fileUrl(job.id, s.track)}?v=${s.track_version}`} />
             </div>
           )}
           {!fixedVoice && <div className="row-btns">
@@ -134,11 +198,24 @@ export default function DubEditor({ job, clip, busy, act, setOpt, fixedVoice = f
                     onChange={(e) => setOpt('dub_pacing', e.target.value)}>
               <option value="source">Match source timing</option>
               <option value="natural">Natural pacing · flexible picture</option>
+              <option value="scene">Scene-aware pacing · align to indexed cuts</option>
             </select>
             <label className="small"><input type="checkbox" checked={!!clip.options?.dub_ambience}
                                             disabled={busy || !!working || (!ambienceAvailable && !clip.options?.dub_ambience)}
                                             onChange={(e) => setOpt('dub_ambience', e.target.checked)} />{' '}
               Keep source ambience {!ambienceAvailable && '(Demucs required)'}</label>
+            {clip.options?.dub_ambience && <label className="small">
+              Ambience level
+              <input key={clip.options.dub_ambience_level} type="number" min="0" max="50" step="1"
+                     defaultValue={Math.round((clip.options.dub_ambience_level ?? 0.18) * 100)}
+                     disabled={busy || !!working}
+                     onBlur={(e) => {
+                       const level = e.target.valueAsNumber
+                       const previous = Math.round((clip.options.dub_ambience_level ?? 0.18) * 100)
+                       if (level >= 0 && level <= 50 && level !== previous) setOpt('dub_ambience_level', level / 100)
+                       else e.target.value = previous
+                     }} />%
+            </label>}
             <label className="small"><input type="checkbox" checked={on} disabled={busy || !s.track}
                                             onChange={(e) => setOpt('dub', e.target.checked || null)} />{' '}
               Use in this short {on && '(re-render to hear it)'}</label>
@@ -153,6 +230,14 @@ export default function DubEditor({ job, clip, busy, act, setOpt, fixedVoice = f
                                      && act(() => api.deleteDub(job.id, clip.index)).then(() => { setData(null); setOpen(false) }).catch(() => {})}>
               Remove</button>}
           </div>}
+          {!fixedVoice && pacing === 'scene' && (
+            s.track && !timingChanged && !stale.size
+              ? <SceneAnchors job={job} clip={clip} script={s} busy={busy || !!working} audio={audio} act={act} />
+              : <button className="btn sm" disabled={busy || !!working || !s.voice}
+                        onClick={() => run(() => api.generateDub(job.id, clip.index), 'Updating narration timing…')}>
+                  Prepare voice track for scene anchors
+                </button>
+          )}
         </>
       )}
     </div>

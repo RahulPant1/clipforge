@@ -5,7 +5,7 @@ from datetime import UTC, datetime
 from enum import Enum
 from typing import Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 class JobStatus(str, Enum):
@@ -69,6 +69,25 @@ class CropKey(BaseModel):
     pan: bool = False  # glide here from the previous key (camera pan) instead of cutting at t
 
 
+class SceneAnchor(BaseModel):
+    source: float = Field(ge=0, allow_inf_nan=False)
+    narration: float = Field(gt=0, allow_inf_nan=False)
+
+
+class BrollPlacement(BaseModel):
+    start: float = Field(ge=0, allow_inf_nan=False)
+    end: float = Field(gt=0, allow_inf_nan=False)
+    revision: int = Field(ge=1)
+    asset: str | None = Field(None, pattern=r"^[0-9a-f]{12}$")  # None identifies a legacy upload
+
+    @field_validator("end")
+    @classmethod
+    def after_start(cls, end, info):
+        if "start" in info.data and end - info.data["start"] < 0.2 - 1e-6:
+            raise ValueError("B-roll needs at least 0.2 seconds")
+        return end
+
+
 class RenderOptions(BaseModel):
     """Per-clip overrides; None = use the global setting."""
     jumpcut: bool | None = None
@@ -87,8 +106,38 @@ class RenderOptions(BaseModel):
     emoji: bool | None = None  # colour emoji above caption lines + the hook's emoji (None = CAPTION_EMOJI)
     aspects: list[Literal["4:5", "1:1"]] | None = None  # feed versions next to the 9:16 (None = EXTRA_ASPECTS)
     dub: bool | None = None  # Replace voice: the clip's dub track (dub.py) instead of the original speech
-    dub_pacing: Literal["source", "natural"] = "source"
+    dub_pacing: Literal["source", "natural", "scene"] = "source"
     dub_ambience: bool = False
+    dub_ambience_level: float = Field(0.18, ge=0, le=0.5)
+    dub_anchors: list[SceneAnchor] = Field(default_factory=list, max_length=24)
+    broll: BrollPlacement | None = None  # legacy single placement
+    brolls: list[BrollPlacement] = Field(default_factory=list, max_length=12)
+
+    def cutaways(self) -> list[BrollPlacement]:
+        return sorted([*([self.broll] if self.broll else []), *self.brolls], key=lambda item: item.start)
+
+    @model_validator(mode="after")
+    def valid_cutaways(self) -> "RenderOptions":
+        items = self.cutaways()
+        if len(items) > 12 or len({item.asset for item in items}) != len(items):
+            raise ValueError("Use up to 12 distinct B-roll placements")
+        if any(a.end > b.start + 1e-6 for a, b in zip(items, items[1:], strict=False)):
+            raise ValueError("B-roll placements cannot overlap")
+        return self
+
+    @field_validator("dub_anchors")
+    @classmethod
+    def ordered_anchors(cls, anchors: list[SceneAnchor]) -> list[SceneAnchor]:
+        ordered = sorted(anchors, key=lambda anchor: anchor.source)
+        if any(b.source - a.source < 0.05 or b.narration - a.narration < 0.05
+               for a, b in zip(ordered, ordered[1:], strict=False)):
+            raise ValueError("Scene anchors must advance in both timelines and be at least 0.05 seconds apart")
+        return ordered
+
+
+class ExportPreviewRange(BaseModel):
+    start: float = Field(0, ge=0, allow_inf_nan=False)
+    length: float = Field(10, ge=0.5, le=10, allow_inf_nan=False)
 
 
 class Insert(BaseModel):
@@ -288,8 +337,9 @@ class NarrationItem(BaseModel):
 
 
 class NarrationOptions(BaseModel):
-    pacing: Literal["source", "natural"] = "source"
+    pacing: Literal["source", "natural", "scene"] = "source"
     ambience: bool = False
+    ambience_level: float = Field(0.18, ge=0, le=0.5)
 
 
 class NarrationBatch(NarrationOptions):
@@ -470,7 +520,7 @@ class DubScript(BaseModel):
     track: str | None = None  # dub_N.wav once assembled (clip-relative, clip length)
     track_version: int = 0  # bumps on every assembly (cache-busting)
     span: tuple[float, float] | None = None  # the clip's start/end the track was laid out for
-    pacing: Literal["source", "natural"] = "source"
+    pacing: Literal["source", "natural", "scene"] = "source"
     track_duration: float | None = None
 
 
@@ -478,6 +528,7 @@ class DubEdit(BaseModel):
     voice: str | None = Field(None, max_length=40)
     version: int | None = None
     texts: dict[int, str] = {}  # line i → new text ("" = silence there)
+    expected_texts: dict[int, str] = {}  # guard acceptance of an earlier suggestion
     reset: bool = False  # start again from the clip's current sentences
 
 

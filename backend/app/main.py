@@ -4,11 +4,13 @@ import json
 import logging
 import re
 import shutil
+import uuid
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from threading import Lock
+from typing import BinaryIO
 
 from fastapi import FastAPI, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
@@ -23,6 +25,7 @@ from .models import (
     BatchLinks,
     BrandKit,
     BrandVoice,
+    BrollPlacement,
     Clip,
     ClipAdd,
     ClipEdit,
@@ -31,6 +34,7 @@ from .models import (
     DubBatchDraft,
     DubEdit,
     DubGenerate,
+    ExportPreviewRange,
     Insert,
     Job,
     JobCreate,
@@ -64,6 +68,7 @@ from .models import (
 from .pipeline import (
     batch,
     brand,
+    broll,
     cover,
     discover,
     dub,
@@ -92,7 +97,7 @@ from .pipeline.jumpcut import clean_removed
 from .pipeline.llm import OllamaClient
 from .pipeline.presets import POSITIONS, all_presets, get_preset
 from .pipeline.reframe import people, source_size, tracked_path
-from .pipeline.render import ASPECTS, FEED, extra_aspects
+from .pipeline.render import ASPECTS, FEED, extra_aspects, render_clip
 from .watch import Watcher
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -959,7 +964,7 @@ def create_app(pipeline=None, start_worker: bool = True, llm_factory=OllamaClien
             except ValueError as e:
                 raise HTTPException(400, f"Short {index}: {e}") from None
             items[index] = NarrationItem()
-        batch = NarrationBatch(items=items, pacing=body.pacing, ambience=body.ambience, restore=job.status)
+        batch = NarrationBatch(items=items, restore=job.status, **body.model_dump(exclude={"clips"}))
         return worker.submit_narration(job, batch)
 
     @app.post("/api/jobs/{job_id}/dub/batch/retry", response_model=Job, status_code=202)
@@ -976,6 +981,95 @@ def create_app(pipeline=None, start_worker: bool = True, llm_factory=OllamaClien
         if not f.is_file():
             raise HTTPException(400, "no transcript yet")
         return [Segment(**x) for x in json.loads(f.read_text())]
+
+    @app.post("/api/jobs/{job_id}/clips/{index}/export-preview")
+    def export_preview(job_id: str, index: int, body: ExportPreviewRange | None = None) -> dict:
+        editable(job_id)
+        if not GPU_LOCK.acquire(timeout=2):
+            raise HTTPException(409, "The renderer is busy. Try again when the current job finishes.")
+        try:
+            editable(job_id)
+            _, clip = clip_of(job_id, index)
+            interval = body or ExportPreviewRange()
+            file = render_clip(source_of(job_id), clip.model_copy(deep=True), segs_of(job_id),
+                               store.dir(job_id), preview=True, preview_range=(interval.start, interval.length))
+            return {"file": file}
+        except ValueError as e:
+            raise HTTPException(400, str(e)) from None
+        except RuntimeError as e:
+            raise HTTPException(502, str(e)) from None
+        finally:
+            GPU_LOCK.release()
+
+    def attach_broll(job_id: str, index: int, stream: BinaryIO) -> Job:
+        editable(job_id)
+        if not GPU_LOCK.acquire(timeout=2):
+            raise HTTPException(409, "The renderer is busy. Try again when the current job finishes.")
+        try:
+            editable(job_id)
+            _, clip = clip_of(job_id, index)
+            asset = uuid.uuid4().hex[:12]
+            directory = store.dir(job_id)
+            duration = clip.duration if clip.options.dub else clip.duration - clip.cut_seconds
+            if clip.options.dub and clip.options.dub_pacing != "source":
+                duration = dub.output_duration(directory, clip)
+            broll.next_slot(clip.options.cutaways(), duration)  # reject before copying a potentially large file
+            footage = broll.save(directory, index, stream, asset)
+            try:
+                def attach(current: Clip) -> None:
+                    placements = current.options.cutaways()
+                    start, end = broll.next_slot(placements, duration)
+                    placement = BrollPlacement(start=start, end=end, asset=asset,
+                                               revision=footage.stat().st_mtime_ns // 1_000_000)
+                    current.options = current.options.model_copy(update={"broll": None,
+                                                                         "brolls": [*placements, placement]})
+                    current.stale = bool(current.file)
+
+                return store.update_clip(job_id, clip.index, attach)
+            except Exception:
+                footage.unlink(missing_ok=True)
+                raise
+        except ValueError as e:
+            raise HTTPException(400, str(e)) from None
+        finally:
+            GPU_LOCK.release()
+
+    @app.post("/api/jobs/{job_id}/clips/{index}/broll", response_model=Job)
+    def upload_broll(job_id: str, index: int, file: UploadFile = File(...)) -> Job:
+        return attach_broll(job_id, index, file.file)
+
+    @app.get("/api/jobs/{job_id}/clips/{index}/broll/suggestions")
+    def suggest_broll(job_id: str, index: int) -> dict:
+        _, clip = clip_of(job_id, index)
+        directory = store.dir(job_id)
+        segs = segs_of(job_id) if (directory / "transcript.json").is_file() else []
+        script = dub.load(directory, index) if clip.options.dub else None
+        speech = " ".join(line.text for line in script.lines if clip.start <= line.start < clip.end) if script else ""
+        scene_index = scenes.load(directory)
+        picture = " ".join(scene.description for scene in scene_index.scenes
+                           if scene.start < clip.end and scene.end > clip.start) if scene_index else ""
+        primary = " ".join([clip.title, clip.hook, *clip.keywords])
+        return {"directory": str(broll.library_root()),
+                "items": broll.suggest(primary, f"{speech or clip_text(segs, clip)} {picture}")}
+
+    def broll_asset(asset_id: str) -> Path:
+        asset = broll.library_assets().get(asset_id)
+        if asset is None:
+            raise HTTPException(404, "Local B-roll file not found")
+        return asset[0]
+
+    @app.get("/api/broll/assets/{asset_id}")
+    def preview_broll_asset(asset_id: str) -> FileResponse:
+        return FileResponse(broll_asset(asset_id), media_type="video/mp4")
+
+    @app.post("/api/jobs/{job_id}/clips/{index}/broll/use/{asset_id}", response_model=Job)
+    def use_broll_asset(job_id: str, index: int, asset_id: str) -> Job:
+        editable(job_id)
+        try:
+            with broll_asset(asset_id).open("rb") as stream:
+                return attach_broll(job_id, index, stream)
+        except FileNotFoundError:
+            raise HTTPException(404, "Local B-roll file not found") from None
 
     @app.post("/api/jobs/{job_id}/dub/drafts")
     def draft_dubs(job_id: str, body: DubBatchDraft) -> dict:
@@ -1024,10 +1118,12 @@ def create_app(pipeline=None, start_worker: bool = True, llm_factory=OllamaClien
         _, clip = clip_of(job_id, index)
         script = dub.load(store.dir(job_id), index)
         saved = script is not None
-        script = script or dub.draft(segs_of(job_id), clip)
+        segs = segs_of(job_id)
+        script = script or dub.draft(segs, clip)
         return {"saved": saved, "script": script.model_dump(mode="json"),
-                "stale": [ln.i for ln in script.lines if dub.stale(script, ln)] if script.voice else [],
-                "max_rate": dub.MAX_RATE}
+                "stale": [ln.i for ln in script.lines if clip.start <= ln.start < clip.end
+                          and dub.stale(script, ln)] if script.voice else [],
+                "max_rate": dub.MAX_RATE, "warnings": dub.script_warnings(segs, clip, script)}
 
     @app.put("/api/jobs/{job_id}/clips/{index}/dub")
     def put_dub(job_id: str, index: int, body: DubEdit) -> dict:
@@ -1044,8 +1140,29 @@ def create_app(pipeline=None, start_worker: bool = True, llm_factory=OllamaClien
             editable(job_id)
             script = None if body.reset else dub.load(d, index)
             script = script or dub.draft(segs_of(job_id), clip)
+            current = {line.i: line.text for line in script.lines}
+            if any(current.get(i) != text for i, text in body.expected_texts.items()):
+                raise HTTPException(409, "The line changed after this suggestion. Request a new suggestion.")
             dub.save(d, dub.edit(script, body.voice, body.version, body.texts))
         return get_dub(job_id, index)
+
+    @app.post("/api/jobs/{job_id}/clips/{index}/dub/lines/{line_id}/suggest")
+    def suggest_dub_line(job_id: str, index: int, line_id: int) -> dict:
+        def propose():
+            editable(job_id)
+            _, clip = clip_of(job_id, index)
+            segs = segs_of(job_id)
+            script = dub.load(store.dir(job_id), index) or dub.draft(segs, clip)
+            if line_id not in dub.script_warnings(segs, clip, script):
+                raise ValueError("This line no longer needs a suggested fix")
+            line = next(line for line in script.lines if line.i == line_id)
+            llm = llm_factory()
+            try:
+                return {"original": line.text, "text": dub.suggest_repair(segs, script, line, llm)}
+            finally:
+                llm.unload()
+
+        return gpu_work(propose)
 
     @app.post("/api/jobs/{job_id}/clips/{index}/dub/generate")
     def generate_dub(job_id: str, index: int, body: DubGenerate | None = None) -> dict:

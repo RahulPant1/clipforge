@@ -106,6 +106,16 @@ export const api = {
   draftDubs: (id, body) => req(`/jobs/${id}/dub/drafts`, json('POST', body)),
   previewDub: (id, index, pacing) => req(`/jobs/${id}/clips/${index}/dub/preview`, json('POST', { pacing })),
   narrationOptions: () => req('/narration/options'),
+  exportPreview: (id, index, range) => req(`/jobs/${id}/clips/${index}/export-preview`, json('POST', range)),
+  uploadBroll: (id, index, file) => {
+    const body = new FormData()
+    body.append('file', file)
+    return req(`/jobs/${id}/clips/${index}/broll`, { method: 'POST', body })
+  },
+  suggestBroll: (id, index) => req(`/jobs/${id}/clips/${index}/broll/suggestions`),
+  brollAssetUrl: (asset) => `/api/broll/assets/${asset}`,
+  useBroll: (id, index, asset) => req(`/jobs/${id}/clips/${index}/broll/use/${asset}`, { method: 'POST' }),
+  suggestDubLine: (id, index, line) => req(`/jobs/${id}/clips/${index}/dub/lines/${line}/suggest`, { method: 'POST' }),
   queueNarration: (id, body) => req(`/jobs/${id}/dub/batch`, json('POST', body)),
   retryNarration: (id) => req(`/jobs/${id}/dub/batch/retry`, { method: 'POST' }),
   deleteDub: (id, index) => req(`/jobs/${id}/clips/${index}/dub`, { method: 'DELETE' }),

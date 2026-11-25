@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { api } from '../api.js'
 import { defaultStep, isBusy, overallProgress, stepStates } from '../util.js'
+import ExportPreview from './ExportPreview.jsx'
 import LearnStep from './steps/LearnStep.jsx'
 import PickStep from './steps/PickStep.jsx'
 import PostsStep from './steps/PostsStep.jsx'
@@ -118,6 +119,12 @@ export default function Workspace({ job, onChanged }) {
               <li key={index} className={item.status === 'failed' ? 'err' : ''}>
                 Short {index} · {item.status === 'queued' ? 'Queued' : item.message}
                 {item.status === 'running' && ` (${Math.round(item.progress * 100)}%)`}
+                {item.status === 'ready' && step !== 'shorts' && (
+                  <>
+                    <button className="btn sm ghost" onClick={() => go('shorts')}>Adjust voice timing in Shorts</button>
+                    <ExportPreview key={job.updated_at} jobId={job.id} index={index} act={act} busy={busy} />
+                  </>
+                )}
               </li>
             ))}
           </ul>

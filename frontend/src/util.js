@@ -19,7 +19,7 @@ export const clipText = (transcript, clip) =>
     .map((s) => s.text)
     .join(' ')
 
-export const STAGES = ['downloading', 'transcribing', 'selecting', 'writing', 'rendering', 'done']
+export const STAGES = ['downloading', 'transcribing', 'selecting', 'rendering', 'writing', 'done']
 
 export function overallProgress(job) {
   if (job.status === 'done' || job.status === 'review') return 1

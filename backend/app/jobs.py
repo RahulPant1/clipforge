@@ -14,14 +14,19 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from .config import settings
+from .files import atomic_output
 from .models import Clip, Job, JobMode, JobStatus, Stage
 
 log = logging.getLogger(__name__)
 
 PipelineFn = Callable[..., list[Clip]]
 
-# Held while anything uses the GPU (a whole job, or a single "new angle" regeneration)
+# Serializes model work. Legacy pipelines and auto jobs hold it for their entire run.
 GPU_LOCK = threading.Lock()
+
+
+class QueueConflict(Exception):
+    """The job no longer has a status that allows this operation."""
 
 
 def video_title(job_dir: Path) -> tuple[str, str]:
@@ -49,7 +54,11 @@ class JobStore:
 
     def _load(self) -> None:
         for f in self.root.glob("*/job.json"):
-            job = Job.model_validate_json(f.read_text())
+            try:
+                job = Job.model_validate_json(f.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                log.exception("Skipping unreadable job record %s", f)
+                continue
             if job.status == JobStatus.queued and not job.clips:
                 job.message = "Queued (kept across a server restart)"  # never started: create_app re-submits it
                 self._write(job)
@@ -93,7 +102,14 @@ class JobStore:
     def _write(self, job: Job) -> None:
         d = self.dir(job.id)
         d.mkdir(parents=True, exist_ok=True)
-        (d / "job.json").write_text(job.model_dump_json(indent=2))
+        with atomic_output(d / "job.json") as staged:
+            staged.write_text(job.model_dump_json(indent=2), encoding="utf-8")
+
+    def _save(self, job: Job) -> None:
+        """Persist before updating memory and notifying listeners. Caller holds the lock."""
+        self._write(job)
+        self._jobs[job.id] = job
+        self._bump(job.id)
 
     def create(self, source: str, num_clips: int, mode: JobMode = JobMode.review, topic: str = "",
                hinglish: bool = False, title: str = "", channel: str = "", purpose: str = "create") -> Job:
@@ -103,18 +119,26 @@ class JobStore:
                   hinglish=hinglish, title=" ".join(title.split())[:300], channel=" ".join(channel.split())[:200],
                   purpose=purpose)
         with self._lock:
-            self._jobs[job.id] = job
-            self._write(job)
-            self._bump(job.id)
+            self._save(job)
         return job
 
     def update(self, job_id: str, **fields) -> Job:
         with self._lock:
             job = self._jobs[job_id].model_copy(update={**fields, "updated_at": datetime.now(UTC)})
-            self._jobs[job_id] = job
-            self._write(job)
-            self._bump(job_id)
+            self._save(job)
             return job
+
+    def queue_job(self, job_id: str, allowed: tuple[JobStatus, ...], *, expected: Job | None = None,
+                  **fields) -> tuple[Job, JobStatus]:
+        with self._lock:
+            current = self._jobs.get(job_id)
+            if current is None or current.status not in allowed or (expected is not None and current is not expected):
+                raise QueueConflict("Job status changed. Refresh and try again.")
+            job = current.model_copy(update={
+                **fields, "status": JobStatus.queued, "error": None, "updated_at": datetime.now(UTC),
+            })
+            self._save(job)
+            return job, current.status
 
     def update_clip(self, job_id: str, index: int, fn: Callable[[Clip], None]) -> Job:
         """Apply fn to a copy of one clip and save the job atomically."""
@@ -126,9 +150,7 @@ class JobStore:
                 raise KeyError(index)
             fn(target)
             job = job.model_copy(update={"clips": clips, "updated_at": datetime.now(UTC)})
-            self._jobs[job_id] = job
-            self._write(job)
-            self._bump(job_id)
+            self._save(job)
             return job
 
     def get(self, job_id: str) -> Job | None:
@@ -168,21 +190,21 @@ class Worker:
     def submit(self, job_id: str, source: str) -> None:
         self.q.put(("run", job_id, {"source": source}))
 
-    def submit_produce(self, job_id: str) -> None:
-        prev = self.store.get(job_id).status
-        self.store.update(job_id, status=JobStatus.queued, message="Queued: posts + rendering", error=None)
-        self.q.put(("produce", job_id, {"restore": prev}))
+    def submit_produce(self, job: Job) -> Job:
+        return self._submit_editable("produce", job, "Queued: rendering and posts")
 
-    def submit_learn(self, job_id: str) -> None:
+    def submit_learn(self, job: Job) -> Job:
         """Study notes for a job that already has its video (learn.py); the job goes back to where it was."""
-        prev = self.store.get(job_id).status
-        self.store.update(job_id, status=JobStatus.queued, message="Queued: study notes", error=None)
-        self.q.put(("learn", job_id, {"restore": prev}))
+        return self._submit_editable("learn", job, "Queued: study notes")
 
-    def submit_render(self, job_id: str, index: int) -> None:
-        prev = self.store.get(job_id).status
-        self.store.update(job_id, status=JobStatus.queued, message=f"Queued: re-render short {index}", error=None)
-        self.q.put(("render", job_id, {"index": index, "restore": prev}))
+    def submit_render(self, job: Job, index: int) -> Job:
+        return self._submit_editable("render", job, f"Queued: re-render short {index}", index=index)
+
+    def _submit_editable(self, kind: str, job: Job, message: str, **kwargs) -> Job:
+        queued, prev = self.store.queue_job(job.id, (JobStatus.review, JobStatus.done), expected=job, message=message,
+                                            stage=Stage.queued, progress=0.0)
+        self.q.put((kind, job.id, {**kwargs, "restore": prev}))
+        return queued
 
     def _loop(self) -> None:
         while True:
@@ -215,7 +237,28 @@ class Worker:
                     named = {"title": title, "channel": channel}
             self.store.update(job_id, stage=stage, progress=round(progress, 3), message=message, **named)
 
+        def publish(clip: Clip) -> None:
+            current = self.store.get(job_id)
+            if current is None:
+                raise KeyError(job_id)
+            snapshot = clip.model_copy(deep=True)
+            clips = {c.index: c for c in current.clips}
+            clips[snapshot.index] = snapshot
+            self.store.update(job_id, clips=list(clips.values()))
+
         try:
+            from .pipeline.orchestrator import produce, run_pipeline
+
+            if kind == "produce" and self.steps.produce is produce:
+                with GPU_LOCK:
+                    job = self.store.get(job_id)
+                    if job is None:
+                        raise KeyError(job_id)
+                    clips = [c.model_copy(deep=True) for c in job.clips]
+                clips = produce(d, clips, report, on_clip=publish, model_lock=GPU_LOCK)
+                self.store.update(job_id, status=JobStatus.done, stage=Stage.done, progress=1.0, clips=clips)
+                return
+
             with GPU_LOCK:
                 # Re-read under the lock: a "new angle" request may have saved a post while we waited for the GPU
                 job = self.store.get(job_id)
@@ -232,6 +275,8 @@ class Worker:
                     self.store.update(job_id, status=done, stage=Stage.done, progress=1.0, learn=True,
                                       message="Study notes ready")
                 elif kind == "run" and job.mode == JobMode.auto:
+                    if self.steps.run is run_pipeline:
+                        steer["on_clip"] = publish
                     clips = self.steps.run(source, d, job.num_clips, report, **steer)
                     self.store.update(job_id, status=JobStatus.done, stage=Stage.done, progress=1.0, clips=clips)
                 elif kind == "run":
@@ -247,13 +292,15 @@ class Worker:
                 elif kind == "render":
                     report(Stage.rendering, 0, f"Re-rendering short {index}")
                     clip = next(c for c in job.clips if c.index == index).model_copy(deep=True)
+                    message = f"Short {index} re-rendered"
                     try:
                         self.steps.render_one(d, clip)
                     except Exception as e:
                         clip.render_error = str(e)[:300]
+                        message = f"Short {index} render failed"
                     clips = [clip if c.index == index else c for c in self.store.get(job_id).clips]
                     self.store.update(job_id, status=before or JobStatus.done, stage=Stage.done, progress=1.0,
-                                      clips=clips, message=f"Short {index} re-rendered")
+                                      clips=clips, message=message)
         except Exception as e:
             if self.store.get(job_id) is None:  # deleted while running — drop it, don't resurrect its folder
                 log.warning("job %s was deleted during %s; discarding its output", job_id, kind)

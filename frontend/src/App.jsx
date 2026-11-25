@@ -108,7 +108,7 @@ export default function App() {
           <button className={`voicebtn ${selectedId === SPEECH ? 'on' : ''}`} onClick={() => setSelectedId(SPEECH)}>
             🗣 Voice Library
           </button>
-          <History />
+          <History revision={jobs.filter((job) => !isBusy(job)).map((job) => job.id).join(',')} />
           <JobList jobs={jobs} selectedId={selectedId} onSelect={setSelectedId} onDelete={onDelete} />
         </aside>
         <section className="detail">

@@ -39,7 +39,10 @@ YouTube URL / file
   videos and shorts (`data/library/ClipForge history.xlsx`); the New job form warns when you've done a video before
 - **Hinglish:** Hindi speech is written in Latin letters (`kismat`, `samajhna`) for captions, `.srt` and posts;
   switch back to Devanagari any time. Hindi and other Indic text is drawn with a font that has the letters
-- Whisper transcription with word-level timing, cached per job
+- Whisper transcription with word-level timing. Jobs reuse cached source videos and raw transcripts, and keep
+  caption edits and Hinglish conversions in their own folders. The History sidebar shows reclaimable source
+  cache space. With ClipForge stopped, you can remove `data/cache` to clear the shared cache.
+- Finished shorts appear as they render. Posts and covers follow automatically.
 - Gemma ranks moments by hook strength / self-containedness, writes title + hook + virality score
 - Cuts snapped to sentence boundaries, overlaps removed, clips capped at 59 s (Content ID safe zone)
 - **Topic (optional):** "salary negotiation" → Gemma only picks moments about it, rates each 1–10 for how

@@ -32,6 +32,8 @@ backend/                FastAPI + pipeline (Python 3.11, conda env "clipforge")
   app/watch.py          WATCH_DIR (off by default): Watcher scans every WATCH_INTERVAL s; a video whose size+mtime held
                         still over two scans is copied into a new job (WATCH_CLIPS/MODE/TOPIC); data/watched.json
                         remembers what was taken (a changed file is taken again). Never moves/deletes your files
+  app/files.py          atomic_output(dest): write to a temp dir beside dest, rename on success → a failed write/encode
+                        never replaces the previous file (job.json, short_N.mp4/.srt, library links)
   app/cli.py            `python -m app.cli <url|file> --clips N`
   app/eval.py           `python -m app.eval <job> --model A --model B --prompt f.txt --think on/off` → data/evals/
                         (compares selection variants on one transcript; summarize() is pure + tested)
@@ -53,6 +55,10 @@ backend/                FastAPI + pipeline (Python 3.11, conda env "clipforge")
     download.py         yt-dlp, cookies support, progress hook; meta.json = video_meta() (channel, upload date,
                         views, tags, …; meta_version 2); transcribe writes transcript_info.json (spoken language)
     transcribe.py       faster-whisper, caches transcript.json, frees VRAM after; preloads cuBLAS from the pip wheel
+    ingest_cache.py     shared cache in data/cache: sources/<key> (YouTube id or URL + max_height + cookies digest, or
+                        sha256 of a local file) hard-linked into the job as source.mp4; transcripts/<key> (video digest +
+                        Whisper settings + hotwords) COPIED in, so caption edits / Hinglish stay per job.
+                        source_cache_usage() → History sidebar "reclaimable" (st_nlink == 1). Clear: delete data/cache
     transcript_edit.py  caption fixes: set_word(seg, i), replace_all(find, replace) (phrases merge into one word,
                         each occurrence keeps its own trailing punctuation), rebuild seg.text; transcript.json atomic
     hinglish.py         Devanagari → Hinglish (Latin) per word, timings kept: rule-based map + schwa deletion
@@ -331,7 +337,10 @@ publish: PATCH post {status, url}: posted_at set on → posted (cleared when it 
   (clip.start = 0). If you move it after select, keyframes must be remapped with CutPlan.remap().
 - YuNet model downloads once to data/models from media.githubusercontent.com (github.com/raw gives an
   LFS pointer). Any failure → Haar cascade → if <30% of samples have faces → centre crop. Never crash a job.
-- **Content Studio:** stage order is selecting → writing → (unload Gemma) → rendering, so Gemma loads once.
+- **Content Studio:** produce() renders first (each finished short is published to the job via `on_clip`), then
+  writes posts (Gemma under `model_lock` = GPU_LOCK), then covers. Only INSERTS_AUTO stat cards run before rendering
+  (they're burned in). The Worker's real-produce path holds GPU_LOCK only around Gemma, not the whole render.
+  Queueing goes through `JobStore.queue_job(allowed, expected=job)` → QueueConflict (409) on a duplicate/raced request.
   `GPU_LOCK` (jobs.py) serialises jobs and the "new angle" endpoint (409 if busy). Each platform is
   independent: one failing must not drop the others. Never let prompts invent facts — keep the guardrail line. Brand-voice examples are
   about other topics: voice_block() tells the model to copy the voice only, never their facts/phrases — keep that too.

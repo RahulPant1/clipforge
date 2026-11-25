@@ -5,6 +5,7 @@ from dataclasses import replace
 from pathlib import Path
 
 from ..config import settings
+from ..files import atomic_output
 from ..models import BrandKit, Clip, RenderOptions, Segment
 from . import brand, dub, emoji, insert_render, inserts, sfx
 from .captions import _text as caption_text
@@ -61,10 +62,6 @@ def render_clip(video: Path, clip: Clip, segs: list[Segment], job_dir: Path) -> 
 
     silences = audio_silences(video, clip.start, clip.end) if jumpcut and settings.jumpcut_audio else None
     plan = plan_cuts(segs, clip.start, clip.end, enabled=jumpcut, silences=silences, removed=removed)
-    clip.cut_seconds = round(plan.removed, 2)
-    clip.out_duration = round(plan.duration, 2)
-
-    (job_dir / f"{name}.srt").write_text(build_srt(plan.words), encoding="utf-8")  # for YouTube upload
 
     kit = brand.load()
     card = brand.end_card_seconds(kit, o, plan.duration)
@@ -79,17 +76,20 @@ def render_clip(video: Path, clip: Clip, segs: list[Segment], job_dir: Path) -> 
 
     errors: list[str] = []
     used: set[str] = set()  # insert frame folders this render uses (the rest are pruned)
-    try:
-        rf = _encode(video, clip, plan, job_dir, name, ASPECTS["9:16"][0], kit, card, fx, timed, used, errors,
-                     voice_track)
-    except RuntimeError as e:
-        if not timed:
-            raise
-        log.warning("%s failed with stat cards, rendering without: %s", name, e)  # a card never costs the short
-        errors.append(f"stat cards left out: {e}"[:200])
-        timed = []
-        rf = _encode(video, clip, plan, job_dir, name, ASPECTS["9:16"][0], kit, card, fx, timed, used, errors,
-                     voice_track)
+    with atomic_output(job_dir / f"{name}.srt") as captions:
+        captions.write_text(build_srt(plan.words), encoding="utf-8")
+        try:
+            rf = _encode(video, clip, plan, job_dir, name, ASPECTS["9:16"][0], kit, card, fx, timed, used, errors,
+                         voice_track)
+        except RuntimeError as e:
+            if not timed:
+                raise
+            log.warning("%s failed with stat cards, rendering without: %s", name, e)  # a card never costs the short
+            errors.append(f"stat cards left out: {e}"[:200])
+            timed = []
+            rf = _encode(video, clip, plan, job_dir, name, ASPECTS["9:16"][0], kit, card, fx, timed, used, errors,
+                         voice_track)
+    clip.cut_seconds = round(plan.removed, 2)
     clip.reframe = rf.mode
     clip.fit_seconds = round(clip.duration if rf.mode == "fit" else sum(b - a for a, b in rf.fit), 1)
     subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-ss", "1", "-i", f"{name}.mp4",
@@ -110,7 +110,6 @@ def render_clip(video: Path, clip: Clip, segs: list[Segment], job_dir: Path) -> 
             formats.append(aspect)
         except Exception as e:  # the 9:16 is done and fine; say what's missing
             log.warning("%s %s version failed: %s", name, aspect, e)
-            (job_dir / f"{base}.mp4").unlink(missing_ok=True)
             errors.append(f"{aspect} version failed: {e}")
 
     insert_render.prune(job_dir / "inserts" / name, used)
@@ -254,11 +253,11 @@ def _encode(video: Path, clip: Clip, plan: CutPlan, job_dir: Path, name: str, si
         cmd += ["-vf", ",".join(vf)]
         if af:
             cmd += ["-af", ",".join(af)]
-    cmd += [*_encoder_args(), "-c:a", "aac", "-b:a", "160k", "-movflags", "+faststart", f"{name}.mp4"]
-
-    res = subprocess.run(cmd, cwd=job_dir, capture_output=True, text=True)
-    if res.returncode != 0:
-        raise RuntimeError(f"ffmpeg failed for {name}: {res.stderr.strip()[-500:]}")
+    cmd += [*_encoder_args(), "-c:a", "aac", "-b:a", "160k", "-movflags", "+faststart"]
+    with atomic_output(job_dir / f"{name}.mp4") as staged:
+        res = subprocess.run([*cmd, str(staged.relative_to(job_dir))], cwd=job_dir, capture_output=True, text=True)
+        if res.returncode != 0:
+            raise RuntimeError(f"ffmpeg failed for {name}: {res.stderr.strip()[-500:]}")
     return rf
 
 

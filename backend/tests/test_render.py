@@ -25,6 +25,36 @@ def _video(tmp_path, seconds=30):
 needs_ffmpeg = pytest.mark.skipif(not shutil.which("ffmpeg"), reason="ffmpeg not installed")
 
 
+def test_failed_encode_preserves_previous_video_and_captions(tmp_path, segs, monkeypatch):
+    from app.pipeline import render
+
+    video = tmp_path / "short_1.mp4"
+    captions = tmp_path / "short_1.srt"
+    video.write_bytes(b"previous video")
+    captions.write_text("previous captions")
+    clip = Clip(index=1, start=0, end=8, title="t", hook="", score=5, file=video.name, stale=True)
+    monkeypatch.setattr(settings, "jumpcut_audio", False)
+    monkeypatch.setattr(settings, "sfx_default", False)
+    monkeypatch.setattr(render, "plan_reframe", lambda *a, **kw: render.ReframePlan("none", 0, 0, 0))
+
+    run = subprocess.run
+
+    def fail(cmd, **kwargs):
+        if cmd[0] != "ffmpeg":
+            return run(cmd, **kwargs)
+        (kwargs["cwd"] / cmd[-1]).write_bytes(b"partial video")
+        return subprocess.CompletedProcess(cmd, 1, stderr="encoder failed")
+
+    monkeypatch.setattr(render.subprocess, "run", fail)
+    with pytest.raises(RuntimeError, match="encoder failed"):
+        render_clip(tmp_path / "source.mp4", clip, segs, tmp_path)
+
+    assert video.read_bytes() == b"previous video"
+    assert captions.read_text() == "previous captions"
+    assert clip.stale and clip.version == 0
+    assert not list(tmp_path.glob(".short_1.*-*"))
+
+
 @needs_ffmpeg
 @pytest.mark.parametrize("style", ["karaoke", "simple"])
 def test_render_vertical_with_captions(tmp_path, segs, monkeypatch, style):

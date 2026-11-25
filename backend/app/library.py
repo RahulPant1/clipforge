@@ -8,9 +8,8 @@
         Short 1 - <title>.mp4                  hard link to the job's short_1.mp4 (no extra disk space)
         Short 1 - cover.jpg / captions.srt / posts.md / carousel N.png
 
-Hard links: a re-render rewrites short_N.mp4 in place, so the library copy is always the latest; deleting the job
-leaves the library files (and their disk space) in place. A LIBRARY_DIR on another drive (/mnt/c/...) can't hard
-link, so files are copied (and re-copied when they change).
+Library sync refreshes hard links after a re-render. Deleting the job leaves the library files in place.
+A LIBRARY_DIR on another drive (/mnt/c/...) uses copies and refreshes them when the job files change.
 
 Deleted jobs stay in history.json / the spreadsheet, marked "deleted". Kept current by a debounced thread fed from
 every JobStore save (`Library.touch`). Rebuild by hand: `python -m app.library`.
@@ -27,6 +26,7 @@ from datetime import UTC, date, datetime
 from pathlib import Path
 
 from .config import settings
+from .files import atomic_output
 from .models import Job, JobStatus
 
 FEED_SUFFIX = {"4:5": ".45", "1:1": ".11"}  # = render.ASPECTS (not imported: keeps the library light)
@@ -108,13 +108,15 @@ def _place(src: Path, dst: Path) -> None:
     """Hard link src at dst (copy across drives); leave it if it's already the same file / an up-to-date copy."""
     if dst.exists():
         s, d = src.stat(), dst.stat()
-        if (s.st_ino, s.st_dev) == (d.st_ino, d.st_dev) or (s.st_size == d.st_size and d.st_mtime >= s.st_mtime):
+        if (s.st_ino, s.st_dev) == (d.st_ino, d.st_dev) or (
+            s.st_dev != d.st_dev and s.st_size == d.st_size and s.st_mtime_ns == d.st_mtime_ns
+        ):
             return
-        dst.unlink()
-    try:
-        os.link(src, dst)
-    except OSError:
-        shutil.copy2(src, dst)
+    with atomic_output(dst) as staged:
+        try:
+            os.link(src, staged)
+        except OSError:
+            shutil.copy2(src, staged)
 
 
 class Library:

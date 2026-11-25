@@ -5,12 +5,12 @@ Auto mode:              run_pipeline() = prepare() + produce()
 Single clip re-render:  render_one()
 
 prepare: download → transcribe → Gemma picks candidates (more than you asked for; best N pre-approved)
-produce: Gemma writes posts for approved clips (unless already written) → unload Gemma → render approved clips
+produce: render approved clips → generate optional posts and covers
 """
 import json
 import logging
-import shutil
 from collections.abc import Callable
+from contextlib import nullcontext
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -22,6 +22,7 @@ from .cover import make_cover
 from .download import download
 from .highlights import select_highlights
 from .history import get_history
+from .ingest_cache import restore_transcript, source_for
 from .llm import LLM, OllamaClient
 from .nospeech import probe_duration, select_no_speech
 from .presets import get_preset
@@ -47,21 +48,21 @@ def ingest(source: str, job_dir: Path, report: Reporter, llm: LLM,
     """Video in (download / copy an upload — both reused when already there) → transcript (cached) → Hinglish if
     asked. Shared by prepare() (shorts) and learn_pipeline() (study notes)."""
     job_dir.mkdir(parents=True, exist_ok=True)
-    llm.unload()  # in case a "new angle" request left Gemma in VRAM — Whisper needs the room
 
-    local = Path(source)
-    if local.exists():
-        video = job_dir / "source.mp4"
-        if not video.exists():
-            shutil.copy(local, video)
-        if not (job_dir / "meta.json").exists():
-            (job_dir / "meta.json").write_text(json.dumps({"title": local.stem, "channel": "", "url": ""}))
-    else:
-        report(Stage.downloading, 0, "Starting download")
-        video = download(source, job_dir, lambda p, m: report(Stage.downloading, p, m))
+    if source.startswith(("http://", "https://")) and not (job_dir / "source.mp4").is_file():
+        report(Stage.downloading, 0, "Getting source video")
+    video = source_for(source, job_dir, lambda url, staged: download(
+        url, staged, lambda p, m: report(Stage.downloading, p, m)))
 
-    report(Stage.transcribing, 0, "Loading Whisper")
-    segs = transcribe(video, job_dir, lambda p, m: report(Stage.transcribing, p, m))
+    def build_transcript(staged: Path) -> None:
+        llm.unload()  # Whisper may need the memory held by a previous interactive model call.
+        report(Stage.transcribing, 0, "Loading Whisper")
+        raw = transcribe(video, staged, lambda p, m: report(Stage.transcribing, p, m))
+        if not (staged / "transcript.json").exists():
+            transcript_edit.save(staged, raw)
+
+    restore_transcript(video, job_dir, build_transcript)
+    segs = load_segments(job_dir)
     if romanize and segs and hinglish.romanize(job_dir):  # Hindi in Devanagari → Hinglish before anything reads it
         report(Stage.transcribing, 1.0, "Hindi → Hinglish (Latin letters)")
         segs = transcript_edit.load(job_dir)
@@ -189,46 +190,65 @@ def whole_video_clip(duration: float, trace: dict, title: str = "") -> Clip:
                 else [])
 
 
-def produce(job_dir: Path, clips: list[Clip], report: Reporter, llm: LLM | None = None) -> list[Clip]:
-    """Posts + renders for approved clips. Keeps hand-edited posts; renders only what's missing/stale."""
+def produce(job_dir: Path, clips: list[Clip], report: Reporter, llm: LLM | None = None, *,
+            on_clip: Callable[[Clip], None] | None = None, model_lock=None) -> list[Clip]:
+    """Make approved shorts available before generating their optional posts."""
     llm = llm or OllamaClient()
     segs = load_segments(job_dir)
     todo = [c for c in clips if c.approved]
     if not todo:
         raise RuntimeError("No clips approved — approve at least one clip first.")
 
-    need_posts = [c for c in todo if not c.content] if settings.content_enabled else []
     need_cards = [c for c in todo if not c.inserts_checked] if settings.inserts_suggest else []
-    if need_posts or need_cards:
-        meta, history = load_meta(job_dir), get_history()
-        try:  # one Gemma load for posts and stat cards
-            for i, clip in enumerate(need_cards):
-                report(Stage.writing, 0.0, f"Short {clip.index}: stat cards ({i + 1}/{len(need_cards)})")
-                suggest_cards(clip, segs, llm)
-            for i, clip in enumerate(need_posts):
-                ctx = ContentContext(clip=clip, text=clip_text(segs, clip), video_title=meta.get("title", ""),
-                                     channel=meta.get("channel", ""), url=meta.get("url", ""))
-                clip.content = generate_all(
-                    ctx, llm, history, job_dir,
-                    lambda p, m, i=i, n=clip.index: report(Stage.writing, (i + p) / len(need_posts), f"Short {n}: {m}"))
-                write_posts_md(clip, job_dir)
-        finally:
-            if settings.unload_llm_after_job:
-                llm.unload()
+    if need_cards and settings.inserts_auto:  # Approved cards affect the video itself.
+        with model_lock or nullcontext():
+            try:
+                for i, clip in enumerate(need_cards, 1):
+                    report(Stage.rendering, 0.0, f"Short {clip.index}: stat cards ({i}/{len(need_cards)})")
+                    suggest_cards(clip, segs, llm)
+            finally:
+                if settings.unload_llm_after_job:
+                    llm.unload()
+        need_cards = []
 
     video = job_dir / "source.mp4"
     to_render = [c for c in todo if not c.file or c.stale]
+    rendered = set()
     for i, clip in enumerate(to_render):
         report(Stage.rendering, i / len(to_render), f"Rendering short {clip.index} ({i + 1}/{len(to_render)})")
         try:
             clip.file = render_clip(video, clip, segs, job_dir)
-        except Exception as e:  # one bad render shouldn't lose the others
+            rendered.add(clip.index)
+        except Exception as e:
             log.exception("render failed for clip %s", clip.index)
             clip.render_error = str(e)[:300]
-            continue
-        cover_for(video, clip, job_dir)
-    for clip in todo:  # rendered before covers / quote cards existed
-        if clip.file and (not clip.cover or (settings.quote_cards and not clip.quote_cards)):
+        if on_clip:
+            on_clip(clip)
+
+    need_posts = [c for c in todo if not c.content] if settings.content_enabled else []
+    if need_posts or need_cards:
+        meta, history = load_meta(job_dir), get_history()
+        with model_lock or nullcontext():
+            try:
+                for i, clip in enumerate(need_cards, 1):
+                    report(Stage.writing, 0.0, f"Short {clip.index}: stat cards ({i}/{len(need_cards)})")
+                    suggest_cards(clip, segs, llm)
+                for i, clip in enumerate(need_posts):
+                    ctx = ContentContext(clip=clip, text=clip_text(segs, clip), video_title=meta.get("title", ""),
+                                         channel=meta.get("channel", ""), url=meta.get("url", ""))
+                    clip.content = generate_all(
+                        ctx, llm, history, job_dir,
+                        lambda p, m, i=i, n=clip.index: report(
+                            Stage.writing, (i + p) / len(need_posts), f"Short {n}: {m}"))
+                    write_posts_md(clip, job_dir)
+                    if on_clip:
+                        on_clip(clip)
+            finally:
+                if settings.unload_llm_after_job:
+                    llm.unload()
+
+    for clip in todo:
+        if clip.file and (clip.index in rendered or not clip.cover or (settings.quote_cards and not clip.quote_cards)):
             cover_for(video, clip, job_dir)
     report(Stage.done, 1.0, f"{sum(1 for c in todo if c.file)} shorts ready")
     return clips
@@ -268,12 +288,13 @@ def render_one(job_dir: Path, clip: Clip) -> Clip:
 
 
 def run_pipeline(source: str, job_dir: Path, num_clips: int, report: Reporter,
-                 llm: LLM | None = None, topic: str = "", romanize: bool = False) -> list[Clip]:
+                 llm: LLM | None = None, topic: str = "", romanize: bool = False, *,
+                 on_clip: Callable[[Clip], None] | None = None) -> list[Clip]:
     """Auto mode: everything end to end."""
     llm = llm or OllamaClient()
     clips = prepare(source, job_dir, num_clips, report, llm, topic=topic, romanize=romanize)
     apply_fixes(clips)  # no review step in auto mode: the judge's trims are taken as they are
-    clips = produce(job_dir, clips, report, llm)
+    clips = produce(job_dir, clips, report, llm, on_clip=on_clip)
     if not any(c.file for c in clips):
         raise RuntimeError("All renders failed: " + "; ".join(c.render_error or "" for c in clips)[:300])
     return clips

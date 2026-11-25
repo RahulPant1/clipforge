@@ -10,11 +10,11 @@ from pathlib import Path
 
 from fastapi import FastAPI, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 
 from .config import settings
 from .events import job_events
-from .jobs import GPU_LOCK, JobStore, Worker
+from .jobs import GPU_LOCK, JobStore, QueueConflict, Worker
 from .library import XLSX, Library, video_key, windows_path
 from .models import (
     BatchCreate,
@@ -79,6 +79,7 @@ from .pipeline.content import ANGLES, NAMES, ContentContext, clip_text, generate
 from .pipeline.export import build_pack
 from .pipeline.history import get_history
 from .pipeline.hooks import write_variants
+from .pipeline.ingest_cache import source_cache_usage
 from .pipeline.jumpcut import clean_removed
 from .pipeline.llm import OllamaClient
 from .pipeline.presets import POSITIONS, all_presets, get_preset
@@ -124,6 +125,11 @@ def create_app(pipeline=None, start_worker: bool = True, llm_factory=OllamaClien
     app = FastAPI(title="ClipForge", version="0.1.0", lifespan=lifespan)
     app.state.store, app.state.worker, app.state.library = store, worker, library
     app.state.watcher = watcher
+
+    @app.exception_handler(QueueConflict)
+    async def queue_conflict(_: Request, error: QueueConflict) -> JSONResponse:
+        return JSONResponse(status_code=409, content={"detail": str(error)})
+
     app.add_middleware(CORSMiddleware, allow_origins=["http://localhost:5173"],
                        allow_methods=["*"], allow_headers=["*"])
 
@@ -473,8 +479,7 @@ def create_app(pipeline=None, start_worker: bool = True, llm_factory=OllamaClien
         job = editable(job_id)
         if not (store.dir(job_id) / "source.mp4").is_file():
             raise HTTPException(400, "no video in this job yet")
-        worker.submit_learn(job.id)
-        return store.get(job_id)
+        return worker.submit_learn(job)
 
     @app.post("/api/jobs/{job_id}/retry", response_model=Job)
     def retry_job(job_id: str, body: Retry | None = None) -> Job:
@@ -497,8 +502,8 @@ def create_app(pipeline=None, start_worker: bool = True, llm_factory=OllamaClien
                 raise HTTPException(409, "the uploaded video is gone — upload it again as a new job")
             source = str(upload)
         changes = {} if body is None or body.topic is None else {"topic": clean_topic(body.topic)}
-        job = store.update(job_id, status=JobStatus.queued, stage=Stage.queued, progress=0.0, error=None,
-                           message="Queued: retry", **changes)
+        job, _ = store.queue_job(job_id, (JobStatus.failed,), expected=job, stage=Stage.queued, progress=0.0,
+                                 message="Queued: retry", **changes)
         worker.submit(job_id, source)
         return job
 
@@ -721,16 +726,14 @@ def create_app(pipeline=None, start_worker: bool = True, llm_factory=OllamaClien
         if flagged and not (body and body.confirm):
             names = ", ".join(f"#{c.index} ({c.review.verdict.replace('_', ' ')})" for c in flagged)
             raise HTTPException(409, f"confirm creating clips the judge flagged: {names}")
-        worker.submit_produce(job_id)
-        return store.get(job_id)
+        return worker.submit_produce(job)
 
     @app.post("/api/jobs/{job_id}/clips/{index}/render", response_model=Job)
     def rerender_clip(job_id: str, index: int) -> Job:
         job = editable(job_id)
         if not any(c.index == index for c in job.clips):
             raise HTTPException(404, "clip not found")
-        worker.submit_render(job_id, index)
-        return store.get(job_id)
+        return worker.submit_render(job, index)
 
     @app.patch("/api/jobs/{job_id}/clips/{index}/content/{platform}", response_model=Post)
     def edit_post(job_id: str, index: int, platform: str, body: PostEdit) -> Post:
@@ -790,6 +793,10 @@ def create_app(pipeline=None, start_worker: bool = True, llm_factory=OllamaClien
             raise HTTPException(409, "GPU is busy with a job — try again when it finishes")
         d = store.dir(job_id)
         try:
+            current = store.get(job_id)
+            if current is None or current.status != JobStatus.done:
+                raise HTTPException(409, "job is no longer ready — refresh and try again")
+            _, clip = clip_of(job_id, index)
             try:
                 segs = [Segment(**x) for x in json.loads((d / "transcript.json").read_text())]
                 meta = load_meta(d)
@@ -838,11 +845,12 @@ def create_app(pipeline=None, start_worker: bool = True, llm_factory=OllamaClien
     def hook_variants(job_id: str, index: int) -> Job:
         """Gemma writes several title + hook pairs in different styles (question, bold claim, number…) to pick from."""
         editable(job_id)
-        _, clip = clip_of(job_id, index)
         if not GPU_LOCK.acquire(timeout=2):
             raise HTTPException(409, "GPU is busy with a job — try again when it finishes")
         d = store.dir(job_id)
         try:
+            editable(job_id)
+            _, clip = clip_of(job_id, index)
             try:
                 segs = [Segment(**x) for x in json.loads((d / "transcript.json").read_text())]
                 variants = write_variants(clip, clip_text(segs, clip), llm_factory(), load_meta(d).get("title", ""))
@@ -862,11 +870,12 @@ def create_app(pipeline=None, start_worker: bool = True, llm_factory=OllamaClien
         """Gemma picks which spoken numbers get a stat card (and labels them). Suggestions replace the old ones;
         approved and hand-made cards stay. Never approves: you look at them first."""
         editable(job_id)
-        _, clip = clip_of(job_id, index)
         if not GPU_LOCK.acquire(timeout=2):
             raise HTTPException(409, "GPU is busy with a job — try again when it finishes")
         d = store.dir(job_id)
         try:
+            editable(job_id)
+            _, clip = clip_of(job_id, index)
             try:
                 segs = [Segment(**x) for x in json.loads((d / "transcript.json").read_text())]
                 new = inserts.suggest(clip, segs, llm_factory())
@@ -898,11 +907,12 @@ def create_app(pipeline=None, start_worker: bool = True, llm_factory=OllamaClien
     def review_clip(job_id: str, index: int) -> Job:
         """Clip judge on the clip as it is now (after your trims): verdict, what's missing, a suggested fix."""
         editable(job_id)
-        _, clip = clip_of(job_id, index)
         if not GPU_LOCK.acquire(timeout=2):
             raise HTTPException(409, "GPU is busy with a job — try again when it finishes")
         d = store.dir(job_id)
         try:
+            editable(job_id)
+            _, clip = clip_of(job_id, index)
             try:
                 segs = [Segment(**x) for x in json.loads((d / "transcript.json").read_text())]
                 scene_index = scenes.load(d)  # what's on screen counts too, for videos that have a scene index
@@ -1077,7 +1087,8 @@ def create_app(pipeline=None, start_worker: bool = True, llm_factory=OllamaClien
     def library_info() -> dict:
         """Where the history lives (folders + spreadsheet) — shown in the UI so you can open it."""
         root = library.root.resolve()
-        return {"dir": str(root), "xlsx": str(root / XLSX), "windows_dir": windows_path(root)}
+        return {"dir": str(root), "xlsx": str(root / XLSX), "windows_dir": windows_path(root),
+                "source_cache": source_cache_usage()}
 
     @app.get("/api/library/lookup")
     def library_lookup(url: str) -> dict:

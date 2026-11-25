@@ -74,6 +74,15 @@ def test_folder_with_linked_files_info_and_spreadsheet(tmp_path):
     assert wb["Shorts"].max_row == 2  # the never-rendered candidate isn't a short
     assert wb["Videos"].freeze_panes == "A2" and wb["Videos"].auto_filter.ref
 
+    replacement = src.with_suffix(".new")
+    replacement.write_bytes(b"y" * 10)
+    replacement.replace(src)
+    assert dst.read_bytes() == b"x" * 10
+    library.touch(job.id)
+    assert library.flush()
+    assert dst.read_bytes() == b"y" * 10
+    assert src.samefile(dst)
+
 
 def test_retitle_renames_and_deleting_the_job_keeps_its_history(tmp_path):
     from openpyxl import load_workbook

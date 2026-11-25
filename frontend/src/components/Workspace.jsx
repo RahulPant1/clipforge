@@ -27,6 +27,8 @@ export default function Workspace({ job, onChanged }) {
   const [transcript, setTranscript] = useState(null)
   const [actionErr, setActionErr] = useState('')
   const prevStatus = useRef(job.status)
+  const hasShort = job.clips.some((clip) => clip.file)
+  const prevHasShort = useRef(hasShort)
   const states = stepStates(job)
   const busy = isBusy(job)
 
@@ -40,12 +42,15 @@ export default function Workspace({ job, onChanged }) {
   // Move you forward automatically when a background phase finishes
   useEffect(() => {
     const was = prevStatus.current
+    const hadShort = prevHasShort.current
     prevStatus.current = job.status
+    prevHasShort.current = hasShort
+    if (!hadShort && hasShort && (step === 'pick' || step === 'source')) setStep('shorts')
     if (was === job.status) return
     if (job.status === 'review' && (step === 'source' || step === 'transcript')) setStep('pick')
     if (job.status === 'done' && (was === 'running' || was === 'queued') && step === 'pick') setStep('shorts')
     if (job.status === 'done' && step === 'source') setStep(job.purpose === 'learn' ? 'learn' : 'shorts')
-  }, [job.status, step])
+  }, [job.status, hasShort, step])
 
   // Wrap every action: show errors in one place, refresh after
   const act = async (fn) => {

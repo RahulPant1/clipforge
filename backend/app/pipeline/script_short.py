@@ -180,6 +180,57 @@ def preview(request: ScriptNarrationRequest) -> dict:
     return preview_view(ident)
 
 
+def retake(ident: str, index: int, request: ScriptNarrationRequest) -> dict:
+    old = _preview_metadata(ident)
+    fingerprint, version, lines, spoken = _narration_settings(request)
+    if old.get("source", ident) != fingerprint:
+        raise ValueError("The script, voice or pronunciation changed. Generate a fresh preview first.")
+    if not 0 <= index < len(lines):
+        raise ValueError("Choose a line in this narration preview")
+    selected = old["lines"][index]
+    start, end = selected["start"], selected["end"]
+    updated = uuid.uuid4().hex
+    with TemporaryDirectory(prefix=".retake-", dir=_preview_root()) as staging:
+        work = Path(staging)
+        tts.speak(request.voice, [spoken[index]], out_dir=work, names=["take.wav"], version=version)
+        take = work / "take.wav"
+        seconds = _splice_voice(preview_file(ident), take, work / "voice.wav", start, end)
+        delta = seconds - (end - start)
+        duration = old["duration"] + delta
+        if duration > MAX_SECONDS:
+            raise ValueError(
+                f"This retake would exceed {MAX_SECONDS} seconds. The previous preview is still available."
+            )
+        heard = tts.transcribe_many([take])[0]
+        selected.update(end=start + seconds, spoken=spoken[index], heard=heard.get("text"),
+                        issues=narration_review.compare(spoken[index], heard.get("text")))
+        for line in old["lines"][index + 1:]:
+            line.update(start=line["start"] + delta, end=line["end"] + delta)
+        words = [word for word in old["words"] if word["start"] < start - 1e-7]
+        words += [Word(word=word.word, start=start + word.start, end=start + word.end).model_dump()
+                  for word in dub.map_words(lines[index], heard["words"], seconds)]
+        words += [{**word, "start": word["start"] + delta, "end": word["end"] + delta}
+                  for word in old["words"] if word["start"] >= end - 1e-7]
+        old.update(source=fingerprint, duration=duration, words=words)
+        _publish_preview(work, updated, old)
+    return preview_view(updated)
+
+
+def _splice_voice(original: Path, take: Path, destination: Path, start: float, end: float) -> float:
+    with (wave.open(str(original), "rb") as source, wave.open(str(take), "rb") as replacement,
+          wave.open(str(destination), "wb") as output):
+        params = source.getparams()
+        if replacement.getparams()[:3] != params[:3] or not replacement.getnframes():
+            raise RuntimeError("The retake audio format does not match the current preview")
+        rate = params.framerate
+        output.setparams(params)
+        output.writeframesraw(source.readframes(round(start * rate)))
+        output.writeframesraw(replacement.readframes(replacement.getnframes()))
+        source.setpos(min(round(end * rate), source.getnframes()))
+        output.writeframesraw(source.readframes(source.getnframes() - source.tell()))
+        return replacement.getnframes() / rate
+
+
 def _scene_frames(metadata: dict, count: int, starts: list[int] | None) -> list[int]:
     frame_total = max(count, math.ceil(metadata["duration"] * FPS))
     if starts is None:
@@ -199,8 +250,6 @@ def create(request: ScriptShortRequest) -> dict:
     if any(ident not in library for ident in request.assets):
         raise ValueError("One of the selected B-roll files is no longer available")
     preview_id, version, lines, spoken = _narration_settings(request)
-    if request.preview_id and request.preview_id != preview_id:
-        raise ValueError("The script, voice or pronunciation changed. Generate a fresh preview.")
     if request.scene_starts is not None and not request.preview_id:
         raise ValueError("Generate a narration preview before assigning scene timing")
     folder = root()
@@ -216,6 +265,10 @@ def create(request: ScriptShortRequest) -> dict:
                 narration = _preview_metadata(request.preview_id)
             except KeyError as error:
                 raise ValueError("That preview expired. Generate a fresh narration preview.") from error
+            if narration.get("source", request.preview_id) != preview_id:
+                raise ValueError(
+                    "The script, voice or pronunciation changed. Generate a fresh preview before rendering."
+                )
             shutil.copyfile(audio, work / "voice.wav")
         else:
             narration = _prepare_narration(work, request, version, lines, spoken)

@@ -144,6 +144,20 @@ export default function ScriptShort() {
     }
   }
 
+  const retakeLine = async (index) => {
+    setBusy(`retake-${index}`)
+    setError('')
+    setNotice('')
+    try {
+      setPreview(await api.retakeScriptLine(preview.id, index, narration()))
+      setNotice(`Line ${index + 1} regenerated. Other takes and scene choices are retained.`)
+    } catch (failure) {
+      setError(failure.message)
+    } finally {
+      setBusy('')
+    }
+  }
+
   const suggestPlan = async () => {
     setBusy('plan')
     setError('')
@@ -249,6 +263,10 @@ export default function ScriptShort() {
                 <button type="button" className="btn sm ghost" onClick={() => listenToLine(line.start)}>
                   Play from {line.start.toFixed(2)} s
                 </button>{' '}{line.text}
+                <button type="button" className="btn sm ghost" disabled={!!busy}
+                  onClick={() => retakeLine(index)} aria-label={`Regenerate line ${index + 1}`}>
+                  {busy === `retake-${index}` ? 'Regenerating…' : 'Retake'}
+                </button>
                 <TakeReview issues={line.issues} heard={line.heard} revision={preview.id} busy={busy}
                   onSuggest={() => api.reviewScriptTake(preview.id, index)} />
               </li>)}

@@ -256,16 +256,37 @@ def test_script_short_renders_ordered_broll_and_captions(tmp_path, monkeypatch, 
     assert script_short.drafts() == [draft]
     assert script_short.preview_view(draft["preview_id"]) == preview
 
+    import wave
+
+    def read_audio(ident):
+        with wave.open(str(script_short.preview_file(ident)), "rb") as wav:
+            return wav.getframerate(), wav.readframes(wav.getnframes())
+
+    def retake_voice(vid, texts, out_dir, names, version):
+        fakes.append(texts)
+        tone(out_dir / names[0], 0.6, freq=450)
+        return [{"seconds": 0.6}]
+
+    monkeypatch.setattr(tts, "speak", retake_voice)
+    revised = script_short.retake(preview["id"], 1, request)
+    assert [line["start"] for line in revised["lines"]] == pytest.approx([0, 0.8, 1.4])
+    rate, before = read_audio(preview["id"])
+    _, after = read_audio(revised["id"])
+    assert before[:int(0.8 * rate) * 2] == after[:int(0.8 * rate) * 2]
+    assert before[int(1.6 * rate) * 2:] == after[int(1.4 * rate) * 2:]
+    assert before[int(0.8 * rate) * 2:int(1.4 * rate) * 2] != after[int(0.8 * rate) * 2:int(1.4 * rate) * 2]
+    assert script_short.preview_view(preview["id"]) == preview
+    request.preview_id = revised["id"]
     result = script_short.create(request)
-    assert result["duration"] == 2.4 and result["version"] == 1
-    assert fakes == [["Capture this example.", "Explain this step.", "Now show the result."]]
+    assert result["duration"] == 2.2 and result["version"] == 1
+    assert fakes == [["Capture this example.", "Explain this step.", "Now show the result."], ["Explain this step."]]
     assert script_short.recent() == [result]
     video = script_short.file(result["id"], "short.mp4")
-    assert revoice.probe(video) == pytest.approx((2.4, True, True), abs=0.06)
+    assert revoice.probe(video) == pytest.approx((2.2, True, True), abs=0.06)
     srt = script_short.file(result["id"], "captions.srt").read_text()
     assert all(text in srt for text in ("CAPTURE THIS EXAMPLE.", "NOW SHOW THE", "RESULT."))
 
-    for timestamp, channel in [(1.3, 0), (1.9, 2)]:
+    for timestamp, channel in [(1.2, 0), (1.7, 2)]:
         result = subprocess.run([
             "ffmpeg", "-v", "error", "-ss", str(timestamp), "-i", str(video), "-frames:v", "1",
             "-vf", "crop=2:2:0:0,format=rgb24", "-f", "rawvideo", "-",

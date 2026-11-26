@@ -89,7 +89,8 @@ YouTube URL / file
   Gemma-proposed sequence. Gemma describes only your shortlist and reuses descriptions of unchanged footage.
   The workspace groups these controls into **Script & voice**, **Footage**, and **Preview & export**.
   **Save draft** keeps your script, voice, footage order, scene timing, and any current preview in local
-  ClipForge data.
+  ClipForge data. In **Listen by script line**, **Retake** regenerates just that line with the same wording.
+  Later captions and line-based cuts follow the new timing. Save again to keep the new take with your draft.
 - **Audio and export:** after approving clips, choose **Keep original audio** or **Use a saved voice**.
   With a saved voice, select the shorts and voice version, then prepare scripts
   from the transcript or request a narration rewrite, then review the wording and preview the first line over

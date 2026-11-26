@@ -434,6 +434,10 @@ def create_app(pipeline=None, start_worker: bool = True, llm_factory=OllamaClien
         except KeyError:
             raise HTTPException(404, "Narration preview not found") from None
 
+    @app.post("/api/script-shorts/narration/{ident}/lines/{line_id}/retake")
+    def retake_script_line(ident: str, line_id: int, body: ScriptNarrationRequest) -> dict:
+        return gpu_work(lambda: script_short.retake(ident, line_id, body))
+
     @app.post("/api/script-shorts/narration")
     def preview_script_narration(body: ScriptNarrationRequest) -> dict:
         return gpu_work(lambda: script_short.preview(body))

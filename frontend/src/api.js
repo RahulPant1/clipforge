@@ -58,6 +58,8 @@ export const api = {
   scriptDrafts: () => req('/script-shorts/drafts'),
   saveScriptDraft: (body) => req('/script-shorts/drafts', json('POST', body)),
   scriptNarration: (id) => req(`/script-shorts/narration/${id}`),
+  retakeScriptLine: (id, line, body) =>
+    req(`/script-shorts/narration/${id}/lines/${line}/retake`, json('POST', body)),
   previewScriptNarration: (body) => req('/script-shorts/narration', json('POST', body)),
   scriptNarrationAudio: (id) => `/api/script-shorts/narration/${id}/audio`,
   createScriptShort: (body) => req('/script-shorts', json('POST', body)),

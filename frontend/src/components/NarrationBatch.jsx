@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { api } from '../api.js'
 import { fmtPrecise } from '../util.js'
 import DubEditor, { NarrationDurationSelect, SmartDurationLimit } from './DubEditor.jsx'
@@ -51,8 +51,8 @@ function BatchIssues({ prepared, fits, issues, reviewId }) {
   </section>
 }
 
-export default function NarrationBatch({ job, clips, busy, act }) {
-  const [open, setOpen] = useState(false)
+export default function NarrationBatch({ job, clips, busy, act, open }) {
+  const initialized = useRef(false)
   const [voices, setVoices] = useState(null)
   const [voiceId, setVoiceId] = useState('')
   const [version, setVersion] = useState('')
@@ -83,6 +83,10 @@ export default function NarrationBatch({ job, clips, busy, act }) {
 
   useEffect(() => {
     if (!open) return
+    if (!initialized.current) {
+      setSelected(eligible.map((clip) => clip.index))
+      initialized.current = true
+    }
     let active = true
     api.voices().then(({ voices: items }) => {
       if (active) setVoices(items.filter((item) => item.builds?.some((build) => build.prompt)))
@@ -134,17 +138,11 @@ export default function NarrationBatch({ job, clips, busy, act }) {
     }
   }
 
-  if (!eligible.length) return null
-  if (!open) return (
-    <button className="btn sm ghost" disabled={busy} onClick={() => {
-      setSelected(eligible.map((clip) => clip.index))
-      setOpen(true)
-    }}>Narrate in my voice…</button>
-  )
+  if (!eligible.length || !open) return null
 
   return (
-    <section className="card" aria-label="Narrate in my voice">
-      <h3>Narrate in my voice</h3>
+    <section className="card" aria-label="Review saved-voice narration">
+      <h3>Review saved-voice narration</h3>
       {voices === null && <p className="muted small">Loading saved voices…</p>}
       {voices?.length === 0 && <p className="muted small">Build a saved voice in Voice Library to get started.</p>}
       <div className="row-btns">
@@ -260,7 +258,7 @@ export default function NarrationBatch({ job, clips, busy, act }) {
             <summary>Review short {clip.index} · {clip.title}
               {override && <span className="small"> · Custom duration</span>}
               {issues[clip.index]?.flagged.length > 0 && <span className="small warn">
-                {' '}· {issues[clip.index].flagged.length} possible incomplete {issues[clip.index].flagged.length === 1 ? 'line' : 'lines'}
+                {' '}· {issues[clip.index].flagged.length} flagged {issues[clip.index].flagged.length === 1 ? 'line' : 'lines'}
               </span>}
             </summary>
             <div className="row-btns">

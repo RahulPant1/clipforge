@@ -35,7 +35,7 @@ import numpy as np
 from ..config import settings
 from ..files import atomic_output
 from ..models import Clip, DubLine, DubScript, PronunciationDictionary, Segment, Word
-from . import tts
+from . import narration_review, tts
 from .jumpcut import clip_words
 
 if TYPE_CHECKING:
@@ -376,6 +376,16 @@ def stale(script: DubScript, ln: DubLine, dictionary: PronunciationDictionary | 
             or (ln.spoken or ln.said) != spoken_text(script, ln, dictionary))
 
 
+def take_issues(script: DubScript, dictionary: PronunciationDictionary) -> dict[int, list[str]]:
+    issues = {}
+    for line in script.lines:
+        if line.heard_text is not None and not stale(script, line, dictionary):
+            alerts = narration_review.compare(line.spoken or line.said or line.text, line.heard_text)
+            if alerts:
+                issues[line.i] = alerts
+    return issues
+
+
 def _name(script: DubScript, ln: DubLine, spoken: str) -> str:
     h = hashlib.sha1(f"{voice_tag(script, ln)}|{ln.text}|{spoken}".encode()).hexdigest()[:8]
     return f"dub_{script.clip}_{ln.i}_{h}.wav"
@@ -403,6 +413,7 @@ def _pending_lines(job_dir: Path, script: DubScript, clip: Clip, dictionary: Pro
 def _apply_take(script: DubScript, line: DubLine, name: str, spoken: str, made: dict, heard: dict) -> None:
     line.file, line.said, line.voice, line.seconds = name, line.text, voice_tag(script, line), made["seconds"]
     line.spoken = spoken if spoken != line.text else None
+    line.heard_text = heard["text"][:2000] if isinstance(heard.get("text"), str) else None
     line.words = map_words(line.text, heard["words"], made["seconds"])
 
 

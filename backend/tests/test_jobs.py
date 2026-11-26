@@ -6,7 +6,7 @@ import pytest
 
 from app.config import settings
 from app.jobs import GPU_LOCK, JobStore, QueueConflict, Worker
-from app.models import Clip, JobMode, JobStatus, NarrationBatch, NarrationItem, Post, Stage
+from app.models import Clip, JobMode, JobStatus, NarrationBatch, NarrationItem, Post, RenderOptions, Stage
 
 
 def test_failed_job_replace_keeps_saved_and_in_memory_state(tmp_path, monkeypatch):
@@ -139,3 +139,18 @@ def test_production_publishes_shorts_before_post_generation(tmp_path, monkeypatc
 
     assert store.get(job.id).status == JobStatus.done
     assert events == [("render", 1), ("render", 2), ("posts", 1), ("posts", 2)]
+
+
+def test_produce_original_audio_only_changes_approved_dubs(tmp_path):
+    store = JobStore(tmp_path)
+    job = store.create("source", 1)
+    clips = [
+        Clip(index=index, start=0, end=10, title="clip", hook="", score=7, approved=approved,
+             file=f"short_{index}.mp4", options=RenderOptions(dub=True))
+        for index, approved in [(1, True), (2, False)]
+    ]
+    job = store.update(job.id, status=JobStatus.review, clips=clips)
+    queued = Worker(store).submit_produce(job, original_audio=True)
+    assert queued.clips[0].options.dub is False and queued.clips[0].stale
+    assert queued.clips[1] == clips[1]
+    assert job.clips[0].options.dub is True

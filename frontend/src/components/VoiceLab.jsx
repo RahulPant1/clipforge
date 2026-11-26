@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { api } from '../api.js'
-import RevoicePanel from './RevoicePanel.jsx'
+import AudioRecorder from './AudioRecorder.jsx'
 
 // Lines to read: different moods and lengths give the voice more to learn from. Read naturally, ~5-15 s each.
 const SCRIPT = [
@@ -16,47 +16,6 @@ const SCRIPT = [
 
 const LANGS = ['Auto', 'English', 'Chinese', 'Japanese', 'Korean', 'German', 'French', 'Russian', 'Portuguese',
   'Spanish', 'Italian']
-
-function Recorder({ disabled, onDone }) {
-  const [rec, setRec] = useState(null) // MediaRecorder while recording
-  const [secs, setSecs] = useState(0)
-  const [err, setErr] = useState('')
-  const timer = useRef(0)
-  const start = async () => {
-    setErr('')
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false },
-      })
-      const mr = new MediaRecorder(stream)
-      const chunks = []
-      mr.ondataavailable = (e) => e.data.size && chunks.push(e.data)
-      mr.onstop = () => {
-        stream.getTracks().forEach((t) => t.stop())
-        clearInterval(timer.current)
-        const blob = new Blob(chunks, { type: mr.mimeType || 'audio/webm' })
-        onDone(new File([blob], `take-${Date.now()}.webm`, { type: blob.type }))
-      }
-      mr.start()
-      setSecs(0)
-      timer.current = setInterval(() => setSecs((s) => s + 1), 1000)
-      setRec(mr)
-    } catch (e) {
-      setErr(`Microphone not available: ${e.message}`)
-    }
-  }
-  const stop = () => { rec?.stop(); setRec(null) }
-  return (
-    <span className="recorder">
-      {rec ? (
-        <button className="btn rec-on" onClick={stop}>■ Stop ({secs}s)</button>
-      ) : (
-        <button className="btn" disabled={disabled} onClick={start}>● Record</button>
-      )}
-      {err && <span className="err small">{err}</span>}
-    </span>
-  )
-}
 
 function RecordingRow({ v, r, busy, run }) {
   const [text, setText] = useState(r.text)
@@ -264,7 +223,7 @@ function Pronunciations({ voices, busy, run }) {
   )
 }
 
-export default function VoiceLab() {
+export default function VoiceLab({ onRevoice }) {
   const [status, setStatus] = useState(null)
   const [list, setList] = useState(null)
   const [vid, setVid] = useState(null)
@@ -366,7 +325,7 @@ export default function VoiceLab() {
               <button className="btn sm ghost" onClick={() => setLine((line + 1) % SCRIPT.length)}>Next line →</button>
             </div>
             <div className="row-btns">
-              <Recorder disabled={!!busy} onDone={(f) => add([f])} />
+              <AudioRecorder disabled={!!busy} onDone={(f) => add([f])} />
               <button className="btn ghost" disabled={!!busy} onClick={() => fileRef.current?.click()}>⬆ Import audio</button>
               <input ref={fileRef} type="file" accept="audio/*,video/*" multiple hidden
                      onChange={(e) => { add([...e.target.files]); e.target.value = '' }} />
@@ -428,7 +387,7 @@ export default function VoiceLab() {
       )}
 
       <Pronunciations voices={list.voices} busy={!!busy} run={run} />
-      <RevoicePanel voices={list.voices} Recorder={Recorder} />
+      <button type="button" className="btn ghost" onClick={onRevoice}>Re-voice a recording</button>
     </div>
   )
 }

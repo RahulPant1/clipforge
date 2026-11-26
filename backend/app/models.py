@@ -388,6 +388,7 @@ class Job(BaseModel):
     progress: float = 0.0  # 0..1 within the current stage
     message: str = ""
     error: str | None = None
+    download_failure: Literal["rate_limit", "access", "downloader", "network"] | None = None
     clips: list[Clip] = []
     narration: NarrationBatch | None = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
@@ -536,6 +537,7 @@ class DubLine(BaseModel):
     speaker: str = Field("", max_length=40)
     voice_override: str = Field("", max_length=40)
     spoken: str | None = None  # actual TTS input when pronunciation differs from caption text
+    heard_text: str | None = None  # raw Whisper transcript before caption alignment
     start: float  # SOURCE seconds — where the original sentence starts (the new one starts here too)
     end: float
     original: str = Field(max_length=2000)
@@ -583,6 +585,32 @@ class DubGenerate(BaseModel):
     activate: bool = False
 
 
+class SentencePickup(BaseModel):
+    expected_text: str = Field(min_length=1, max_length=2000)
+
+
+class SentencePickups(BaseModel):
+    expected_texts: dict[int, str] = Field(min_length=1, max_length=20)
+
+
+class ScriptNarrationRequest(BaseModel):
+    text: str = Field(min_length=1, max_length=1200)
+    voice: str = Field(min_length=1, max_length=40)
+    version: int | None = Field(None, ge=1)
+
+
+class ScriptBrollPlanRequest(BaseModel):
+    preview_id: str = Field(pattern=r"^[0-9a-f]{32}$")
+    assets: list[str] = Field(min_length=1, max_length=6)
+
+
+class ScriptShortRequest(ScriptNarrationRequest):
+    title: str = Field("Script short", max_length=120)
+    assets: list[str] = Field(min_length=1, max_length=6)
+    preview_id: str | None = Field(None, pattern=r"^[0-9a-f]{32}$")
+    scene_starts: list[int] | None = Field(None, max_length=6)
+
+
 class DubBatchDraft(BaseModel):
     clips: list[int] = Field(min_length=1, max_length=30)
     voice: str = Field(min_length=1, max_length=40)
@@ -592,3 +620,4 @@ class DubBatchDraft(BaseModel):
 
 class ProduceRequest(BaseModel):
     confirm: bool = False  # yes, create approved clips the judge flagged (needs context / reject)
+    original_audio: bool = False

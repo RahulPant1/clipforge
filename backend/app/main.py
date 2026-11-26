@@ -4,6 +4,7 @@ import json
 import logging
 import re
 import shutil
+import subprocess
 import uuid
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
@@ -18,6 +19,7 @@ from fastapi.responses import FileResponse, JSONResponse, Response, StreamingRes
 
 from .config import settings
 from .events import job_events
+from .files import atomic_output
 from .jobs import GPU_LOCK, JobStore, QueueConflict, Worker
 from .library import XLSX, Library, video_key, windows_path
 from .models import (
@@ -56,8 +58,13 @@ from .models import (
     RenderOptions,
     ReplaceWords,
     Retry,
+    ScriptBrollPlanRequest,
     ScriptChoice,
+    ScriptNarrationRequest,
+    ScriptShortRequest,
     Segment,
+    SentencePickup,
+    SentencePickups,
     SmartJudge,
     SmartTopic,
     SpeakRequest,
@@ -73,17 +80,22 @@ from .pipeline import (
     batch,
     brand,
     broll,
+    broll_plan,
+    capture,
     cover,
     discover,
+    downloader_runtime,
     dub,
     emoji,
     hinglish,
     inserts,
     judge,
     learn,
+    narration_review,
     quote,
     revoice,
     scenes,
+    script_short,
     sfx,
     transcript_edit,
     tts,
@@ -378,19 +390,85 @@ def create_app(pipeline=None, start_worker: bool = True, llm_factory=OllamaClien
             raise HTTPException(404, "recording not found") from None
         return {**m, "script": sc.model_dump(mode="json"),
                 "stale": [ln.i for ln in sc.lines if dub.stale(sc, ln)] if sc.voice else [],
-                "max_rate": dub.MAX_RATE}
+                "max_rate": dub.MAX_RATE, "take_issues": dub.take_issues(sc, dub.pronunciation_dictionary())}
+
+    def gemma_review(fn):
+        def review():
+            model = llm_factory()
+            try:
+                return fn(model)
+            finally:
+                try:
+                    model.unload()
+                except (OSError, RuntimeError):
+                    logging.debug("Could not unload Gemma after review", exc_info=True)
+        return gpu_work(review)
+
+    def review_dub_take(script: DubScript, line_id: int) -> dict:
+        dictionary = dub.pronunciation_dictionary()
+        if line_id not in dub.take_issues(script, dictionary):
+            raise HTTPException(400, "Generate a take with a narration issue before requesting a suggestion")
+        line = next(item for item in script.lines if item.i == line_id)
+        return {"suggestion": gemma_review(
+            lambda llm: narration_review.suggest(line.text, line.spoken or line.text, line.heard_text or "", llm),
+        )}
+
+    @app.get("/api/script-shorts")
+    def list_script_shorts() -> dict:
+        return {"items": script_short.recent(), "assets": script_short.assets(),
+                "max_seconds": script_short.MAX_SECONDS}
+
+    @app.post("/api/script-shorts/narration")
+    def preview_script_narration(body: ScriptNarrationRequest) -> dict:
+        return gpu_work(lambda: script_short.preview(body))
+
+    @app.get("/api/script-shorts/narration/{ident}/audio")
+    def script_narration_audio(ident: str) -> FileResponse:
+        try:
+            return FileResponse(script_short.preview_file(ident), media_type="audio/wav")
+        except KeyError:
+            raise HTTPException(404, "Narration preview not found") from None
+
+    @app.post("/api/script-shorts/broll-plan")
+    def suggest_script_broll(body: ScriptBrollPlanRequest) -> dict:
+        return {"scenes": gemma_review(lambda llm: broll_plan.plan(body.preview_id, body.assets, llm))}
+
+    @app.post("/api/script-shorts/narration/{ident}/lines/{line_id}/suggest")
+    def suggest_script_take(ident: str, line_id: int) -> dict:
+        try:
+            lines = script_short.preview_lines(ident)
+        except KeyError:
+            raise HTTPException(404, "Narration preview not found") from None
+        if not 0 <= line_id < len(lines) or not lines[line_id].get("issues"):
+            raise HTTPException(400, "Choose a flagged narration line")
+        line = lines[line_id]
+        return {"suggestion": gemma_review(
+            lambda llm: narration_review.suggest(line["text"], line["spoken"], line["heard"], llm),
+        )}
+
+    @app.post("/api/script-shorts", status_code=201)
+    def create_script_short(body: ScriptShortRequest) -> dict:
+        return gpu_work(lambda: script_short.create(body))
+
+    @app.get("/api/script-shorts/{ident}/files/{name}")
+    def script_short_file(ident: str, name: str) -> FileResponse:
+        try:
+            return FileResponse(script_short.file(ident, name))
+        except KeyError:
+            raise HTTPException(404, "Script short file not found") from None
 
     @app.get("/api/revoice")
     def list_revoice() -> dict:
         return {"items": revoice.all_items(), "max_seconds": revoice.MAX_SECONDS}
 
     @app.post("/api/revoice", status_code=201)
-    def create_revoice(file: UploadFile = File(...), name: str = Form("", max_length=80)) -> dict:
+    def create_revoice(file: UploadFile = File(...), name: str = Form("", max_length=80),
+                       recorded: bool = Form(False)) -> dict:
         """Your narration (audio or video, ≤ MAX_SECONDS): saved and transcribed into sentences you can edit."""
         data = file.file.read(revoice.MAX_UPLOAD + 1)
         if len(data) > revoice.MAX_UPLOAD:
             raise HTTPException(413, f"under {revoice.MAX_UPLOAD // 2**20} MB please")
-        m = gpu_work(lambda: revoice.create(file.filename or "recording", data, name))
+        m = gpu_work(lambda: revoice.create(file.filename or "recording", data, name, recorded=recorded))
         return revoice_view(m["id"])
 
     @app.get("/api/revoice/{rid}")
@@ -413,6 +491,23 @@ def create_app(pipeline=None, start_worker: bool = True, llm_factory=OllamaClien
         if not sc["voice"]:
             raise HTTPException(400, "choose a voice first")
         gpu_work(lambda: revoice.generate(rid, body.lines if body else None))
+        return revoice_view(rid)
+
+    @app.post("/api/revoice/{rid}/lines/{line_id}/review-take")
+    def suggest_revoice_take(rid: str, line_id: int) -> dict:
+        revoice_view(rid)
+        return review_dub_take(revoice.script(rid), line_id)
+
+    @app.post("/api/revoice/{rid}/lines/{line_id}/pickup")
+    def pickup_revoice(rid: str, line_id: int, body: SentencePickup) -> dict:
+        revoice_view(rid)
+        gpu_work(lambda: revoice.pickup(rid, line_id, expected_text=body.expected_text))
+        return revoice_view(rid)
+
+    @app.post("/api/revoice/{rid}/pickups")
+    def pickup_revoice_batch(rid: str, body: SentencePickups) -> dict:
+        revoice_view(rid)
+        gpu_work(lambda: revoice.pickups(rid, body.expected_texts))
         return revoice_view(rid)
 
     @app.delete("/api/revoice/{rid}")
@@ -491,17 +586,36 @@ def create_app(pipeline=None, start_worker: bool = True, llm_factory=OllamaClien
     @app.post("/api/jobs/upload", response_model=Job, status_code=201)
     def upload_job(file: UploadFile = File(...), num_clips: int = Form(5), mode: JobMode = Form(JobMode.review),
                    topic: str = Form("", max_length=200), hinglish: bool | None = Form(None),
-                   purpose: Purpose = Form("create"), whisper_model: WhisperChoice | None = Form(None)) -> Job:
-        job = store.create(file.filename or "upload.mp4", num_clips, mode, topic, title=Path(file.filename or "").stem,
-                           hinglish=settings.hinglish_default if hinglish is None else hinglish, purpose=purpose,
-                           whisper_model=whisper_model)
-        d = store.dir(job.id)
-        d.mkdir(parents=True, exist_ok=True)
-        dest = d / "source.mp4"
-        with dest.open("wb") as f:
-            shutil.copyfileobj(file.file, f)
-        worker.submit(job.id, str(dest))
-        return job
+                   purpose: Purpose = Form("create"), whisper_model: WhisperChoice | None = Form(None),
+                   recorded: bool = Form(False)) -> Job:
+        filename = file.filename or "upload.mp4"
+
+        def create_upload(source: BinaryIO) -> Job:
+            job = store.create(filename, num_clips, mode, topic, title=Path(filename).stem,
+                               hinglish=settings.hinglish_default if hinglish is None else hinglish, purpose=purpose,
+                               whisper_model=whisper_model)
+            d = store.dir(job.id)
+            d.mkdir(parents=True, exist_ok=True)
+            dest = d / "source.mp4"
+            with dest.open("wb") as out:
+                shutil.copyfileobj(source, out)
+            worker.submit(job.id, str(dest))
+            return job
+
+        if not recorded:
+            return create_upload(file.file)
+        with TemporaryDirectory(prefix="clipforge-capture-") as folder:
+            directory = Path(folder)
+            source = directory / ("capture.mp4" if Path(filename).suffix.lower() == ".mp4" else "capture.webm")
+            normalized = directory / "normalized.mp4"
+            with source.open("wb") as out:
+                shutil.copyfileobj(file.file, out)
+            try:
+                capture.normalize(source, normalized)
+            except ValueError as error:
+                raise HTTPException(422, str(error)) from error
+            with normalized.open("rb") as result:
+                return create_upload(result)
 
     @app.get("/api/jobs/{job_id}/learn")
     def get_learn(job_id: str) -> dict:
@@ -519,6 +633,63 @@ def create_app(pipeline=None, start_worker: bool = True, llm_factory=OllamaClien
             raise HTTPException(400, "no video in this job yet")
         return worker.submit_learn(job)
 
+    recovery_lock = Lock()
+
+    def failed_download(job_id: str) -> Job:
+        job = store.get(job_id)
+        if job is None:
+            raise HTTPException(404, "job not found")
+        if (job.status != JobStatus.failed or not downloader_runtime.is_youtube(job.source)
+                or (job.stage != Stage.downloading and not job.download_failure) or job.clips):
+            raise HTTPException(409, "This job is not waiting for YouTube download recovery")
+        return job
+
+    @app.get("/api/downloader")
+    def downloader_status() -> dict:
+        return downloader_runtime.status()
+
+    @app.post("/api/downloader/rollback")
+    def rollback_downloader() -> dict:
+        try:
+            return downloader_runtime.rollback()
+        except ValueError as error:
+            raise HTTPException(409, str(error)) from error
+
+    @app.post("/api/jobs/{job_id}/downloader-update", response_model=Job)
+    def update_downloader_and_retry(job_id: str) -> Job:
+        job = failed_download(job_id)
+        if job.download_failure not in (None, "downloader"):
+            raise HTTPException(409, "This download error does not indicate an outdated downloader")
+        try:
+            downloader_runtime.update(job.source)
+        except ValueError as error:
+            raise HTTPException(422, str(error)) from error
+        return retry_job(job_id)
+
+    @app.post("/api/jobs/{job_id}/recover-source", response_model=Job)
+    def recover_download_from_file(job_id: str, file: UploadFile = File(...)) -> Job:
+        with recovery_lock:
+            job = failed_download(job_id)
+            directory = store.dir(job_id)
+            destination = directory / "source.mp4"
+            filename = Path(file.filename or "upload.mp4").name
+            with atomic_output(destination) as staged:
+                with staged.open("wb") as out:
+                    shutil.copyfileobj(file.file, out)
+                try:
+                    result = subprocess.run([
+                        "ffprobe", "-v", "error", "-protocol_whitelist", "file", "-select_streams", "v:0",
+                        "-show_entries", "stream=codec_name", "-of", "csv=p=0", str(staged),
+                    ], capture_output=True, text=True, timeout=20)
+                except (OSError, subprocess.TimeoutExpired) as error:
+                    raise HTTPException(422, "Could not inspect the local video") from error
+                if result.returncode or not result.stdout.strip():
+                    raise HTTPException(422, "Choose a readable video file")
+            job, _ = store.queue_job(job_id, (JobStatus.failed,), expected=job, source=filename,
+                                     stage=Stage.queued, progress=0.0, message="Queued: local source")
+            worker.submit(job.id, str(destination))
+            return job
+
     @app.post("/api/jobs/{job_id}/retry", response_model=Job)
     def retry_job(job_id: str, body: Retry | None = None) -> Job:
         """Run a failed job again in its own folder: a finished download / transcript is reused, not redone.
@@ -527,23 +698,24 @@ def create_app(pipeline=None, start_worker: bool = True, llm_factory=OllamaClien
         """
         from .pipeline.highlights import clean_topic
 
-        job = store.get(job_id)
-        if not job:
-            raise HTTPException(404, "job not found")
-        if job.status != JobStatus.failed:
-            raise HTTPException(409, "only failed jobs can be retried")
-        if job.source.startswith(("http://", "https://")):
-            source = job.source  # download() returns early if source.mp4 is already there
-        else:
-            upload = store.dir(job_id) / "source.mp4"
-            if not upload.is_file():
-                raise HTTPException(409, "the uploaded video is gone — upload it again as a new job")
-            source = str(upload)
-        changes = {} if body is None or body.topic is None else {"topic": clean_topic(body.topic)}
-        job, _ = store.queue_job(job_id, (JobStatus.failed,), expected=job, stage=Stage.queued, progress=0.0,
-                                 message="Queued: retry", **changes)
-        worker.submit(job_id, source)
-        return job
+        with recovery_lock:
+            job = store.get(job_id)
+            if not job:
+                raise HTTPException(404, "job not found")
+            if job.status != JobStatus.failed:
+                raise HTTPException(409, "only failed jobs can be retried")
+            if job.source.startswith(("http://", "https://")):
+                source = job.source  # download() returns early if source.mp4 is already there
+            else:
+                upload = store.dir(job_id) / "source.mp4"
+                if not upload.is_file():
+                    raise HTTPException(409, "the uploaded video is gone — upload it again as a new job")
+                source = str(upload)
+            changes = {} if body is None or body.topic is None else {"topic": clean_topic(body.topic)}
+            job, _ = store.queue_job(job_id, (JobStatus.failed,), expected=job, stage=Stage.queued, progress=0.0,
+                                     message="Queued: retry", **changes)
+            worker.submit(job_id, source)
+            return job
 
     @app.get("/api/jobs", response_model=list[Job])
     def list_jobs() -> list[Job]:
@@ -764,7 +936,7 @@ def create_app(pipeline=None, start_worker: bool = True, llm_factory=OllamaClien
         if flagged and not (body and body.confirm):
             names = ", ".join(f"#{c.index} ({c.review.verdict.replace('_', ' ')})" for c in flagged)
             raise HTTPException(409, f"confirm creating clips the judge flagged: {names}")
-        return worker.submit_produce(job)
+        return worker.submit_produce(job, original_audio=bool(body and body.original_audio))
 
     @app.post("/api/jobs/{job_id}/clips/{index}/render", response_model=Job)
     def rerender_clip(job_id: str, index: int) -> Job:
@@ -1161,7 +1333,7 @@ def create_app(pipeline=None, start_worker: bool = True, llm_factory=OllamaClien
                 "stale": [ln.i for ln in script.lines if clip.start <= ln.start < clip.end
                           and dub.stale(script, ln, dictionary)] if script.voice else [],
                 "max_rate": dub.MAX_RATE, "warnings": dub.script_warnings(segs, clip, script),
-                "voice_pace": dub.voice_pace(script)}
+                "voice_pace": dub.voice_pace(script), "take_issues": dub.take_issues(script, dictionary)}
 
     @app.put("/api/jobs/{job_id}/clips/{index}/dub")
     def put_dub(job_id: str, index: int, body: DubEdit) -> dict:
@@ -1230,6 +1402,14 @@ def create_app(pipeline=None, start_worker: bool = True, llm_factory=OllamaClien
             raise HTTPException(422, "Could not analyze visible speakers for this clip") from error
         speakers = dub.suggest_speakers(script, clip.start, clip.end, turns)
         return {"speakers": speakers, "expected_texts": {ln.i: ln.text for ln in script.lines if ln.i in speakers}}
+
+    @app.post("/api/jobs/{job_id}/clips/{index}/dub/lines/{line_id}/review-take")
+    def suggest_dub_take(job_id: str, index: int, line_id: int) -> dict:
+        _, clip = clip_of(job_id, index)
+        script = dub.load(store.dir(job_id), index)
+        if not script or not any(ln.i == line_id and clip.start <= ln.start < clip.end for ln in script.lines):
+            raise HTTPException(404, "Narration line not found")
+        return review_dub_take(script, line_id)
 
     @app.post("/api/jobs/{job_id}/clips/{index}/dub/lines/{line_id}/suggest")
     def suggest_dub_line(job_id: str, index: int, line_id: int, shorten: bool = False) -> dict:

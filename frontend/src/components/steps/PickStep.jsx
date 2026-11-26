@@ -345,6 +345,7 @@ function Validation({ job, v, busy, act }) {
 
 export default function PickStep({ job, busy, act, go, transcript, reloadTranscript }) {
   const [filter, setFilter] = useState('all')
+  const [audioChoice, setAudioChoice] = useState(null)
   const [wave, setWave] = useState(null)
   const [check, setCheck] = useState(null) // job-level validation from the clip judge
   useEffect(() => {
@@ -361,7 +362,19 @@ export default function PickStep({ job, busy, act, go, transcript, reloadTranscr
   const clips = [...job.clips].sort((a, b) => (filter === 'score' ? rank(b) - rank(a) : a.start - b.start))
   const shown = filter === 'approved' ? clips.filter((c) => c.approved) : clips
   const approved = job.clips.filter((c) => c.approved)
-  const pending = approved.filter((c) => !c.file || c.stale || !Object.keys(c.content || {}).length)
+  const canDub = approved.some((clip) => !clip.visual)
+  const dubbed = approved.filter((clip) => clip.options?.dub).length
+  const audio = canDub ? audioChoice ?? (dubbed ? 'saved' : null) : 'original'
+  const pending = approved.filter((clip) => !clip.file || clip.stale || !Object.keys(clip.content || {}).length
+    || (audio === 'original' && clip.options?.dub))
+  const produce = () => {
+    const flagged = check?.approved_flagged || []
+    if (flagged.length && !window.confirm(
+      `The clip judge flagged ${flagged.length} approved clip${flagged.length === 1 ? '' : 's'}:\n\n`
+      + flagged.map((clip) => `#${clip.index} ${clip.title} — ${clip.verdict.replace('_', ' ')}`).join('\n')
+      + '\n\nCreate them anyway?')) return
+    act(() => api.produce(job.id, flagged.length > 0, audio === 'original')).catch(() => {})
+  }
 
   return (
     <div>
@@ -392,34 +405,37 @@ export default function PickStep({ job, busy, act, go, transcript, reloadTranscr
         ))}
       </div>
 
-      <NarrationBatch job={job} clips={approved} busy={busy} act={act} />
-      <div className="footer-bar">
-        {pending.length > 0 ? (
-          <>
-            <span>
-              <b>{pending.length}</b> approved clip{pending.length > 1 && 's'} need{pending.length === 1 && 's'} posts
-              and/or rendering
-            </span>
-            <button className="primary" disabled={busy} onClick={() => {
-              const flagged = check?.approved_flagged || []
-              if (flagged.length && !window.confirm(
-                `The clip judge flagged ${flagged.length} approved clip${flagged.length > 1 ? 's' : ''}:\n\n`
-                + flagged.map((f) => `#${f.index} ${f.title} — ${f.verdict.replace('_', ' ')}`).join('\n')
-                + '\n\nCreate them anyway?')) return
-              act(() => api.produce(job.id, flagged.length > 0)).catch(() => {})
-            }}>
-              {busy ? 'Working…' : `Create shorts & posts (${pending.length}) →`}
-            </button>
-          </>
-        ) : (
-          <>
-            <span className="muted">All approved clips are rendered.</span>
-            <button className="primary" disabled={!approved.length} onClick={() => go('shorts')}>
-              Review shorts →
-            </button>
-          </>
-        )}
-      </div>
+      {approved.length > 0 && <section className="card audio-choice" aria-label="Audio and export">
+        <h3>Audio and export</h3>
+        {canDub && <fieldset disabled={busy}>
+          <legend>Audio for approved shorts</legend>
+          <div className="row-btns">
+            {[['original', 'Keep original audio'], ['saved', 'Use a saved voice']].map(([key, label]) => (
+              <label key={key}><input type="radio" name="shorts-audio" value={key} checked={audio === key}
+                onChange={() => setAudioChoice(key)} /> {label}</label>
+            ))}
+          </div>
+        </fieldset>}
+        <NarrationBatch job={job} clips={approved} busy={busy} act={act} open={audio === 'saved'} />
+        <div className="footer-bar">
+          {!audio ? <span className="muted">Choose the audio you want to use.</span>
+            : audio === 'saved' && !dubbed
+              ? <span className="muted">Prepare and generate narration to unlock export.</span>
+              : pending.length > 0 ? (
+            <>
+              <span className="muted">
+                {audio === 'original' ? 'The approved shorts will use the source audio.'
+                  : `${dubbed} of ${approved.length} approved shorts use saved-voice narration.`}
+              </span>
+              <button className="primary" disabled={busy} onClick={produce}>
+                {busy ? 'Working…' : `Create shorts & posts (${pending.length}) →`}
+              </button>
+            </>
+          ) : (
+            <button className="primary" disabled={busy} onClick={() => go('shorts')}>Review shorts →</button>
+          )}
+        </div>
+      </section>}
     </div>
   )
 }

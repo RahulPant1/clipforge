@@ -4,6 +4,8 @@ import History from './components/History.jsx'
 import BrandKit from './components/BrandKit.jsx'
 import BrandVoice from './components/BrandVoice.jsx'
 import VoiceLab from './components/VoiceLab.jsx'
+import RevoicePanel from './components/RevoicePanel.jsx'
+import ScriptShort from './components/ScriptShort.jsx'
 import HealthBadge from './components/HealthBadge.jsx'
 import JobList from './components/JobList.jsx'
 import NewJob from './components/NewJob.jsx'
@@ -13,9 +15,37 @@ import { isBusy } from './util.js'
 const VOICE = 'brand-voice'
 const KIT = 'brand-kit'
 const SPEECH = 'your-voice'
+const SCRIPT_SHORT = 'script-short'
+
+const VIDEO_SHORTS = 'video-shorts'
+const REVOICE = 'revoice'
+const LEARN_VIDEO = 'learn-video'
+const creationPages = [null, VIDEO_SHORTS, REVOICE, SCRIPT_SHORT, LEARN_VIDEO]
+
+function CreateHome({ onChoose }) {
+  return <div className="newjob-wrap">
+    <h2>Create</h2>
+    <div className="create-paths">
+      <button className="card create-path" onClick={() => onChoose(VIDEO_SHORTS)}>
+        <strong>Make shorts from a video</strong>
+        <span>Paste a YouTube link, upload a video, or record your screen or webcam.</span>
+      </button>
+      <button className="card create-path" onClick={() => onChoose(REVOICE)}>
+        <strong>Re-voice a recording</strong>
+        <span>Replace one sentence or narrate the entire recording in a saved voice.</span>
+      </button>
+      <button className="card create-path" onClick={() => onChoose(SCRIPT_SHORT)}>
+        <strong>Make a short from a script</strong>
+        <span>Turn a script, a saved voice, and local B-roll into a captioned short.</span>
+      </button>
+    </div>
+    <button className="btn ghost create-learn" onClick={() => onChoose(LEARN_VIDEO)}>Learn from a video</button>
+  </div>
+}
 
 export default function App() {
   const [jobs, setJobs] = useState([])
+  const [menuOpen, setMenuOpen] = useState(false)
   const [selectedId, setSelectedId] = useState(null) // null = "new job" screen, VOICE = brand voice
   const [error, setError] = useState('')
 
@@ -69,6 +99,11 @@ export default function App() {
 
   const selected = jobs.find((j) => j.id === selectedId) || null
 
+  const navigate = (id) => {
+    setSelectedId(id)
+    setMenuOpen(false)
+  }
+
   const onDelete = async (id) => {
     try {
       await api.deleteJob(id)
@@ -89,46 +124,57 @@ export default function App() {
             <p>Long video → Shorts + posts. 100% local.</p>
           </div>
         </div>
-        <HealthBadge />
+        <div className="header-actions">
+          <HealthBadge />
+          <button type="button" className="btn mobile-menu" aria-expanded={menuOpen} aria-controls="workspace-navigation"
+            onClick={() => setMenuOpen((open) => !open)}>{menuOpen ? 'Close menu' : 'Menu'}</button>
+        </div>
       </header>
 
       {error && <div className="banner error">{error}</div>}
 
       <main>
-        <aside>
-          <button className={`newjob ${selectedId === null ? 'on' : ''}`} onClick={() => setSelectedId(null)}>
-            + New job
+        <aside id="workspace-navigation" className={menuOpen ? 'menu-open' : ''}
+          onKeyDown={(event) => { if (event.key === 'Escape') setMenuOpen(false) }}>
+          <button className={`newjob ${creationPages.includes(selectedId) ? 'on' : ''}`} onClick={() => navigate(null)}>
+            + Create
           </button>
-          <button className={`voicebtn ${selectedId === VOICE ? 'on' : ''}`} onClick={() => setSelectedId(VOICE)}>
+          <button className={`voicebtn ${selectedId === VOICE ? 'on' : ''}`} onClick={() => navigate(VOICE)}>
             🎙 Brand voice
           </button>
-          <button className={`voicebtn ${selectedId === KIT ? 'on' : ''}`} onClick={() => setSelectedId(KIT)}>
+          <button className={`voicebtn ${selectedId === KIT ? 'on' : ''}`} onClick={() => navigate(KIT)}>
             🎨 Brand kit
           </button>
-          <button className={`voicebtn ${selectedId === SPEECH ? 'on' : ''}`} onClick={() => setSelectedId(SPEECH)}>
+          <button className={`voicebtn ${selectedId === SPEECH ? 'on' : ''}`} onClick={() => navigate(SPEECH)}>
             🗣 Voice Library
           </button>
           <History revision={jobs.filter((job) => !isBusy(job)).map((job) => job.id).join(',')} />
-          <JobList jobs={jobs} selectedId={selectedId} onSelect={setSelectedId} onDelete={onDelete} />
+          <JobList jobs={jobs} selectedId={selectedId} onSelect={navigate} onDelete={onDelete} />
         </aside>
         <section className="detail">
+          {selectedId !== null && creationPages.includes(selectedId) &&
+            <button className="btn sm ghost create-back" onClick={() => navigate(null)}>← Back to Create</button>}
           {selectedId === VOICE ? (
             <BrandVoice />
           ) : selectedId === SPEECH ? (
-            <VoiceLab />
+            <VoiceLab onRevoice={() => navigate(REVOICE)} />
           ) : selectedId === KIT ? (
             <BrandKit />
+          ) : selectedId === SCRIPT_SHORT ? (
+            <ScriptShort />
+          ) : selectedId === REVOICE ? (
+            <div className="newjob-wrap"><RevoicePanel onVoiceLibrary={() => navigate(SPEECH)} /></div>
           ) : selected ? (
             <Workspace key={selected.id} job={selected} onChanged={changed} />
-          ) : (
-            <NewJob
+          ) : selectedId === VIDEO_SHORTS || selectedId === LEARN_VIDEO ? (
+            <NewJob key={selectedId} purpose={selectedId === LEARN_VIDEO ? 'learn' : 'create'}
               onCreated={(job) => {
                 setSelectedId(job.id)
                 changed()
               }}
-              onOpen={setSelectedId}
+              onOpen={navigate}
             />
-          )}
+          ) : <CreateHome onChoose={navigate} />}
         </section>
       </main>
     </div>

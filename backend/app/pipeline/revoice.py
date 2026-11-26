@@ -21,10 +21,12 @@ import subprocess
 import time
 import uuid
 from pathlib import Path
+from tempfile import TemporaryDirectory
 
 from ..config import settings
+from ..files import atomic_output
 from ..models import Clip, DubScript, Word
-from . import dub, tts
+from . import capture, dub, tts
 
 MAX_SECONDS = 180.0  # generation runs inside one request (~2 s per second of speech)
 MAX_UPLOAD = 500 * 2**20
@@ -49,7 +51,8 @@ def meta(rid: str) -> dict:
 
 
 def _save_meta(d: Path, m: dict) -> dict:
-    (d / "meta.json").write_text(json.dumps(m, indent=1, ensure_ascii=False), encoding="utf-8")
+    with atomic_output(d / "meta.json") as staged:
+        staged.write_text(json.dumps(m, indent=1, ensure_ascii=False), encoding="utf-8")
     return m
 
 
@@ -77,16 +80,21 @@ def all_items() -> list[dict]:
     return out
 
 
-def create(filename: str, data: bytes, name: str = "") -> dict:
+def create(filename: str, data: bytes, name: str = "", *, recorded: bool = False) -> dict:
     """Save the recording, transcribe it (GPU: hold GPU_LOCK) and draft its sentences."""
     rid = uuid.uuid4().hex[:10]
     d = root() / rid
     d.mkdir(parents=True)
     suffix = Path(filename).suffix.lower()
     ext = suffix if re.fullmatch(r"\.[a-z0-9]{1,7}", suffix) else ".bin"  # only a plain extension from the name
-    src = d / f"source{ext}"
+    src = d / f"{'capture' if recorded else 'source'}{ext}"
     src.write_bytes(data)
     try:
+        if recorded:
+            normalized = d / "source.mp4"
+            capture.normalize(src, normalized)
+            src.unlink()
+            src = normalized
         duration, has_video, has_audio = probe(src)
         if not has_audio or duration <= 0:
             raise ValueError("no audio in that file")
@@ -163,6 +171,88 @@ def render(d: Path, m: dict, s: DubScript) -> Path:
         if r.returncode != 0:
             raise RuntimeError(f"couldn't write the video: {r.stderr.strip()[-200:]}")
     return out
+
+
+def pickup(rid: str, line_id: int, *, expected_text: str | None = None) -> dict:
+    current = next((line.text for line in script(rid).lines if line.i == line_id), "")
+    return pickups(rid, {line_id: current if expected_text is None else expected_text})
+
+
+def pickups(rid: str, expected_texts: dict[int, str]) -> dict:
+    """Synthesize selected sentences in one load, then replace their windows in the original recording."""
+    d, m, s = folder(rid), meta(rid), script(rid)
+    by_id = {line.i: line for line in s.lines}
+    windows = []
+    for index, expected in expected_texts.items():
+        line = by_id.get(index)
+        if line is None or not line.text.strip():
+            raise ValueError("Choose non-empty sentences to replace")
+        if line.text != expected:
+            raise ValueError("A sentence changed. Review the current wording and try again.")
+        start, end = max(0, line.start), min(line.end, m["duration"])
+        if end - start < 0.1:
+            raise ValueError(f"Sentence {index + 1} has too little time for a pickup")
+        windows.append((start, end, line))
+    windows.sort(key=lambda window: window[0])
+    if any(before[1] > after[0] for before, after in zip(windows, windows[1:], strict=False)):
+        raise ValueError("Selected sentences overlap. Choose separate audio windows.")
+    if not windows or not s.voice:
+        raise ValueError("Choose sentences and a saved voice first")
+    tts.prompt_for(tts.load(s.voice), s.version)
+    with TemporaryDirectory(prefix=".pickup-", dir=d) as folder_name:
+        directory = Path(folder_name)
+        dictionary = dub.pronunciation_dictionary()
+        texts = [dub.spoken_text(s, line, dictionary) for _, _, line in windows]
+        names = [f"take-{line.i}.wav" for _, _, line in windows]
+        takes = tts.speak(s.voice, texts, out_dir=directory, names=names, version=s.version)
+        planned = []
+        for (start, end, line), name, take in zip(windows, names, takes, strict=True):
+            rate = max(1, take["seconds"] / (end - start))
+            if rate > dub.MAX_RATE + 1e-6:
+                raise ValueError(f"Sentence {line.i + 1} would sound rushed. Shorten its wording and try again.")
+            planned.append((directory / name, start, end, rate))
+        out = d / ("pickup.mp4" if m["has_video"] else "pickup.wav")
+        try:
+            _render_pickups(d / m["source"], planned, out, m["has_video"])
+        except (OSError, subprocess.TimeoutExpired) as error:
+            raise RuntimeError("Could not finish exporting the sentence pickups") from error
+    indices = [line.i for _, _, line in windows]
+    m.update(pickup_output=out.name, pickup_lines=indices, pickup_line=indices[0], pickup_updated=time.time())
+    return _save_meta(d, m)
+
+
+def _render_pickups(source: Path, planned: list[tuple[Path, float, float, float]], out: Path, video: bool) -> None:
+    fade = 0.015
+    gains, filters, inputs = [], [], []
+    for index, (take, start, end, rate) in enumerate(planned, 1):
+        span = end - start
+        gains.append(f"max(clip(({start + fade:.6f}-t)/{fade},0,1),clip((t-{end - fade:.6f})/{fade},0,1))")
+        inputs.extend(["-i", str(take)])
+        filters.append(
+            f"[{index}:a:0]atempo={rate:.6f},aresample=48000,apad,atrim=duration={span:.6f},"
+            f"afade=t=in:d={fade},afade=t=out:st={span - fade:.6f}:d={fade},"
+            f"adelay={round(start * 48000)}S:all=1[p{index}]"
+        )
+    input_labels = "[original]" + "".join(f"[p{index}]" for index in range(1, len(planned) + 1))
+    graph = ";".join([
+        f"[0:a:0]asetpts=PTS-STARTPTS,aeval='val(ch)*{'*'.join(gains)}':c=same[original]",
+        *filters, f"{input_labels}amix=inputs={len(planned) + 1}:duration=first:normalize=0[a]",
+    ])
+    command = ["ffmpeg", "-nostdin", "-y", "-v", "error", "-i", str(source), *inputs,
+               "-filter_complex", graph, "-map", "[a]"]
+    with atomic_output(out) as staged:
+        if video:
+            tracks = ["-map", "0:v:0", "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart"]
+            result = subprocess.run([*command, *tracks, "-c:v", "copy", str(staged)], capture_output=True, timeout=180)
+            if result.returncode:
+                result = subprocess.run(
+                    [*command, *tracks, "-c:v", "libx264", "-preset", "veryfast", "-crf", "21",
+                     "-threads:v", "2", str(staged)], capture_output=True, timeout=180,
+                )
+        else:
+            result = subprocess.run([*command, "-c:a", "pcm_s16le", str(staged)], capture_output=True, timeout=180)
+        if result.returncode:
+            raise RuntimeError(f"Could not export the pickup: {result.stderr.decode(errors='replace')[-200:].strip()}")
 
 
 def delete(rid: str) -> None:

@@ -157,7 +157,7 @@ export default function FindVideos({ initialTopic = '', onUse, onQueue }) {
           {cc ? ' or untick Creative Commons' : ''}.</p>
       )}
 
-      {picks.length > 0 && (
+      {onQueue && picks.length > 0 && (
         <div className="find-queue">
           <b>{picks.length} ticked</b>
           <button type="button" className="linkbtn" onClick={() => setPicked({})}>untick</button>
@@ -219,9 +219,9 @@ export default function FindVideos({ initialTopic = '', onUse, onQueue }) {
               </div>
               <span className="find-acts">
                 <button type="button" className="btn" onClick={() => onUse(r, topic.trim())}>Use this video</button>
-                <label className="checkline small" title="Tick several, then queue them all as one batch">
+                {onQueue && <label className="checkline small" title="Tick several, then queue them all as one batch">
                   <input type="checkbox" checked={!!picked[r.id]} onChange={() => pick(r)} /> batch
-                </label>
+                </label>}
               </span>
             </div>
           )

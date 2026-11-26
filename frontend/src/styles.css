@@ -40,7 +40,13 @@ header { display: flex; justify-content: space-between; align-items: center; gap
 main { display: grid; grid-template-columns: 280px 1fr; gap: 18px; align-items: start; }
 @media (max-width: 900px) { main { grid-template-columns: 1fr; } }
 aside { display: flex; flex-direction: column; gap: 12px; position: sticky; top: 12px; }
-@media (max-width: 900px) { aside { position: static; } }  /* one column: a pinned sidebar would cover the step */
+header .header-actions { display: flex; align-items: center; gap: 8px; }
+header .mobile-menu { display: none; }
+@media (max-width: 900px) {
+  aside { position: static; display: none; }
+  aside.menu-open { display: flex; }
+  header .mobile-menu { display: inline-block; }
+}
 .detail { min-width: 0; }
 
 .card { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 16px; }
@@ -98,6 +104,27 @@ input:focus, textarea:focus { outline: none; border-color: #4a5164; }
 
 /* ---------- new job ---------- */
 .newjob-wrap { max-width: 640px; }
+.audio-choice { display: grid; gap: 12px; margin-top: 14px; }
+.audio-choice fieldset { margin: 0; padding: 8px 10px 10px; min-width: 0; border: 1px solid var(--line); border-radius: 8px; }
+.audio-choice fieldset label { display: inline-flex; align-items: center; gap: 4px; }
+.audio-choice .footer-bar { margin: 0; }
+.script-steps { display: flex; flex-wrap: wrap; gap: 6px; }
+.script-steps button[aria-pressed="true"] { border-color: var(--accent); color: var(--text); }
+.script-section[hidden] { display: none; }
+.script-section select, .script-section audio { max-width: 100%; }
+.script-next { position: sticky; bottom: 0; padding: 10px 0; background: var(--panel); z-index: 1; }
+.create-paths { display: grid; gap: 10px; }
+.create-path { display: grid; gap: 5px; text-align: left; color: var(--text); font: inherit; cursor: pointer; }
+.create-path:hover, .create-path:focus-visible { border-color: var(--accent); }
+.create-path span { color: var(--muted); font-size: 13px; }
+.create-back { margin-bottom: 12px; }
+.create-learn { margin-top: 12px; }
+.source-options summary, .creation-advanced summary { cursor: pointer; }
+.source-options .row-btns, .creation-advanced .form { margin-top: 10px; }
+.creation-advanced select {
+  background: var(--bg); color: var(--text); border: 1px solid var(--line);
+  border-radius: 9px; font: inherit; padding: 8px 10px; width: 100%;
+}
 .newjob-wrap h2 { margin-bottom: 12px; }
 .flow { display: flex; flex-wrap: wrap; gap: 6px; list-style: none; padding: 0; margin: 0 0 16px; }
 .flow li { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); background: var(--panel); border: 1px solid var(--line); border-radius: 999px; padding: 4px 10px 4px 4px; }

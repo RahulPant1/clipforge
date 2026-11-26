@@ -50,16 +50,29 @@ export const api = {
   compareVoice: (id, text, versions, language) =>
     req(`/voices/${id}/compare`, json('POST', { text, versions, language: language || '' })),
   voiceAudio: (id, kind, name) => `/api/voices/${id}/audio/${kind}/${name}`,
+  scriptShorts: () => req('/script-shorts'),
+  planScriptBroll: (previewId, assets) =>
+    req('/script-shorts/broll-plan', json('POST', { preview_id: previewId, assets })),
+  reviewScriptTake: (id, line) =>
+    req(`/script-shorts/narration/${id}/lines/${line}/suggest`, { method: 'POST' }),
+  previewScriptNarration: (body) => req('/script-shorts/narration', json('POST', body)),
+  scriptNarrationAudio: (id) => `/api/script-shorts/narration/${id}/audio`,
+  createScriptShort: (body) => req('/script-shorts', json('POST', body)),
+  scriptShortFile: (id, name) => `/api/script-shorts/${id}/files/${name}`,
   revoiceList: () => req('/revoice'),
   revoice: (id) => req(`/revoice/${id}`),
-  createRevoice: (file, name) => {
+  createRevoice: (file, name, recorded = false) => {
     const fd = new FormData()
     fd.append('file', file, file.name || 'narration.webm')
     fd.append('name', name || '')
+    if (recorded) fd.append('recorded', 'true')
     return req('/revoice', { method: 'POST', body: fd })
   },
   putRevoice: (id, body) => req(`/revoice/${id}`, json('PUT', body)),
   generateRevoice: (id, lines) => req(`/revoice/${id}/generate`, json('POST', { lines: lines ?? null })),
+  reviewRevoiceTake: (id, line) => req(`/revoice/${id}/lines/${line}/review-take`, { method: 'POST' }),
+  pickupRevoice: (id, line, text) => req(`/revoice/${id}/lines/${line}/pickup`, json('POST', { expected_text: text })),
+  pickupRevoiceBatch: (id, texts) => req(`/revoice/${id}/pickups`, json('POST', { expected_texts: texts })),
   deleteRevoice: (id) => req(`/revoice/${id}`, { method: 'DELETE' }),
   revoiceFile: (id, name, v) => `/api/revoice/${id}/files/${name}${v ? `?v=${v}` : ''}`,
   removeLogo: () => req('/brand-kit/logo', { method: 'DELETE' }),
@@ -74,9 +87,10 @@ export const api = {
   createBatch: (urls, num_clips, mode, topic = '', hinglish = true, info = {}, whisper_model = null) =>
     req('/jobs/batch', json('POST', { urls, num_clips, mode, topic, hinglish, info, whisper_model })),
   batchExpand: (text) => req('/batch/expand', json('POST', { text })),
-  uploadJob: (file, num_clips, mode, topic = '', hinglish = true, purpose = 'create', whisperModel = null) => {
+  uploadJob: (file, num_clips, mode, topic = '', hinglish = true, purpose = 'create', whisperModel = null, recorded = false) => {
     const fd = new FormData()
     fd.append('purpose', purpose)
+    if (recorded) fd.append('recorded', 'true')
     fd.append('file', file)
     fd.append('num_clips', num_clips)
     fd.append('mode', mode)
@@ -88,6 +102,14 @@ export const api = {
   scriptState: (id) => req(`/jobs/${id}/script`),
   setScript: (id, hinglish) => req(`/jobs/${id}/script`, json('POST', { hinglish })),
   deleteJob: (id) => req(`/jobs/${id}`, { method: 'DELETE' }),
+  downloader: () => req('/downloader'),
+  rollbackDownloader: () => req('/downloader/rollback', { method: 'POST' }),
+  updateDownloaderAndRetry: (id) => req(`/jobs/${id}/downloader-update`, { method: 'POST' }),
+  recoverSource: (id, file) => {
+    const form = new FormData()
+    form.append('file', file)
+    return req(`/jobs/${id}/recover-source`, { method: 'POST', body: form })
+  },
   retry: (id, topic) => req(`/jobs/${id}/retry`, topic == null ? { method: 'POST' } : json('POST', { topic })),
   transcript: (id) => req(`/jobs/${id}/transcript`),
   waveform: (id) => req(`/jobs/${id}/waveform`),
@@ -100,7 +122,8 @@ export const api = {
   // review & editing
   editClip: (id, index, changes) => req(`/jobs/${id}/clips/${index}`, json('PATCH', changes)),
   addClip: (id, clip) => req(`/jobs/${id}/clips`, json('POST', clip)),
-  produce: (id, confirm = false) => req(`/jobs/${id}/produce`, json('POST', { confirm })),
+  produce: (id, confirm = false, originalAudio = false) =>
+    req(`/jobs/${id}/produce`, json('POST', { confirm, original_audio: originalAudio })),
   validation: (id) => req(`/jobs/${id}/validation`),
   learnNotes: (id) => req(`/jobs/${id}/learn`),
   makeLearn: (id) => req(`/jobs/${id}/learn`, { method: 'POST' }),
@@ -125,6 +148,8 @@ export const api = {
   dubSourceAudio: (id, index, line) => `/api/jobs/${id}/clips/${index}/dub/lines/${line}/source-audio`,
   suggestDubSpeakers: (id, index) =>
     req(`/jobs/${id}/clips/${index}/dub/speaker-suggestions`, { method: 'POST' }),
+  reviewDubTake: (id, index, line) =>
+    req(`/jobs/${id}/clips/${index}/dub/lines/${line}/review-take`, { method: 'POST' }),
   suggestDubLine: (id, index, line, shorten = false) =>
     req(`/jobs/${id}/clips/${index}/dub/lines/${line}/suggest${shorten ? '?shorten=true' : ''}`, { method: 'POST' }),
   queueNarration: (id, body) => req(`/jobs/${id}/dub/batch`, json('POST', body)),

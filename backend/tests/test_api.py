@@ -1,3 +1,4 @@
+import shutil
 import time
 
 import pytest
@@ -53,6 +54,38 @@ def test_upload_and_failure(tmp_path, monkeypatch):
         assert r.status_code == 201
         job = _wait(c, r.json()["id"])
         assert job["status"] == "failed" and job["error"] == "boom"
+
+
+@pytest.mark.skipif(not shutil.which("ffmpeg"), reason="ffmpeg not installed")
+def test_failed_download_accepts_local_recovery_without_changing_settings(tmp_path, monkeypatch):
+    from app.main import create_app
+    from app.models import JobStatus
+    from app.pipeline import downloader_runtime
+
+    from .test_revoice import media
+
+    monkeypatch.setattr(settings, "data_dir", tmp_path)
+    app = create_app(start_worker=False)
+    store = app.state.store
+    job = store.create("https://www.youtube.com/watch?v=Q1vHmuUXOYw", 3, topic="space", hinglish=True,
+                       whisper_model="large-v3-turbo")
+    store.update(job.id, status=JobStatus.failed, stage=Stage.downloading, download_failure="downloader")
+    def failed_update(_url):
+        raise ValueError("Update failed")
+
+    monkeypatch.setattr(downloader_runtime, "update", failed_update)
+    with TestClient(app) as client:
+        assert client.post(f"/api/jobs/{job.id}/downloader-update").status_code == 422
+        url = f"/api/jobs/{job.id}/recover-source"
+        assert client.post(url, files={"file": ("broken.mp4", b"broken", "video/mp4")}).status_code == 422
+        assert store.get(job.id).status == JobStatus.failed
+        response = client.post(url, files={"file": ("my-take.mp4", media(tmp_path / "sample.mp4"), "video/mp4")})
+        assert response.status_code == 200
+        recovered = response.json()
+        assert recovered["id"] == job.id and recovered["source"] == "my-take.mp4"
+        assert recovered["topic"] == job.topic and recovered["whisper_model"] == job.whisper_model
+        assert recovered["hinglish"] and recovered["num_clips"] == 3 and recovered["download_failure"] is None
+        assert (store.dir(job.id) / "source.mp4").is_file()
 
 
 def test_rejects_bad_url(tmp_path, monkeypatch):

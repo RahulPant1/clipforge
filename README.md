@@ -42,7 +42,7 @@ YouTube URL / file
 - Whisper transcription with word-level timing. Jobs reuse cached source videos and raw transcripts, and keep
   caption edits and Hinglish conversions in their own folders. The History sidebar shows reclaimable source
   cache space. With ClipForge stopped, you can remove `data/cache` to clear the shared cache.
-- **Per-job Whisper:** in New job, choose **App default**, **Whisper Small**, or **Whisper Turbo** for source
+- **Per-job Whisper:** in **Create → Make shorts from a video → Advanced settings**, choose **App default**, **Whisper Small**, or **Whisper Turbo** for source
   transcription. Turbo is useful for difficult Hindi or Hinglish speech. Model choices have separate transcript
   caches. ClipForge looks for an installed Turbo snapshot in `backend/data/models/whisper/large-v3-turbo`,
   and faster-whisper downloads the weights on first use if it needs them. For the CLI, use
@@ -68,10 +68,28 @@ YouTube URL / file
   each new sentence is placed where the original was said (sped up a little if needed, flagged "too long —
   shorten" if it can't fit), captions follow the new words, and you can regenerate a single line. The whole clip
   audio is replaced (add music under it if you like); lips won't match on a speaker's face. Marked 🤖 AI voice
-- **🔁 Re-voice a recording:** in the Voice Library, record or import your narration (audio or video, up to 3 min)
+- **🔁 Re-voice a recording:** under **Create → Re-voice a recording**, record or import your narration (audio or video, up to 3 min)
   and have it spoken again in any library voice — every sentence starts where you said it, so the timing and pauses
   stay (your intonation doesn't: the voice reads the words its own way). A video keeps its picture
-- **Narrate in my voice:** in Pick clips, select approved shorts and one saved voice version. Prepare scripts
+- **Record video:** choose **Create → Make shorts from a video → Record video** to capture the screen or webcam with your microphone,
+  preview it, and use it as a source. New jobs can record up to ten minutes. **Re-voice a recording** also accepts
+  short screen and webcam recordings. Capture requires browser device permissions and localhost
+  or HTTPS. Screen recording captures microphone audio.
+- **Sentence pickup:** in **Create → Re-voice a recording**, choose a voice, edit the sentence, then
+  select **Replace only this sentence**. The download uses the original recording and replaces only that
+  sentence's audio window. To combine fixes, use **Select sentences for pickups** and export up to 20
+  selected sentences together. Each export starts from the original. If a replacement needs too much
+  speedup, shorten the wording and try again.
+- **Script → Short:** choose **Create → Make a short from a script**, paste a script, choose a saved voice version,
+  and arrange up to six MP4s from your local B-roll library. Footage plays in order for equal parts of the
+  narration and loops when needed. The export is a captioned 720×1280 MP4 with a separate SRT, up to 60
+  seconds of narration. **Preview narration** lets you listen before rendering and reuses the same audio
+  and timing in the export. Under **Scene timing**, choose **Start scenes at script lines** to place each visual
+  change at a specific line of the preview. With footage selected, use **Suggest B-roll plan** to review a
+  Gemma-proposed sequence. Gemma describes only your shortlist and reuses descriptions of unchanged footage.
+  The workspace groups these controls into **Script & voice**, **Footage**, and **Preview & export**.
+- **Audio and export:** after approving clips, choose **Keep original audio** or **Use a saved voice**.
+  With a saved voice, select the shorts and voice version, then prepare scripts
   from the transcript or request a narration rewrite, then review the wording and preview the first line over
   the picture. Queue narration and follow each short's progress in the workspace. ClipForge continues with the
   tab closed while its backend is running. Use **Retry failed narrations** for failed or interrupted shorts,
@@ -101,6 +119,9 @@ YouTube URL / file
   Use **Select lines to label** to apply one speaker label to several script rows at once.
   **Generate pace sample** under **Voice Library → Try it** measures three lines with the selected version
   and lets you listen to them before starting a narration batch.
+- **Generated take checks:** after generation, ClipForge compares the intended spoken text with what Whisper
+  heard. Flagged lines show likely number changes, omissions, or wording differences. Listen to confirm and
+  optionally ask Gemma for a suggested fix. The check uses spoken aliases where configured.
 - **Narration line review:** expand **Compare source and generated audio** beside a flagged or generated
   line to replay **A · Original** and **B · Generated take** from the same line start. The panel shows the
   assigned voice, raw take length, and fitted playback speed when available. Source excerpts are capped at 30 seconds.
@@ -127,7 +148,7 @@ YouTube URL / file
   (ready / trim / needs context / reject) with the evidence and a one-click **Apply fix** that moves the edges to
   the right sentences. Rejected picks give their place to the next best candidate; in automatic mode the fixes
   are applied for you. **Check again** after you trim
-- **📚 Learn from a video:** pick "Learn from it" on the New job form (or **Make study notes** on any job) for a
+- **📚 Learn from a video:** choose **Create → Learn from a video** (or **Make study notes** on any job) for a
   summary, chapters (ready to paste into a YouTube description), key concepts, timestamped notes, a quiz,
   hands-on exercises and what to learn next — every point jumps to where it's said; download it all as Markdown
 - **Sees what's on screen:** for videos that are more than a talking head (screen recordings, slides, demos,
@@ -314,7 +335,12 @@ Either enable mirrored networking (`%UserProfile%\.wslconfig` → `[wsl2]` `netw
 or run Ollama with `OLLAMA_HOST=0.0.0.0` and set `OLLAMA_URL=http://<windows-ip>:11434`.
 
 ## Troubleshooting
-- **"n challenge solving failed" / missing formats** → `pip install -U "yt-dlp[default]"` (brings `yt-dlp-ejs`) and make sure `deno --version` works.
+- **YouTube download recovery** → open the failed job’s **Source** step. **Use a local file** resumes the same
+  job with its settings. For downloader or format errors, **Update downloader & retry** stages an official
+  yt-dlp release, tests it against the URL, and activates it after verification. Use **Restore previous downloader**
+  from the recovery panel to roll back. A YouTube rate limit puts uncached remote downloads on a ten-minute cooldown.
+- **"n challenge solving failed" / missing formats** → update the downloader in the ClipForge environment with
+  `python -m pip install --upgrade "yt-dlp[default]>=2026.11.24.232653.dev0"` and check `deno --version`.
 - **"Sign in to confirm you're not a bot"** → `pip install -U "yt-dlp[default]"`, then export browser cookies to `cookies.txt` and set `YTDLP_COOKIES`.
 - **`libcudnn` / `libcublas` not found** → reinstall the wheels (`pip install nvidia-cublas-cu12 "nvidia-cudnn-cu12==9.*"`),
   start via `scripts/dev.sh`, or use `WHISPER_DEVICE=cpu`.

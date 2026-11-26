@@ -706,3 +706,15 @@ def test_source_comparison_audio_uses_source_timestamps(tmp_path):
     assert len(samples) / 8000 == pytest.approx(0.75, abs=0.06)
     peak = np.fft.rfftfreq(len(samples), 1 / 8000)[np.abs(np.fft.rfft(samples)).argmax()]
     assert peak == pytest.approx(700, abs=2)
+
+
+def test_narration_comparison_flags_numbers_and_omissions():
+    from app.pipeline import narration_review
+
+    assert narration_review.compare("Three small clips.", "3 small clips") == []
+    assert narration_review.compare("Use sequel for these examples.", "Use sequel for these examples") == []
+    issues = narration_review.compare("Save 42 of these files right now.", "Save 12 files.")
+    assert "Possible number mismatch." in issues
+    assert any("omitted words" in issue for issue in issues)
+    assert narration_review.compare("A completed line.", None) == []
+    assert narration_review.compare("A completed line.", "") == ["Whisper did not recognize speech in this take."]

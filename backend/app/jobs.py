@@ -141,7 +141,8 @@ class JobStore:
             if current is None or current.status not in allowed or (expected is not None and current is not expected):
                 raise QueueConflict("Job status changed. Refresh and try again.")
             job = current.model_copy(update={
-                **fields, "status": JobStatus.queued, "error": None, "updated_at": datetime.now(UTC),
+                **fields, "status": JobStatus.queued, "error": None,
+                "download_failure": None, "updated_at": datetime.now(UTC),
             })
             self._save(job)
             return job, current.status
@@ -199,8 +200,21 @@ class Worker:
     def submit(self, job_id: str, source: str) -> None:
         self.q.put(("run", job_id, {"source": source}))
 
-    def submit_produce(self, job: Job) -> Job:
-        return self._submit_editable("produce", job, "Queued: rendering and posts")
+    def submit_produce(self, job: Job, *, original_audio: bool = False) -> Job:
+        fields = {}
+        if original_audio:
+            clips = []
+            for clip in job.clips:
+                if clip.approved and clip.options.dub:
+                    options = clip.options.model_copy(update={"dub": False})
+                    clip = clip.model_copy(update={"options": options, "stale": bool(clip.file)})
+                clips.append(clip)
+            fields["clips"] = clips
+        queued, prev = self.store.queue_job(job.id, (JobStatus.review, JobStatus.done), expected=job,
+                                            message="Queued: rendering and posts", stage=Stage.queued,
+                                            progress=0.0, **fields)
+        self.q.put(("produce", job.id, {"restore": prev}))
+        return queued
 
     def submit_learn(self, job: Job) -> Job:
         """Study notes for a job that already has its video (learn.py); the job goes back to where it was."""
@@ -373,7 +387,10 @@ class Worker:
                 batch = self.store.get(job_id).narration.fail_pending(str(e)[:300] or "Narration failed")
                 self.store.update(job_id, status=batch.restore, narration=batch, error=str(e), message="")
             elif kind == "run":
-                self.store.update(job_id, status=JobStatus.failed, error=str(e))
+                from .pipeline.download import DownloadFailure
+
+                kind = e.kind if isinstance(e, DownloadFailure) else None
+                self.store.update(job_id, status=JobStatus.failed, error=str(e), download_failure=kind)
             else:  # keep the job reviewable — nothing you edited is lost
                 self.store.update(job_id, status=before or JobStatus.review, error=str(e), message="")
 

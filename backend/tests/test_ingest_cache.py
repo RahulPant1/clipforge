@@ -1,3 +1,5 @@
+import pytest
+
 from app.config import settings
 from app.models import Segment
 from app.pipeline import orchestrator, transcript_edit
@@ -95,3 +97,20 @@ def test_turbo_prefers_complete_local_weights():
         (directory / name).touch()
     assert model_location("large-v3-turbo") == str(directory.resolve())
     assert model_location("small") == "small"
+
+
+def test_youtube_rate_limit_does_not_block_existing_local_source(tmp_path, monkeypatch):
+    from app.pipeline import downloader_runtime
+    from app.pipeline.download import DownloadFailure, _failure, download
+
+    monkeypatch.setattr(settings, "data_dir", tmp_path / "data")
+    assert _failure("HTTP Error 429: Too Many Requests").kind == "rate_limit"
+    assert downloader_runtime.retry_after() > 0
+    url = "https://www.youtube.com/watch?v=Q1vHmuUXOYw"
+    with pytest.raises(DownloadFailure, match="cooling down"):
+        download(url, tmp_path)
+    ready = tmp_path / "source.mp4"
+    ready.write_bytes(b"local cache")
+    assert download(url, tmp_path) == ready
+    assert _failure("Requested format is not available").kind == "downloader"
+    assert _failure("Sign in to confirm you are not a bot").kind == "access"

@@ -391,8 +391,12 @@ publish: PATCH post {status, url}: posted_at set on → posted (cleared when it 
   LD_LIBRARY_PATH; `transcribe.preload_cuda_wheels()` loads cuBLAS by path so VS Code / CLI work without it.
 - Caption fonts: WSL's fontconfig doesn't see Windows fonts. Scanning /mnt/c/Windows/Fonts per render costs
   ~10 s, so fonts.py indexes it once (cache: data/fonts/windows_fonts.tsv) and copies just the needed family.
-- yt-dlp needs Deno (JS runtime) + `yt-dlp-ejs` (challenge solver, comes with `yt-dlp[default]` in requirements)
-  and is updated often: `pip install -U "yt-dlp[default]"` first when downloads break.
+- yt-dlp needs Deno (JS runtime) + `yt-dlp-ejs` (challenge solver, comes with `yt-dlp[default]` in requirements).
+  The 2026.11.24 nightly fixed the player JavaScript crash seen on three NASA videos with the October build.
+  See the minimum build in requirements when updating an existing environment.
+- Download recovery classifies YouTube rate limits, access errors, and downloader failures. Failed downloads
+  can resume with a local file on the same job. The updater tests a staged package before activating it;
+  the previous downloader remains available for rollback.
   Bot check → export cookies.txt from browser, set `YTDLP_COOKIES` in backend/.env.
 - TTS env (clipforge-tts): qwen-tts pulls torch 2.15+cu132, which SEGFAULTS on CUDA init with this WSL driver
   (592.82) → setup_tts.sh pins torch/torchaudio 2.9 cu128. The worker drops LD_LIBRARY_PATH (ClipForge's CUDA 12
@@ -441,6 +445,18 @@ publish: PATCH post {status, url}: posted_at set on → posted (cleared when it 
       Shorts can already mix a separate local music track and duck it under the new voice (`dub.py`, `sfx.py`).
 - [x] **31a. Re-voice an uploaded recording:** import audio or video up to 180 seconds, re-speak its transcript
       in a Voice Library voice, and export with the original picture when the input is video (`revoice.py`).
+- [x] **Record a video source:** capture screen or webcam plus microphone in the browser, preview it, and
+      send it to New Job or Voice Library. Normalize browser containers on import with FFmpeg.
+- [x] **Sentence pickups:** synthesize one or up to 20 edited sentences in a shared model load and replace
+      just those audio windows in one export. Reject replacements that would require excessive speedup.
+- [x] **Script → Short:** enter a script, choose a saved voice version, and order up to six local B-roll assets.
+      Render a captioned 720×1280 MP4 plus SRT, with up to 60 seconds of generated narration.
+- [x] **Script → Short narration preview and scene timing:** listen before rendering and reuse the exact take.
+      Optionally start each subsequent B-roll scene at a selected script line.
+- [x] **Gemma B-roll plans for Script → Short:** describe shortlisted footage from cached thumbnails and
+      propose a reviewable scene sequence tied to narration line timings.
+- [x] **Generated narration checks:** compare expected spoken text with raw Whisper output, flag likely
+      mismatches, and request a review-only Gemma suggestion for a flagged line.
       This uses text-based synthesis at the source timing. The model supplies its own delivery.
 - [x] **Narrate selected clips in my voice:** Pick clips applies one saved voice version to approved shorts.
       Keep the transcript wording or ask for a narration rewrite. Review and edit lines, preview the first line
@@ -565,6 +581,15 @@ For a later discussion (not planned yet):
         (estimate). Prove with app.eval on a tutorial-style video before keeping it. Embedding search and video
         Q&A are outside scene index v1 (see item 30). Contact sheet = optional debug view.
 
+### UI roadmap
+
+- [x] **Create entry:** start with a video, re-voice a recording, or make a short from a script.
+      Keep study notes as a separate task. Move technical job controls into Advanced settings.
+- [x] **One next action after approval:** offer Keep original audio or Use a saved voice in one action
+      bar, then show the relevant narration review or export action.
+- [x] **Simpler editing and narrow-screen navigation:** group Script → Short into Script & voice,
+      Footage, and Preview & export. On narrow screens, collapse navigation and prioritize the current workspace.
+
 ### Voice roadmap
 
 - [x] **Initial narration baseline:** saved voice v2 rendered two 13-second real source excerpts (tutorial and
@@ -598,8 +623,8 @@ For a later discussion (not planned yet):
       with frequent cuts. Keep manual review before applying labels.
 - [x] **Batch narration review filters:** jump to unlabeled lines, flagged script lines, and shorts over duration.
 - [ ] **Compare timing versions.** Compare automatic and manual anchors around the same output range.
-- [ ] **Other voice ideas.** Spoken hook intros, Script → Short (script → voice-over → stills with motion or template
-      cards), lip-sync, jump cuts on dubbed clips, and re-voicing longer source videos.
+- [ ] **Other voice ideas.** Spoken hook intros, stills and template cards for Script → Short, lip-sync,
+      jump cuts on dubbed clips, and re-voicing longer source videos.
 - [ ] **31b. Voice conversion that preserves delivery.** Evaluate the existing OpenVoice V2 and Seed-VC
       candidates for keeping the source rhythm and intonation. The earlier review listed OpenVoice V2's
       tone-colour converter with a MeloTTS setup dependency and a community ONNX build, and Seed-VC as a

@@ -2,9 +2,9 @@ import { useEffect, useState } from 'react'
 import { api } from '../api.js'
 import BatchList from './BatchList.jsx'
 import FindVideos from './FindVideos.jsx'
+import VideoCapture from './VideoCapture.jsx'
 
 const MAX_BATCH = 50 // the API's limit per batch
-const FLOW = ['Source', 'Transcript', 'Pick clips', 'Shorts', 'Posts', 'Publish']
 
 const STATUS = { done: 'done', review: 'in review', failed: 'failed', running: 'running', queued: 'queued',
   deleted: 'deleted' }
@@ -35,13 +35,13 @@ function SeenBefore({ matches, onOpen }) {
   )
 }
 
-export default function NewJob({ onCreated, onOpen }) {
+export default function NewJob({ onCreated, onOpen, purpose = 'create' }) {
   const [kind, setKind] = useState('url')
   const [url, setUrl] = useState('')
   const [file, setFile] = useState(null)
+  const [capture, setCapture] = useState(null)
   const [numClips, setNumClips] = useState(5)
   const [mode, setMode] = useState('review')
-  const [purpose, setPurpose] = useState('create') // create = shorts + posts; learn = study notes
   const [topic, setTopic] = useState('') // optional: only moments about this
   const [hinglish, setHinglish] = useState(true) // Hindi speech → captions in Latin letters
   const [whisperModel, setWhisperModel] = useState('')
@@ -69,7 +69,7 @@ export default function NewJob({ onCreated, onOpen }) {
   }, [])
 
   const queue = items.filter((v) => v.on)
-  const ready = kind === 'url' ? url.trim().startsWith('http') : kind === 'batch' ? queue.length > 0 && queue.length <= MAX_BATCH : !!file
+  const ready = kind === 'url' ? url.trim().startsWith('http') : kind === 'batch' ? queue.length > 0 && queue.length <= MAX_BATCH : kind === 'record' ? !!capture : !!file
 
   const submit = async (e) => {
     e.preventDefault()
@@ -92,7 +92,8 @@ export default function NewJob({ onCreated, onOpen }) {
             purpose, whisper_model: whisperModel || null,
             ...(picked?.url === url.trim() ? { title: picked.title.slice(0, 300), channel: picked.channel.slice(0, 200) } : {}),
           })
-          : await api.uploadJob(file, numClips, mode, t, hinglish, purpose, whisperModel || null)
+          : await api.uploadJob(kind === 'record' ? capture : file, numClips, mode, t, hinglish, purpose,
+            whisperModel || null, kind === 'record')
       onCreated(job)
     } catch (e) {
       setErr(e.message)
@@ -103,31 +104,23 @@ export default function NewJob({ onCreated, onOpen }) {
 
   return (
     <div className="newjob-wrap">
-      <h2>New job</h2>
-      <ol className="flow">
-        {FLOW.map((f, i) => (
-          <li key={f}>
-            <span>{i + 1}</span>
-            {f}
-          </li>
-        ))}
-      </ol>
-
-      <form className="card form big" onSubmit={submit}>
-        <div className="tabs">
-          <button type="button" className={kind === 'url' ? 'on' : ''} onClick={() => setKind('url')}>
-            YouTube link
-          </button>
-          <button type="button" className={kind === 'file' ? 'on' : ''} onClick={() => setKind('file')}>
-            Upload file
-          </button>
-          <button type="button" className={kind === 'batch' ? 'on' : ''} onClick={() => setKind('batch')}>
-            📋 Batch{items.length > 0 && ` (${queue.length})`}
-          </button>
-          <button type="button" className={kind === 'find' ? 'on' : ''} onClick={() => setKind('find')}>
-            🔎 Find videos
-          </button>
+      <h2>{purpose === 'learn' ? 'Learn from a video' : 'Make shorts from a video'}</h2>
+      <form className="card form big source-form" onSubmit={submit}>
+        <div className="tabs" role="group" aria-label="Video source">
+          {[['url', 'YouTube link'], ['file', 'Upload file'], ['record', 'Record video']].map(([key, label]) => (
+            <button type="button" key={key} className={kind === key ? 'on' : ''} aria-pressed={kind === key}
+              disabled={busy} onClick={() => setKind(key)}>{label}</button>
+          ))}
         </div>
+        <details className="source-options">
+          <summary>More sources{kind === 'find' ? ' · Find videos' : kind === 'batch' ? ' · Batch' : ''}</summary>
+          <div className="row-btns">
+            <button type="button" className="btn ghost" aria-pressed={kind === 'find'}
+              disabled={busy} onClick={() => setKind('find')}>Find videos</button>
+            {purpose === 'create' && <button type="button" className="btn ghost" aria-pressed={kind === 'batch'}
+              disabled={busy} onClick={() => setKind('batch')}>Batch{items.length > 0 && ` (${queue.length})`}</button>}
+          </div>
+        </details>
 
         {kind === 'find' ? (
           <FindVideos initialTopic={topic}
@@ -135,12 +128,12 @@ export default function NewJob({ onCreated, onOpen }) {
                         setUrl(r.url); setTopic(t); setKind('url')
                         setPicked({ url: r.url, title: r.title || '', channel: r.channel || '' })
                       }}
-                      onQueue={(picks, t) => {
+                      onQueue={purpose === 'create' ? (picks, t) => {
                         const have = new Set(items.map((v) => v.url))
                         setItems([...items, ...picks.filter((v) => !have.has(v.url)).map((v) => ({ ...v, on: true }))])
                         setTopic(t)
                         setKind('batch')
-                      }} />
+                      } : undefined} />
         ) : (<>
 
         {kind === 'batch' ? (
@@ -148,91 +141,73 @@ export default function NewJob({ onCreated, onOpen }) {
         ) : kind === 'url' ? (
           <input
             type="url"
+            aria-label="YouTube link"
             autoFocus
             placeholder="https://www.youtube.com/watch?v=…"
             value={url}
             onChange={(e) => setUrl(e.target.value)}
           />
+        ) : kind === 'record' ? (
+          <>
+            {capture ? <div className="row-btns">
+              <span className="small">Recording ready</span>
+              <button type="button" className="btn ghost" disabled={busy} onClick={() => setCapture(null)}>Record again</button>
+            </div> : <VideoCapture disabled={busy} onUse={setCapture} />}
+            <p className="hint">Up to 10 minutes per recording. Screen capture includes your microphone.</p>
+          </>
         ) : (
-          <input type="file" accept="video/*" onChange={(e) => setFile(e.target.files?.[0] || null)} />
+          <input type="file" aria-label="Video file" accept="video/*" onChange={(e) => setFile(e.target.files?.[0] || null)} />
         )}
         {kind === 'url' && <SeenBefore matches={seen} onOpen={onOpen} />}
 
-        {kind !== 'batch' && (
-          <div className="seg purpose" role="radiogroup" aria-label="What is this video for?">
-            <button type="button" className={purpose === 'create' ? 'on' : ''} onClick={() => setPurpose('create')}>
-              🎬 Make shorts
-            </button>
-            <button type="button" className={purpose === 'learn' ? 'on' : ''} onClick={() => setPurpose('learn')}>
-              📚 Learn from it
-            </button>
-          </div>
-        )}
-        <label className="fl">
-          <span>Transcription model</span>
-          <select value={whisperModel} onChange={(event) => setWhisperModel(event.target.value)}>
-            <option value="">App default</option>
-            <option value="small">Whisper Small</option>
-            <option value="large-v3-turbo">Whisper Turbo · Hindi, Hinglish, or difficult speech</option>
-          </select>
-        </label>
-        {purpose === 'learn' && kind !== 'batch' ? (
-          <p className="hint">Study notes instead of shorts: a summary, chapters, key concepts and timestamped notes,
-            a quiz, a hands-on exercise and what to learn next — every point linked to where it's said. About a
-            minute per 10 minutes of video after the transcript.</p>
-        ) : (<>
-        <label className="row">
+        {purpose === 'create' && <label className="row">
           Shorts you want
-          <input type="number" min="1" max="20" value={numClips} onChange={(e) => setNumClips(Number(e.target.value))} />
-        </label>
-
-        <label className="fl">
-          <span>
-            Topic <span className="muted">· optional — only moments about this. Leave empty for the best moments on any
-            subject</span>
-          </span>
-          <input value={topic} maxLength={120} placeholder="e.g. salary negotiation, the pricing story, funny moments"
-                 onChange={(e) => setTopic(e.target.value)} />
-        </label>
-
-        <label className="checkline">
-          <input type="checkbox" checked={hinglish} onChange={(e) => setHinglish(e.target.checked)} />
-          <span>
-            Hindi speech → <b>Hinglish</b> captions <span className="muted">· Latin letters ("kya baat hai") instead of
-            Devanagari — easier to read and to fix. Switchable later on the Transcript step</span>
-          </span>
-        </label>
-
-        <label className="fl">
-          <span>
-            Names & terms <span className="muted">· spelled right in captions (your name, brands, jargon), comma
-            separated, remembered for all jobs</span>
-          </span>
-          <input value={vocab} placeholder="e.g. Rahul Pant, ClipForge, Power BI" onChange={(e) => setVocab(e.target.value)} />
-        </label>
-
-        <div className="modes">
-          <label className={`mode ${mode === 'review' ? 'on' : ''}`}>
-            <input type="radio" name="mode" checked={mode === 'review'} onChange={() => setMode('review')} />
-            <div>
-              <b>Review each step</b> <span className="tag">recommended</span>
-              <p>Pauses after Gemma finds clips. You get {numClips * 2} candidates to edit, trim and approve before anything is rendered.</p>
-            </div>
-          </label>
-          <label className={`mode ${mode === 'auto' ? 'on' : ''}`}>
-            <input type="radio" name="mode" checked={mode === 'auto'} onChange={() => setMode('auto')} />
-            <div>
-              <b>Fully automatic</b>
-              <p>Runs everything end to end. You can still edit and re-render afterwards.</p>
-            </div>
-          </label>
-        </div>
-        </>)}
+          <input type="number" min="1" max="20" value={numClips} onChange={(event) => setNumClips(Number(event.target.value))} />
+        </label>}
+        {purpose === 'learn' && <p className="muted small">Create timestamped study notes, chapters, and a quiz.</p>}
 
         <button className="primary" disabled={!ready || busy}>
           {busy ? 'Starting…' : kind === 'batch'
-            ? `Queue ${queue.length} video${queue.length === 1 ? '' : 's'} →` : 'Start →'}
+            ? `Queue ${queue.length} video${queue.length === 1 ? '' : 's'}`
+            : purpose === 'learn' ? 'Create study notes' : mode === 'auto' ? 'Create shorts' : 'Find shorts'}
         </button>
+
+        <details className="creation-advanced">
+          <summary>Advanced settings</summary>
+          <div className="form">
+            <label className="fl">
+              <span>Transcription model</span>
+              <select value={whisperModel} onChange={(event) => setWhisperModel(event.target.value)}>
+                <option value="">App default</option>
+                <option value="small">Whisper Small</option>
+                <option value="large-v3-turbo">Whisper Turbo · Hindi, Hinglish, or difficult speech</option>
+              </select>
+            </label>
+            {purpose === 'create' && <label className="fl">
+              <span>Topic <span className="muted">· optional</span></span>
+              <input value={topic} maxLength={120} placeholder="e.g. salary negotiation"
+                onChange={(event) => setTopic(event.target.value)} />
+            </label>}
+            <label className="checkline">
+              <input type="checkbox" checked={hinglish} onChange={(event) => setHinglish(event.target.checked)} />
+              <span>Write Hindi as <b>Hinglish</b> in Latin letters</span>
+            </label>
+            <label className="fl">
+              <span>Names &amp; terms <span className="muted">· applies to all jobs</span></span>
+              <input value={vocab} placeholder="e.g. ClipForge, Power BI" onChange={(event) => setVocab(event.target.value)} />
+            </label>
+            {purpose === 'create' && <div className="modes">
+              <label className={`mode ${mode === 'review' ? 'on' : ''}`}>
+                <input type="radio" name="mode" checked={mode === 'review'} onChange={() => setMode('review')} />
+                <div><b>Review before rendering</b><p>Approve the suggested clips before ClipForge renders them.</p></div>
+              </label>
+              <label className={`mode ${mode === 'auto' ? 'on' : ''}`}>
+                <input type="radio" name="mode" checked={mode === 'auto'} onChange={() => setMode('auto')} />
+                <div><b>Render automatically</b><p>Render suggested clips. You can edit them afterward.</p></div>
+              </label>
+            </div>}
+          </div>
+        </details>
         {err && <p className="err">{err}</p>}
         {kind === 'batch' && queue.length > MAX_BATCH && (
           <p className="err">At most {MAX_BATCH} videos per batch — untick {queue.length - MAX_BATCH}.</p>

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { api } from '../api.js'
 import { fmtPrecise } from '../util.js'
 import SceneAnchors from './SceneAnchors.jsx'
+import TakeReview from './TakeReview.jsx'
 
 export function fitChip(ln, stale, maxRate) {
   if (!ln.text.trim()) return <span className="chip">silence</span>
@@ -60,7 +61,7 @@ function LineComparison({ source, generated, stale, sourceSeconds, assignedVoice
   </details>
 }
 
-export function Line({ ln, stale, busy, maxRate, onText, onRegen, onPreview, onSuggest, src, comparisonSource, comparisonMetadata, rowId, selection, children, warnings = [] }) {
+export function Line({ ln, stale, busy, maxRate, onText, onRegen, onPreview, onSuggest, onPickup, src, comparisonSource, comparisonMetadata, rowId, selection, children, warnings = [] }) {
   const [text, setText] = useState(ln.text)
   const [suggestion, setSuggestion] = useState(null)
   const [suggesting, setSuggesting] = useState(false)
@@ -105,6 +106,8 @@ export function Line({ ln, stale, busy, maxRate, onText, onRegen, onPreview, onS
           {ln.file && !stale && !comparisonSource && <audio controls preload="none" src={src(ln.file)} />}
           <button className="btn sm ghost" disabled={busy || !ln.text.trim()} onClick={onRegen}
                   title="Speak just this line again (another take)">↻ this line</button>
+          {onPickup && <button type="button" className="btn sm ghost" disabled={busy || text !== ln.text || !text.trim()}
+            onClick={() => onPickup(ln.text)}>Replace only this sentence</button>}
           {onPreview && <button className="btn sm ghost" disabled={busy} onClick={onPreview}>
             Preview this line in export
           </button>}
@@ -261,7 +264,7 @@ export default function DubEditor({ job, clip, busy, act, setOpt, fixedVoice = f
     const staleIds = new Set(data?.stale)
     const summarize = (line) => ({ i: line.i, text: line.text, start: line.start })
     onIssues(clip.index, {
-      flagged: lines.filter((line) => data.warnings?.[line.i]?.length).map(summarize),
+      flagged: lines.filter((line) => data.warnings?.[line.i]?.length || data.take_issues?.[line.i]?.length).map(summarize),
       stale: lines.filter((line) => line.file && staleIds.has(line.i)).map(summarize),
       unlabeled: named.size > 1 || assigned.size > 1 ? lines.filter((line) => !line.speaker).map(summarize) : [],
     })
@@ -476,6 +479,8 @@ export default function DubEditor({ job, clip, busy, act, setOpt, fixedVoice = f
                       texts: { [ln.i]: t }, expected_texts: expected === undefined ? {} : { [ln.i]: expected },
                     }), 'Saving…')}
                     onRegen={() => run(() => api.generateDub(job.id, clip.index, [ln.i]), 'Speaking 1 line…')}>
+                <TakeReview issues={data.take_issues?.[ln.i]} heard={ln.heard_text} busy={busy || !!working}
+                  revision={s.track_version} onSuggest={() => api.reviewDubTake(job.id, clip.index, ln.i)} />
                 {data.spoken_texts?.[ln.i] && data.spoken_texts[ln.i] !== ln.text &&
                   <p className="muted small">Spoken as “{data.spoken_texts[ln.i]}”</p>}
                 {s.voice && <div className="row-btns">

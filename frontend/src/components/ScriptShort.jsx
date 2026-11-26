@@ -4,6 +4,10 @@ import TakeReview from './TakeReview.jsx'
 
 export default function ScriptShort() {
   const [section, setSection] = useState('script')
+  const [drafts, setDrafts] = useState([])
+  const [draftId, setDraftId] = useState('')
+  const [draftToOpen, setDraftToOpen] = useState('')
+  const [notice, setNotice] = useState('')
   const [catalog, setCatalog] = useState(null)
   const [voices, setVoices] = useState([])
   const [voice, setVoice] = useState('')
@@ -28,10 +32,74 @@ export default function ScriptShort() {
   const refresh = () => api.scriptShorts().then(setCatalog)
 
   useEffect(() => {
-    Promise.all([refresh(), api.voices().then(({ voices: items }) =>
+    Promise.all([refresh(), api.scriptDrafts().then(({ items }) => setDrafts(items)), api.voices().then(({ voices: items }) =>
       setVoices(items.filter((item) => item.builds?.some((build) => build.prompt))))])
       .catch((failure) => setError(failure.message))
   }, [])
+
+  const saveDraft = async (copy = false) => {
+    setBusy('draft')
+    setError('')
+    setNotice('')
+    try {
+      const saved = await api.saveScriptDraft({ id: copy ? null : draftId || null, title, text, voice,
+        version: preview?.version ?? (version ? Number(version) : null), assets: chosen,
+        scene_lines: Object.fromEntries(chosen.filter((id) => id in sceneLines).map((id) => [id, sceneLines[id]])),
+        timing, section, preview_id: preview?.id ?? null })
+      setDrafts((previous) => [saved, ...previous.filter((draft) => draft.id !== saved.id)])
+      setDraftId(saved.id)
+      setDraftToOpen(saved.id)
+      setNotice('Draft saved on this device.')
+    } catch (failure) {
+      setError(failure.message)
+    } finally {
+      setBusy('')
+    }
+  }
+  const openDraft = async () => {
+    const draft = drafts.find((item) => item.id === draftToOpen)
+    if (!draft) return
+    setBusy('draft')
+    setError('')
+    setNotice('')
+    let savedPreview = null
+    if (draft.preview_id) {
+      try {
+        savedPreview = await api.scriptNarration(draft.preview_id)
+      } catch {
+        setNotice('Draft opened. Generate a fresh narration preview to use saved scene timing.')
+      }
+    }
+    setDraftId(draft.id)
+    setTitle(draft.title)
+    setText(draft.text)
+    setVoice(draft.voice)
+    setVersion(draft.version == null ? '' : String(draft.version))
+    setChosen(draft.assets)
+    setSceneLines(draft.scene_lines)
+    setTiming(draft.timing)
+    setPreview(savedPreview)
+    setPlan(null)
+    setAsset('')
+    setResult(null)
+    setBusy('')
+    moveToSection(draft.section)
+  }
+  const newDraft = () => {
+    setDraftId('')
+    setDraftToOpen('')
+    setTitle('')
+    setText('')
+    setVoice('')
+    setVersion('')
+    setChosen([])
+    setAsset('')
+    setResult(null)
+    setError('')
+    setNotice('')
+    invalidatePreview()
+    moveToSection('script')
+  }
 
   const selectedVoice = voices.find((item) => item.id === voice)
   const assetName = (id) => catalog?.assets.find((item) => item.id === id)?.name ?? 'Unavailable footage'
@@ -122,6 +190,21 @@ export default function ScriptShort() {
     <h2>Script → Short</h2>
     <p className="muted">Write your narration, choose a saved voice, and arrange local B-roll for a captioned 9:16 video.</p>
     {error && <p className="banner error" role="alert">{error}</p>}
+    <div className="card row-btns">
+      <label>Saved drafts <select value={draftToOpen} disabled={!!busy} onChange={(event) => setDraftToOpen(event.target.value)}>
+        <option value="">Choose a draft</option>
+        {drafts.map((draft) => <option key={draft.id} value={draft.id}>
+          {draft.title || draft.text.slice(0, 40) || 'Untitled draft'}
+        </option>)}
+      </select></label>
+      <button type="button" className="btn ghost" disabled={!!busy || !draftToOpen} onClick={openDraft}>Open draft</button>
+      <button type="button" className="btn" disabled={!!busy || (!title.trim() && !text.trim() && !chosen.length)}
+        onClick={() => saveDraft()}>Save draft</button>
+      {draftId && <button type="button" className="btn ghost" disabled={!!busy} onClick={() => saveDraft(true)}>Save a copy</button>}
+      {draftId && <button type="button" className="btn ghost" disabled={!!busy}
+        onClick={() => window.confirm('Start a blank draft? Save changes you want to keep first.') && newDraft()}>New draft</button>}
+      {notice && <p className="muted small" role="status">{notice}</p>}
+    </div>
     <form className="card form big" onSubmit={generate}>
       <div ref={steps} className="script-steps" role="group" aria-label="Script short steps">
         {[['script', 'Script & voice'], ['footage', 'Footage'], ['export', 'Preview & export']].map(([key, label]) => (

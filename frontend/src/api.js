@@ -55,6 +55,9 @@ export const api = {
     req('/script-shorts/broll-plan', json('POST', { preview_id: previewId, assets })),
   reviewScriptTake: (id, line) =>
     req(`/script-shorts/narration/${id}/lines/${line}/suggest`, { method: 'POST' }),
+  scriptDrafts: () => req('/script-shorts/drafts'),
+  saveScriptDraft: (body) => req('/script-shorts/drafts', json('POST', body)),
+  scriptNarration: (id) => req(`/script-shorts/narration/${id}`),
   previewScriptNarration: (body) => req('/script-shorts/narration', json('POST', body)),
   scriptNarrationAudio: (id) => `/api/script-shorts/narration/${id}/audio`,
   createScriptShort: (body) => req('/script-shorts', json('POST', body)),

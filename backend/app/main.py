@@ -61,6 +61,7 @@ from .models import (
     ScriptBrollPlanRequest,
     ScriptChoice,
     ScriptNarrationRequest,
+    ScriptShortDraft,
     ScriptShortRequest,
     Segment,
     SentencePickup,
@@ -417,6 +418,21 @@ def create_app(pipeline=None, start_worker: bool = True, llm_factory=OllamaClien
     def list_script_shorts() -> dict:
         return {"items": script_short.recent(), "assets": script_short.assets(),
                 "max_seconds": script_short.MAX_SECONDS}
+
+    @app.get("/api/script-shorts/drafts")
+    def list_script_drafts() -> dict:
+        return {"items": script_short.drafts()}
+
+    @app.post("/api/script-shorts/drafts")
+    def save_script_draft(body: ScriptShortDraft) -> dict:
+        return script_short.save_draft(body)
+
+    @app.get("/api/script-shorts/narration/{ident}")
+    def get_script_preview(ident: str) -> dict:
+        try:
+            return script_short.preview_view(ident)
+        except KeyError:
+            raise HTTPException(404, "Narration preview not found") from None
 
     @app.post("/api/script-shorts/narration")
     def preview_script_narration(body: ScriptNarrationRequest) -> dict:

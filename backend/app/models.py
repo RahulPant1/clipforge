@@ -611,6 +611,19 @@ class ScriptShortRequest(ScriptNarrationRequest):
     scene_starts: list[int] | None = Field(None, max_length=6)
 
 
+class ScriptShortDraft(BaseModel):
+    id: str | None = Field(None, pattern=r"^[0-9a-f]{10}$")
+    title: str = Field("", max_length=120)
+    text: str = Field("", max_length=1200)
+    voice: str = Field("", max_length=40)
+    version: int | None = Field(None, ge=1)
+    assets: list[str] = Field(default_factory=list, max_length=6)
+    scene_lines: dict[str, int] = Field(default_factory=dict, max_length=6)
+    timing: Literal["equal", "lines"] = "equal"
+    section: Literal["script", "footage", "export"] = "script"
+    preview_id: str | None = Field(None, pattern=r"^[0-9a-f]{32}$")
+
+
 class DubBatchDraft(BaseModel):
     clips: list[int] = Field(min_length=1, max_length=30)
     voice: str = Field(min_length=1, max_length=40)

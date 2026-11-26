@@ -453,6 +453,7 @@ publish: PATCH post {status, url}: posted_at set on → posted (cleared when it 
       Render a captioned 720×1280 MP4 plus SRT, with up to 60 seconds of generated narration.
 - [x] **Script → Short narration preview and scene timing:** listen before rendering and reuse the exact take.
       Optionally start each subsequent B-roll scene at a selected script line.
+- [x] **Script → Short drafts:** save and reopen scripts, voices, scenes, and narration previews locally.
 - [x] **Gemma B-roll plans for Script → Short:** describe shortlisted footage from cached thumbnails and
       propose a reviewable scene sequence tied to narration line timings.
 - [x] **Generated narration checks:** compare expected spoken text with raw Whisper output, flag likely

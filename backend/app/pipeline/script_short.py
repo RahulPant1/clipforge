@@ -14,7 +14,8 @@ from tempfile import TemporaryDirectory
 from textwrap import wrap
 
 from ..config import settings
-from ..models import DubLine, DubScript, ScriptNarrationRequest, ScriptShortRequest, Word
+from ..files import atomic_output
+from ..models import DubLine, DubScript, ScriptNarrationRequest, ScriptShortDraft, ScriptShortRequest, Word
 from . import broll, captions, dub, narration_review, tts
 from .fonts import font_for, fontsdir_option
 from .presets import get_preset
@@ -50,6 +51,26 @@ def recent() -> list[dict]:
         except (OSError, ValueError):
             continue
     return sorted(result, key=lambda item: item["created"], reverse=True)
+
+
+def drafts() -> list[dict]:
+    result = []
+    for path in (root() / "_drafts").glob("*.json"):
+        try:
+            result.append(json.loads(path.read_text(encoding="utf-8")))
+        except (OSError, ValueError):
+            continue
+    return sorted(result, key=lambda item: item["updated"], reverse=True)
+
+
+def save_draft(request: ScriptShortDraft) -> dict:
+    folder = root() / "_drafts"
+    folder.mkdir(parents=True, exist_ok=True)
+    ident = request.id or uuid.uuid4().hex[:10]
+    record = {**request.model_dump(), "id": ident, "updated": time.time()}
+    with atomic_output(folder / f"{ident}.json") as staged:
+        staged.write_text(json.dumps(record, ensure_ascii=False), encoding="utf-8")
+    return record
 
 
 def assets() -> list[dict[str, str]]:
@@ -137,8 +158,9 @@ def _publish_preview(work: Path, ident: str, metadata: dict) -> None:
     (work / "voice.wav").replace(ready / "voice.wav")
     (ready / "narration.json").write_text(json.dumps(metadata, ensure_ascii=False), encoding="utf-8")
     ready.replace(saved)
+    pinned = {draft.get("preview_id") for draft in drafts()}
     previous = sorted((p for p in directory.iterdir() if p.is_dir() and _PREVIEW_ID.fullmatch(p.name)
-                       and p != saved), key=lambda p: p.stat().st_mtime, reverse=True)
+                       and p != saved and p.name not in pinned), key=lambda p: p.stat().st_mtime, reverse=True)
     for old in previous[_MAX_PREVIEWS - 1:]:
         shutil.rmtree(old)
 

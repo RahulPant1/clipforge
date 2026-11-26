@@ -88,6 +88,8 @@ YouTube URL / file
   change at a specific line of the preview. With footage selected, use **Suggest B-roll plan** to review a
   Gemma-proposed sequence. Gemma describes only your shortlist and reuses descriptions of unchanged footage.
   The workspace groups these controls into **Script & voice**, **Footage**, and **Preview & export**.
+  **Save draft** keeps your script, voice, footage order, scene timing, and any current preview in local
+  ClipForge data.
 - **Audio and export:** after approving clips, choose **Keep original audio** or **Use a saved voice**.
   With a saved voice, select the shorts and voice version, then prepare scripts
   from the transcript or request a narration rewrite, then review the wording and preview the first line over

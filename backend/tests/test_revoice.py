@@ -247,6 +247,15 @@ def test_script_short_renders_ordered_broll_and_captions(tmp_path, monkeypatch, 
         script_short.create(request.model_copy(update={"text": "Changed wording."}))
     with pytest.raises(ValueError, match="different script line"):
         script_short.create(request.model_copy(update={"scene_starts": [0, 0]}))
+    from app.models import ScriptShortDraft
+
+    draft = script_short.save_draft(ScriptShortDraft(
+        title=request.title, text=request.text, voice=request.voice, version=1, assets=ordered,
+        scene_lines={ordered[1]: 2}, timing="lines", section="export", preview_id=preview["id"],
+    ))
+    assert script_short.drafts() == [draft]
+    assert script_short.preview_view(draft["preview_id"]) == preview
+
     result = script_short.create(request)
     assert result["duration"] == 2.4 and result["version"] == 1
     assert fakes == [["Capture this example.", "Explain this step.", "Now show the result."]]

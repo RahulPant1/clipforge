@@ -109,7 +109,7 @@ function HookVariants({ job, clip, busy, act, onUse }) {
   )
 }
 
-function Candidate({ job, clip, others, transcript, wave, total, busy, act, reloadTranscript }) {
+function Candidate({ job, clip, others, transcript, wave, total, busy, act, reloadTranscript, sourcePlayer: video, playhead, seekSource, setPreviewRange }) {
   const [fixing, setFixing] = useState(false)
   const [title, setTitle] = useState(clip.title)
   const [hook, setHook] = useState(clip.hook)
@@ -125,8 +125,6 @@ function Candidate({ job, clip, others, transcript, wave, total, busy, act, relo
   // Timing being edited (drag / keys) — shown at once, saved on release or after a pause
   const [draft, setDraft] = useState(null) // [start, end] | null
   const [edge, setEdge] = useState('end') // the edge J/K and the ± buttons move
-  const [playhead, setPlayhead] = useState(null)
-  const video = useRef(null)
   const timer = useRef(null)
   const [start, end] = draft || [clip.start, clip.end]
   useEffect(() => setDraft(null), [clip.start, clip.end]) // saved (or changed elsewhere): show the real clip
@@ -154,10 +152,9 @@ function Candidate({ job, clip, others, transcript, wave, total, busy, act, relo
     () => (transcript || []).flatMap((x) => [x.start, x.end]).filter((t) => t > win[0] && t < win[1]),
     [transcript, win],
   )
-  const seek = (t) => {
-    if (!video.current) return
-    video.current.currentTime = t
-    setPlayhead(t)
+  const seek = (t, play = false) => {
+    setPreviewRange({ end, removed: clip.removed })
+    seekSource(t, play)
   }
 
   const onKey = (e) => {
@@ -173,7 +170,7 @@ function Candidate({ job, clip, others, transcript, wave, total, busy, act, relo
       ']': () => setEdge('end'),
       i: () => playhead != null && later(...moveEdge('start', playhead, start, end, total)),
       o: () => playhead != null && later(...moveEdge('end', playhead, start, end, total)),
-      ' ': () => v && (v.paused ? v.play() : v.pause()),
+      ' ': () => v && (v.paused ? seek(playhead >= start && playhead < end ? playhead : start, true) : v.pause()),
     }
     if (actions[k]) {
       e.preventDefault()
@@ -182,19 +179,10 @@ function Candidate({ job, clip, others, transcript, wave, total, busy, act, relo
   }
 
   const dur = end - start
-  const src = `${api.fileUrl(job.id, 'source.mp4')}#t=${clip.start.toFixed(2)},${clip.end.toFixed(2)}`
 
   return (
     <div className={`cand-card ${clip.approved ? 'is-approved' : ''}`} tabIndex={0} onKeyDown={onKey}>
-      <video key={src} ref={video} src={src} controls preload="metadata"
-             onTimeUpdate={(e) => {
-               const v = e.currentTarget
-               // preview the cut: jump over struck words while playing (timeupdate is ~4/s, so roughly)
-               const skip = !v.paused && (clip.removed || []).find(([a, b]) => v.currentTime >= a && v.currentTime < b)
-               if (skip) v.currentTime = skip[1]
-               setPlayhead(v.currentTime)
-             }}
-             onSeeked={(e) => setPlayhead(e.currentTarget.currentTime)} />
+      <button type="button" className="btn ghost" onClick={() => seek(start, true)}>Preview {clip.title}</button>
       <div className="cand-body">
         <div className="cand-head">
           <span className="score" title="Gemma virality score">{clip.score}/10</span>
@@ -343,7 +331,7 @@ function Validation({ job, v, busy, act }) {
   )
 }
 
-export default function PickStep({ job, busy, act, go, transcript, reloadTranscript }) {
+export default function PickStep({ job, busy, act, go, transcript, reloadTranscript, sourcePlayer, playhead, seekSource, setPreviewRange }) {
   const [filter, setFilter] = useState('all')
   const [audioChoice, setAudioChoice] = useState(null)
   const [wave, setWave] = useState(null)
@@ -401,7 +389,8 @@ export default function PickStep({ job, busy, act, go, transcript, reloadTranscr
         {shown.map((c) => (
           <Candidate key={c.index} job={job} clip={c} transcript={transcript} wave={wave} total={total}
                      others={job.clips.filter((o) => o.index !== c.index).map((o) => [o.start, o.end])}
-                     busy={busy} act={act} reloadTranscript={reloadTranscript} />
+                     busy={busy} act={act} reloadTranscript={reloadTranscript}
+                     sourcePlayer={sourcePlayer} playhead={playhead} seekSource={seekSource} setPreviewRange={setPreviewRange} />
         ))}
       </div>
 

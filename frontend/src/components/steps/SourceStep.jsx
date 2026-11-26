@@ -61,7 +61,6 @@ export default function SourceStep({ job, go, act, busy }) {
           {job.whisper_model && <> Whisper <b>{job.whisper_model === 'large-v3-turbo' ? 'Turbo' : 'Small'}</b> ·</>}
           started {new Date(job.created_at).toLocaleString()}
         </p>
-        {prepared && <video className="srcvid" src={api.fileUrl(job.id, 'source.mp4')} controls preload="metadata" />}
       </div>
 
       <div className="card">

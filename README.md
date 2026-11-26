@@ -80,17 +80,57 @@ YouTube URL / file
   sentence's audio window. To combine fixes, use **Select sentences for pickups** and export up to 20
   selected sentences together. Each export starts from the original. If a replacement needs too much
   speedup, shorten the wording and try again.
-- **Script → Short:** choose **Create → Make a short from a script**, paste a script, choose a saved voice version,
+- **Script → Short:** choose **New project → Make a short from a script**, paste a script, choose a saved voice version,
   and arrange up to six MP4s from your local B-roll library. Footage plays in order for equal parts of the
   narration and loops when needed. The export is a captioned 720×1280 MP4 with a separate SRT, up to 60
   seconds of narration. **Preview narration** lets you listen before rendering and reuses the same audio
   and timing in the export. Under **Scene timing**, choose **Start scenes at script lines** to place each visual
   change at a specific line of the preview. With footage selected, use **Suggest B-roll plan** to review a
   Gemma-proposed sequence. Gemma describes only your shortlist and reuses descriptions of unchanged footage.
-  The workspace groups these controls into **Script & voice**, **Footage**, and **Preview & export**.
+  The desktop workspace keeps the portrait preview beside **Script**, **Storyboard**, and **Finish**.
+  Open **Caption styling** in **Finish** to use the same font and colour presets as
+  the Shorts editor, choose animated or simple captions, and set their position. Turning off burned-in
+  captions still produces a separate SRT. Animated captions can use the Brand Kit accent.
+  In **Finish → Background music**, select and audition a track from the shared music folder or choose
+  **Suggest from script** to get an editable Gemma prompt. **Generate instrumental** uses the shared local
+  ACE-Step launcher, defaults to 20 seconds before you have a narration preview, and saves its WAV in the
+  same music library for other projects. Export loops, fades and ducks the track under the voice.
+  The default launcher is `~/.local/share/ace-step/ace-step`. Set `ACE_STEP_LAUNCHER` in `backend/.env`
+  if your compatible launcher is elsewhere.
   **Save draft** keeps your script, voice, footage order, scene timing, and any current preview in local
   ClipForge data. In **Listen by script line**, **Retake** regenerates just that line with the same wording.
   Later captions and line-based cuts follow the new timing. Save again to keep the new take with your draft.
+  To start with a topic, open **Draft a script from a topic**, give Gemma a brief, then edit the script and
+  choose a voice. Under **Storyboard → Generate a standalone image**, use a prompt to preview, regenerate and save
+  individual images as B-roll, or choose **Plan images from script** to draft a sequence of up to six scenes.
+  Select a storyboard thumbnail to edit its prompt and review its image. Choose **Use storyboard and continue**
+  to prepare the narration and open **Finish**, then choose **Export short**. The optional pan and zoom applies
+  to the saved footage. Saved drafts also keep the storyboard and its generated previews.
+  In **Storyboard → Theme library**, tag generated images, local videos, and selected music with a theme and
+  description. **Find matches for this story** uses Gemma to propose reusable assets and explain its choices.
+  Apply the suggestions to empty scenes, then generate any remaining images or use the suggested music prompt
+  in **Finish**. For visual continuity, select an approved scene image and choose **Use as visual reference**.
+  Gemma describes the actual image, and future scene prompts include that editable description. Each image
+  can use a still frame, slow push, side pan, or the default pan and zoom.
+  In **Finish → Animated graphics**, prepare narration timing and add an arrow, label, or highlight.
+  Choose the line that cues it, its position, and how long it stays on screen. The graphic follows the
+  timing of the current narration take and is burned into the exported video.
+  Local images use a separate ComfyUI install. By default ClipForge looks in
+  `~/.local/share/clipforge-comfy-benchmark` for `ComfyUI/main.py`, `venv/bin/python` with ComfyUI and
+  CUDA PyTorch installed, and `ComfyUI/models/checkpoints/sdxl_lightning_4step.safetensors`.
+  Set `COMFYUI_DIR` in `backend/.env` for a different install with the same layout. ClipForge starts its own
+  offline, loopback-only ComfyUI process and exits it before releasing the GPU to another ClipForge job.
+  Generating storyboard images saves the draft and starts a background job. You can close the browser tab
+  and reopen the draft from **Projects → Continue working**. Each scene shows its status, and **Retry failed
+  scenes** keeps completed images. ClipForge must stay running for the job to finish. On a GPU-memory error
+  it also tries a lower-memory mode. The current workspace is
+  recovered when reopening Script → Short in the same browser, including your script, selected voice,
+  storyboard images and narration preview. Use **Save draft** to keep a named copy in ClipForge.
+  **Narration voice** lists your trained voices and, when installed, five local English Kokoro presets.
+  Kokoro synthesis runs on the CPU. To enable it on another machine, install
+  `kokoro-onnx==0.6.1` in a `venv` under `~/.local/share/clipforge-kokoro` and place the
+  [Kokoro v1.0 ONNX model and voice bank](https://github.com/thewh1teagle/kokoro-onnx/releases/tag/model-files-v1.0)
+  (`kokoro-v1.0.onnx` and `voices-v1.0.bin`) next to that `venv`. Set `KOKORO_DIR` to use a different directory.
 - **Audio and export:** after approving clips, choose **Keep original audio** or **Use a saved voice**.
   With a saved voice, select the shorts and voice version, then prepare scripts
   from the transcript or request a narration rewrite, then review the wording and preview the first line over

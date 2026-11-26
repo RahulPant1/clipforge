@@ -1,11 +1,11 @@
-async function req(path, opts = {}) {
+async function req(path, opts = {}, read = (response) => response.json()) {
   const r = await fetch(`/api${path}`, opts)
   if (!r.ok) {
     const body = await r.json().catch(() => ({}))
     const detail = Array.isArray(body.detail) ? body.detail.map((d) => d.msg).join(', ') : body.detail
     throw new Error(detail || `${r.status} ${r.statusText}`)
   }
-  return r.status === 204 ? null : r.json()
+  return r.status === 204 ? null : read(r)
 }
 
 const json = (method, body) => ({
@@ -51,6 +51,22 @@ export const api = {
     req(`/voices/${id}/compare`, json('POST', { text, versions, language: language || '' })),
   voiceAudio: (id, kind, name) => `/api/voices/${id}/audio/${kind}/${name}`,
   scriptShorts: () => req('/script-shorts'),
+  writeScript: (brief) => req('/script-shorts/write', json('POST', { brief })),
+  previewScriptMix: (previewId, music, gain) => req('/script-shorts/music/preview',
+    json('POST', { preview_id: previewId, music, music_gain_db: gain }), (response) => response.blob()),
+  suggestScriptMusic: (text) => req('/script-shorts/music/suggest', json('POST', { text })),
+  generateScriptMusic: (prompt, duration) => req('/script-shorts/music', json('POST', { prompt, duration })),
+  musicTrack: (name) => `/api/sounds/music/${encodeURIComponent(name)}`,
+  themeLibrary: () => req('/script-shorts/themes'),
+  saveThemeAsset: (asset) => req('/script-shorts/themes', json('POST', asset)),
+  matchTheme: (story) => req('/script-shorts/themes/match', json('POST', story)),
+  describeVisualReference: (id) => req(`/script-shorts/images/${id}/reference`, { method: 'POST' }),
+  scriptStoryboard: (text, count) => req('/script-shorts/storyboard', json('POST', { text, count })),
+  generateScriptImages: (images) => req('/script-shorts/images', json('POST', { images })),
+  storyboardImageJob: (id) => req(`/script-shorts/drafts/${id}/image-job`),
+  queueStoryboardImages: (id, indexes) => req(`/script-shorts/drafts/${id}/image-job`, json('POST', indexes)),
+  scriptImage: (id) => `/api/script-shorts/images/${id}`,
+  saveScriptImage: (id, motion) => req(`/script-shorts/images/${id}/broll`, json('POST', { motion })),
   planScriptBroll: (previewId, assets) =>
     req('/script-shorts/broll-plan', json('POST', { preview_id: previewId, assets })),
   reviewScriptTake: (id, line) =>

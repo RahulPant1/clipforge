@@ -172,7 +172,8 @@ def _tempo(tempo: float) -> list[str]:
 
 def audio_graph(af: list[str], music_input: int | None, sfx_input: int | None, duration: float,
                 voice_src: str = "0:a", ambience_input: int | None = None, stretch: float = 1.0,
-                ambience_timing: list[tuple[float, float]] | None = None, ambience_level: float = 0.18) -> str:
+                ambience_timing: list[tuple[float, float]] | None = None, ambience_level: float = 0.18,
+                music_gain_db: float = 0) -> str:
     """filter_complex for audio → [aout]. af = the voice chain (cuts, crossfades, end-card pad) as for -af.
     voice_src: the speech stream — the source's audio, or a Replace-voice dub track input ("3:a")."""
     voice = ",".join(af) if af else "anull"
@@ -184,7 +185,7 @@ def audio_graph(af: list[str], music_input: int | None, sfx_input: int | None, d
         parts.append("[voice]asplit=2[vo][key]")
         parts.append(f"[{music_input}:a]{fmt},atrim=0:{duration:.3f},asetpts=PTS-STARTPTS,"
                      f"loudnorm=I={settings.music_lufs}:TP=-3:LRA=11,{fmt},afade=t=in:d=0.6,"
-                     f"afade=t=out:st={max(duration - fade, 0):.3f}:d={fade:.3f}[mus]")
+                     f"afade=t=out:st={max(duration - fade, 0):.3f}:d={fade:.3f},volume={music_gain_db:g}dB[mus]")
         parts.append("[mus][key]sidechaincompress=threshold=0.03:ratio=3:attack=30:release=450:makeup=1[duck]")
         mix.append("[duck]")
     else:

@@ -9,14 +9,23 @@ import subprocess
 import time
 import uuid
 import wave
+from dataclasses import replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from textwrap import wrap
 
 from ..config import settings
 from ..files import atomic_output
-from ..models import DubLine, DubScript, ScriptNarrationRequest, ScriptShortDraft, ScriptShortRequest, Word
-from . import broll, captions, dub, narration_review, tts
+from ..models import (
+    DubLine,
+    DubScript,
+    ScriptCaptionOptions,
+    ScriptNarrationRequest,
+    ScriptShortDraft,
+    ScriptShortRequest,
+    Word,
+)
+from . import brand, broll, captions, dub, kokoro, narration_review, script_graphics, sfx, tts
 from .fonts import font_for, fontsdir_option
 from .presets import get_preset
 
@@ -91,7 +100,23 @@ def preview_file(ident: str) -> Path:
     return path
 
 
-def _narration_settings(request: ScriptNarrationRequest) -> tuple[str, int, list[str], list[str]]:
+def script_lines(text: str) -> list[str]:
+    paragraphs = re.split(r"(?<=[.!?。！？।])\s+|\n+", text.strip())
+    return [line for paragraph in paragraphs for line in wrap(paragraph, 240, break_long_words=False) if line.strip()]
+
+
+def _narration_settings(request: ScriptNarrationRequest) -> tuple[str, int | None, list[str], list[str]]:
+    if kokoro.is_preset(request.voice):
+        lines = script_lines(request.text)
+        if not lines:
+            raise ValueError("Enter a script to narrate")
+        dictionary = dub.pronunciation_dictionary()
+        spoken = [dub.spoken_text(
+            DubScript(clip=0), DubLine(i=index, start=0, end=0, original=line, text=line), dictionary,
+        ) for index, line in enumerate(lines)]
+        payload = json.dumps([request.voice, kokoro.fingerprint(request.voice), lines, spoken], ensure_ascii=False)
+        return hashlib.sha256(payload.encode()).hexdigest()[:32], None, lines, spoken
+
     voice = tts.load(request.voice)
     build = tts.build_for(voice, request.version)
     if not build:
@@ -99,8 +124,7 @@ def _narration_settings(request: ScriptNarrationRequest) -> tuple[str, int, list
     version = build["version"]
     prompt = tts.prompt_for(voice, version)
     script = DubScript(clip=0, voice=request.voice, version=version)
-    paragraphs = re.split(r"(?<=[.!?。！？।])\s+|\n+", request.text.strip())
-    lines = [line for paragraph in paragraphs for line in wrap(paragraph, 240, break_long_words=False) if line.strip()]
+    lines = script_lines(request.text)
     if not lines:
         raise ValueError("Enter a script to narrate")
     dictionary = dub.pronunciation_dictionary()
@@ -115,10 +139,18 @@ def _narration_settings(request: ScriptNarrationRequest) -> tuple[str, int, list
     return ident, version, lines, spoken
 
 
+def _speak(request: ScriptNarrationRequest, lines: list[str], work: Path, names: list[str],
+           version: int | None) -> None:
+    if kokoro.is_preset(request.voice):
+        kokoro.speak(request.voice, lines, work, names)
+    else:
+        tts.speak(request.voice, lines, out_dir=work, names=names, version=version)
+
+
 def _prepare_narration(work: Path, request: ScriptNarrationRequest,
-                       version: int, lines: list[str], spoken: list[str]) -> dict:
+                       version: int | None, lines: list[str], spoken: list[str]) -> dict:
     names = [f"voice-{i}.wav" for i in range(len(lines))]
-    tts.speak(request.voice, spoken, out_dir=work, names=names, version=version)
+    _speak(request, spoken, work, names, version)
     takes = [work / name for name in names]
     timing = _join_voice(takes, work / "voice.wav")
     duration = timing[-1][0] + timing[-1][1]
@@ -192,7 +224,7 @@ def retake(ident: str, index: int, request: ScriptNarrationRequest) -> dict:
     updated = uuid.uuid4().hex
     with TemporaryDirectory(prefix=".retake-", dir=_preview_root()) as staging:
         work = Path(staging)
-        tts.speak(request.voice, [spoken[index]], out_dir=work, names=["take.wav"], version=version)
+        _speak(request, [spoken[index]], work, ["take.wav"], version)
         take = work / "take.wav"
         seconds = _splice_voice(preview_file(ident), take, work / "voice.wav", start, end)
         delta = seconds - (end - start)
@@ -249,10 +281,13 @@ def create(request: ScriptShortRequest) -> dict:
     library = broll.library_assets()
     if any(ident not in library for ident in request.assets):
         raise ValueError("One of the selected B-roll files is no longer available")
+    music_track = sfx.music_path(request.music)
+    if request.music and music_track is None:
+        raise ValueError("The selected music track is no longer available")
     preview_id, version, lines, spoken = _narration_settings(request)
     if request.scene_starts is not None and not request.preview_id:
         raise ValueError("Generate a narration preview before assigning scene timing")
-    folder = root()
+    folder = root().resolve()  # FFmpeg runs from the staging directory.
     folder.mkdir(parents=True, exist_ok=True)
     ident = uuid.uuid4().hex[:10]
     with TemporaryDirectory(prefix=".script-short-", dir=folder) as staging:
@@ -275,9 +310,12 @@ def create(request: ScriptShortRequest) -> dict:
         duration = narration["duration"]
         frames = _scene_frames(narration, len(request.assets), request.scene_starts)
         words = [Word.model_validate(word) for word in narration["words"]]
-        _render(work, output, [library[key][0] for key in request.assets], words, frames)
+        graphics = script_graphics.make_ass(request.graphics, narration) if request.graphics else None
+        _render(work, output, [library[key][0] for key in request.assets], words, frames, request,
+                music_track, duration, graphics)
         metadata = {"id": ident, "title": request.title, "duration": round(duration, 2), "created": time.time(),
-                    "voice": request.voice, "version": version}
+                    "voice": request.voice, "version": version, "music": request.music,
+                    "music_gain_db": request.music_gain_db}
         (output / "short.json").write_text(json.dumps(metadata, ensure_ascii=False), encoding="utf-8")
         output.replace(folder / ident)
     return metadata
@@ -315,7 +353,25 @@ def _ffmpeg(work: Path, arguments: list[str]) -> None:
         raise RuntimeError(f"Could not render this short: {result.stderr.decode(errors='replace')[-240:].strip()}")
 
 
-def _render(work: Path, output: Path, visuals: list[Path], words: list[Word], boundaries: list[int]) -> None:
+def preview_mix(ident: str, music_name: str, gain: float) -> bytes:
+    narration = _preview_metadata(ident)
+    track = sfx.music_path(music_name)
+    if track is None:
+        raise ValueError("The selected music track is no longer available")
+    duration = narration["duration"]
+    with TemporaryDirectory(prefix="clipforge-mix-") as directory:
+        work = Path(directory)
+        _ffmpeg(work, [
+            "-i", str(preview_file(ident).resolve()), "-stream_loop", "-1", "-i", str(track.resolve()),
+            "-filter_complex", sfx.audio_graph([], 1, None, duration, music_gain_db=gain),
+            "-map", "[aout]", "-t", str(min(duration, 10)), "-c:a", "aac", "-b:a", "160k", "preview.m4a",
+        ])
+        return (work / "preview.m4a").read_bytes()
+
+
+def _render(work: Path, output: Path, visuals: list[Path], words: list[Word], boundaries: list[int],
+            options: ScriptCaptionOptions, music_track: Path | None, duration: float,
+            graphics: tuple[str, str] | None) -> None:
     names = []
     for index, asset in enumerate(visuals):
         frames = boundaries[index + 1] - boundaries[index]
@@ -328,14 +384,29 @@ def _render(work: Path, output: Path, visuals: list[Path], words: list[Word], bo
         ])
         names.append(name)
     (work / "scenes.txt").write_text("".join(f"file '{name}'\n" for name in names), encoding="ascii")
-    preset = get_preset()
-    font = font_for("".join(word.word for word in words), preset.font)
-    (work / "captions.ass").write_text(captions.build_ass(words, [], preset=preset, font=font, animate=False),
-                                       encoding="utf-8")
+    filters = []
+    if options.caption_style != "none":
+        preset = get_preset(options.caption_preset)
+        kit = brand.load()
+        if kit.enabled and kit.accent and kit.accent_captions:
+            preset = replace(preset, active=brand.ass_colour(kit.accent))
+        font = font_for("".join(word.word for word in words), preset.font)
+        ass = captions.build_ass(words, [], preset=preset, font=font, position=options.caption_position,
+                                 animate=options.caption_style == "karaoke")
+        (work / "captions.ass").write_text(ass, encoding="utf-8")
+        filters.append(f"ass=captions.ass{fontsdir_option(font)}")
+    if graphics:
+        ass, font = graphics
+        (work / "graphics.ass").write_text(ass, encoding="utf-8")
+        filters.insert(0, f"ass=graphics.ass{fontsdir_option(font)}")
     (output / "captions.srt").write_text(captions.build_srt(words), encoding="utf-8")
+    music_input = ["-stream_loop", "-1", "-i", str(music_track.resolve())] if music_track else []
+    audio = (["-filter_complex", sfx.audio_graph([], 2, None, duration, voice_src="1:a",
+                                                            music_gain_db=options.music_gain_db), "-map", "[aout]"]
+             if music_track else ["-map", "1:a:0"])
     _ffmpeg(work, [
-        "-f", "concat", "-safe", "1", "-i", "scenes.txt", "-i", "voice.wav",
-        "-map", "0:v:0", "-map", "1:a:0", "-vf", f"ass=captions.ass{fontsdir_option(font)}",
+        "-f", "concat", "-safe", "1", "-i", "scenes.txt", "-i", "voice.wav", *music_input,
+        "-map", "0:v:0", *audio, *(["-vf", ",".join(filters)] if filters else []),
         "-c:v", "libx264", "-preset", "veryfast", "-threads:v", "2", "-pix_fmt", "yuv420p",
         "-c:a", "aac", "-b:a", "160k", "-movflags", "+faststart", str(output / "short.mp4"),
     ])

@@ -1,57 +1,12 @@
 import { useEffect, useState } from 'react'
 import { api } from '../../api.js'
+import { LookChip, Seg } from '../CaptionControls.jsx'
 import CropEditor from '../CropEditor.jsx'
 import BrollEditor from '../BrollEditor.jsx'
 import DubEditor from '../DubEditor.jsx'
 import ExportPreview from '../ExportPreview.jsx'
 import InsertEditor from '../InsertEditor.jsx'
 import { FEED, feedFile, fmt } from '../../util.js'
-
-function Seg({ label, value, options, onChange, disabled }) {
-  return (
-    <div className="opt">
-      <span className="muted">{label}</span>
-      <div className="seg sm">
-        {options.map(([v, l]) => (
-          <button key={String(v)} disabled={disabled} className={value === v ? 'on' : ''} onClick={() => onChange(v)}>
-            {l}
-          </button>
-        ))}
-      </div>
-    </div>
-  )
-}
-
-// ASS &HAABBGGRR (BGR, AA 00 = opaque) -> CSS rgba
-function assColor(c) {
-  const h = (c || '&H00FFFFFF').replace('&H', '').padStart(8, '0')
-  const [a, b, g, r] = [0, 2, 4, 6].map((i) => parseInt(h.slice(i, i + 2), 16))
-  return `rgba(${r},${g},${b},${((255 - a) / 255).toFixed(2)})`
-}
-
-function LookChip({ p, on, disabled, onPick }) {
-  const tx = (w) => (p.uppercase ? w.toUpperCase() : w)
-  const ol = assColor(p.outline_color)
-  const w = Math.max(1, Math.min(2, p.outline / 4))
-  const sample = {
-    fontFamily: `"${p.font}", sans-serif`,
-    fontWeight: p.bold ? 700 : 400,
-    color: assColor(p.text),
-    ...(p.box
-      ? { background: ol }
-      : { textShadow: `${w}px ${w}px 0 ${ol}, -${w}px ${w}px 0 ${ol}, ${w}px -${w}px 0 ${ol}, -${w}px -${w}px 0 ${ol}`
-          + (p.blur ? `, 0 0 ${p.blur * 2}px ${ol}` : '') }),
-  }
-  return (
-    <button className={`look ${on ? 'on' : ''}`} disabled={disabled} onClick={onPick} title={`${p.description} · ${p.font}`}>
-      <span className="sample" style={sample}>
-        {tx('Make')} <span style={{ color: assColor(p.active) }}>{tx('it')}</span>{' '}
-        <span style={{ color: assColor(p.keyword) }}>{tx('pop')}</span>
-      </span>
-      <small>{p.label}</small>
-    </button>
-  )
-}
 
 // D: who the crop follows — faces found in the clip, click one (Auto = the biggest / both in 2-up and Talker)
 function FollowPicker({ job, clip, busy, act, o }) {
@@ -190,6 +145,7 @@ function ShortCard({ job, clip, busy, act, presets, kit, sounds }) {
   const setOpt = (k, v) => act(() => api.editClip(job.id, clip.index, { options: { ...o, [k]: v } })).catch(() => {})
   const formats = (clip.formats || []).filter((a) => FEED[a])
   const [view, setView] = useState('9:16')
+  const [inspector, setInspector] = useState('Picture')
   const [cropOpen, setCropOpen] = useState(false)
   const shown = view !== '9:16' && formats.includes(view) ? view : '9:16'
   const file = clip.file && (shown === '9:16' ? clip.file : feedFile(clip.index, shown))
@@ -204,7 +160,8 @@ function ShortCard({ job, clip, busy, act, presets, kit, sounds }) {
   const oldKit = !!clip.file && !!kit && (kit.enabled ? clip.brand_rev !== kit.rev : clip.brand_rev >= 0)
 
   return (
-    <div className={`short ${clip.stale ? 'is-stale' : ''}`}>
+    <div className={`short short-desktop ${clip.stale ? 'is-stale' : ''}`}>
+      <div className="short-monitor">
       {formats.length > 0 && (
         <div className="seg sm aspect-tabs">
           {['9:16', ...formats].map((a) => (
@@ -219,6 +176,7 @@ function ShortCard({ job, clip, busy, act, presets, kit, sounds }) {
       ) : (
         <div className="placeholder">Not rendered yet</div>
       )}
+      </div>
       <div className="clip-body">
         <div className="clip-head">
           <h4>#{clip.index} {clip.title}</h4>
@@ -246,6 +204,11 @@ function ShortCard({ job, clip, busy, act, presets, kit, sounds }) {
           )}
         </p>
 
+        <nav className="row-btns" aria-label="Short properties">
+          {['Picture', 'Captions', 'Audio', 'Extras'].map((tab) => <button key={tab} type="button"
+            className="btn ghost" aria-pressed={inspector === tab} onClick={() => setInspector(tab)}>{tab}</button>)}
+        </nav>
+        <div hidden={inspector !== 'Picture'}>
         <Seg label="Jump cuts" value={o.jumpcut ?? true} disabled={busy}
              options={[[true, 'On'], [false, 'Off']]} onChange={(v) => setOpt('jumpcut', v)} />
         <Seg label="Zoom" value={o.zoom ?? false} disabled={busy || o.jumpcut === false}
@@ -264,6 +227,11 @@ function ShortCard({ job, clip, busy, act, presets, kit, sounds }) {
         {cropOpen && <CropEditor job={job} clip={clip} busy={busy} act={act} o={o} onClose={() => setCropOpen(false)} />}
         <Seg label="Hook title" value={o.hook ?? true} disabled={busy || !clip.hook}
              options={[[true, 'On'], [false, 'Off']]} onChange={(v) => setOpt('hook', v)} />
+        {!clip.visual && <InsertEditor job={job} clip={clip} busy={busy} act={act}
+          accent={kit?.enabled && kit.accent ? kit.accent : undefined} />}
+        <BrollEditor jobId={job.id} clip={clip} busy={busy} act={act} />
+        </div>
+        <div hidden={inspector !== 'Captions'}>
         <Seg label="Captions" value={o.caption_style ?? presets?.style ?? 'karaoke'} disabled={busy}
              options={[['karaoke', 'Animated'], ['simple', 'Simple'], ['none', 'Off']]} onChange={(v) => setOpt('caption_style', v)} />
         {presets && (
@@ -291,6 +259,8 @@ function ShortCard({ job, clip, busy, act, presets, kit, sounds }) {
           </>
         )}
 
+        </div>
+        <div hidden={inspector !== 'Extras'}>
         {kitOn && (
           <>
             <Seg label="Logo" value={o.watermark ?? true} disabled={busy || !kit.logo}
@@ -300,6 +270,26 @@ function ShortCard({ job, clip, busy, act, presets, kit, sounds }) {
           </>
         )}
 
+        <div className="opt">
+          <span className="muted" title="Same short, framed wider for feeds. Each one adds a render.">Feed versions</span>
+          <div className="seg sm">
+            {(presets?.feed_aspects || Object.keys(FEED)).map((a) => (
+              <button key={a} disabled={busy} className={aspects.includes(a) ? 'on' : ''} onClick={() => toggleAspect(a)}
+                      title={FEED[a].use}>{a}</button>
+            ))}
+          </div>
+        </div>
+        {aspects.length > 0 && (
+          <p className="muted small">{aspects.map((a) => `${a} for ${FEED[a].use}`).join(' · ')}. Its own crop (more of
+            the scene), captions and logo, same cuts.</p>
+        )}
+
+        <CoverPanel job={job} clip={clip} busy={busy} act={act}
+                    defaultText={clip.content?.instagram?.extra?.cover_text || clip.hook} />
+        <QuotePanel job={job} clip={clip} busy={busy} act={act} />
+
+        </div>
+        <div hidden={inspector !== 'Audio'}>
         {sounds && (
           <>
             <Seg label="Sound fx" value={o.sfx ?? sounds.sfx_default} disabled={busy}
@@ -320,32 +310,8 @@ function ShortCard({ job, clip, busy, act, presets, kit, sounds }) {
           </>
         )}
 
-        <div className="opt">
-          <span className="muted" title="Same short, framed wider for feeds. Each one adds a render.">Feed versions</span>
-          <div className="seg sm">
-            {(presets?.feed_aspects || Object.keys(FEED)).map((a) => (
-              <button key={a} disabled={busy} className={aspects.includes(a) ? 'on' : ''} onClick={() => toggleAspect(a)}
-                      title={FEED[a].use}>{a}</button>
-            ))}
-          </div>
+          {!clip.visual && <DubEditor job={job} clip={clip} busy={busy} act={act} setOpt={setOpt} />}
         </div>
-        {aspects.length > 0 && (
-          <p className="muted small">{aspects.map((a) => `${a} for ${FEED[a].use}`).join(' · ')}. Its own crop (more of
-            the scene), captions and logo, same cuts.</p>
-        )}
-
-        {!clip.visual && ( /* no-speech clips have no spoken numbers */
-          <InsertEditor job={job} clip={clip} busy={busy} act={act}
-                        accent={kit?.enabled && kit.accent ? kit.accent : undefined} />
-        )}
-
-        {!clip.visual && <DubEditor job={job} clip={clip} busy={busy} act={act} setOpt={setOpt} />}
-        <BrollEditor jobId={job.id} clip={clip} busy={busy} act={act} />
-
-        <CoverPanel job={job} clip={clip} busy={busy} act={act}
-                    defaultText={clip.content?.instagram?.extra?.cover_text || clip.hook} />
-        <QuotePanel job={job} clip={clip} busy={busy} act={act} />
-
         {clip.render_error && <p className="err">Render failed: {clip.render_error}</p>}
         <ExportPreview key={job.updated_at} jobId={job.id} index={clip.index} act={act} busy={busy} />
         <div className="actions">
@@ -374,6 +340,10 @@ function ShortCard({ job, clip, busy, act, presets, kit, sounds }) {
 
 export default function ShortsStep({ job, busy, act, go }) {
   const clips = job.clips.filter((c) => c.approved)
+  const [selected, setSelected] = useState(null)
+  const [batch, setBatch] = useState([])
+  const [applying, setApplying] = useState(false)
+  const active = clips.find((clip) => clip.index === selected) ?? clips[0]
   const stale = clips.filter((c) => c.stale).length
   const [presets, setPresets] = useState(null)
   const [kit, setKit] = useState(null)
@@ -383,6 +353,25 @@ export default function ShortsStep({ job, busy, act, go }) {
     api.brandKit().then(setKit).catch(() => setKit(null))
     api.sounds().then(setSounds).catch(() => setSounds(null))
   }, [])
+  const targets = clips.filter((clip) => clip.index !== active?.index && batch.includes(clip.index))
+  const applyCaptionLook = async () => {
+    setApplying(true)
+    try {
+      const { caption_style, caption_preset, caption_position } = active.options || {}
+      await act(async () => {
+        for (const clip of targets) {
+          await api.editClip(job.id, clip.index, { options: { ...clip.options,
+            caption_style: caption_style ?? null, caption_preset: caption_preset ?? null,
+            caption_position: caption_position ?? null } })
+        }
+      })
+      setBatch([])
+    } catch {
+      // The workspace shows the failed action.
+    } finally {
+      setApplying(false)
+    }
+  }
   return (
     <div>
       <div className="step-head">
@@ -394,11 +383,28 @@ export default function ShortsStep({ job, busy, act, go }) {
           </p>
         </div>
       </div>
-      <div className="shorts-grid">
-        {clips.map((c) => (
-          <ShortCard key={c.index} job={job} clip={c} busy={busy} act={act} presets={presets} kit={kit} sounds={sounds} />
-        ))}
+      <div className="scene-strip" role="group" aria-label="Approved shorts">
+        {clips.map((clip) => <button key={clip.index} type="button" className="btn ghost"
+          aria-pressed={active?.index === clip.index} onClick={() => setSelected(clip.index)}>
+          {clip.file && <img src={api.fileUrl(job.id, clip.file.replace('.mp4', '.jpg'), clip.version)} alt="" />}
+          <span>{clip.title}</span><small>{clip.stale ? 'Needs render' : clip.file ? 'Rendered' : 'Approved'}</small>
+        </button>)}
       </div>
+      {clips.length > 1 && <details className="card">
+        <summary>Apply caption styling to other shorts</summary>
+        <div className="row-btns">
+          {clips.filter((clip) => clip.index !== active.index).map((clip) => <label key={clip.index}>
+            <input type="checkbox" checked={batch.includes(clip.index)} disabled={busy || applying}
+              onChange={(event) => setBatch((current) => event.target.checked
+                ? [...current, clip.index] : current.filter((index) => index !== clip.index))} /> {clip.title}
+          </label>)}
+          <button className="btn" type="button" disabled={!targets.length || busy || applying} onClick={applyCaptionLook}>
+            Apply current caption look to selected
+          </button>
+        </div>
+      </details>}
+      {active && <ShortCard key={active.index} job={job} clip={active} busy={busy || applying} act={act}
+        presets={presets} kit={kit} sounds={sounds} />}
       <div className="footer-bar">
         <span className="muted">{stale > 0 ? `${stale} short(s) changed and waiting for re-render` : 'Happy with the cuts?'}</span>
         <button className="primary" onClick={() => go('posts')}>Review posts →</button>

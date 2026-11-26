@@ -108,19 +108,18 @@ export default function NewJob({ onCreated, onOpen, purpose = 'create' }) {
       <form className="card form big source-form" onSubmit={submit}>
         <div className="tabs" role="group" aria-label="Video source">
           {[['url', 'YouTube link'], ['file', 'Upload file'], ['record', 'Record video']].map(([key, label]) => (
-            <button type="button" key={key} className={kind === key ? 'on' : ''} aria-pressed={kind === key}
+            <button type="button" key={key} className={(kind === key || (key === 'url' && ['find', 'batch'].includes(kind))) ? 'on' : ''} aria-pressed={kind === key || (key === 'url' && ['find', 'batch'].includes(kind))}
               disabled={busy} onClick={() => setKind(key)}>{label}</button>
           ))}
         </div>
-        <details className="source-options">
-          <summary>More sources{kind === 'find' ? ' · Find videos' : kind === 'batch' ? ' · Batch' : ''}</summary>
+        {['url', 'find', 'batch'].includes(kind) && <div className="source-options">
           <div className="row-btns">
             <button type="button" className="btn ghost" aria-pressed={kind === 'find'}
               disabled={busy} onClick={() => setKind('find')}>Find videos</button>
             {purpose === 'create' && <button type="button" className="btn ghost" aria-pressed={kind === 'batch'}
-              disabled={busy} onClick={() => setKind('batch')}>Batch{items.length > 0 && ` (${queue.length})`}</button>}
+              disabled={busy} onClick={() => setKind('batch')}>Multiple links{items.length > 0 && ` (${queue.length})`}</button>}
           </div>
-        </details>
+        </div>}
 
         {kind === 'find' ? (
           <FindVideos initialTopic={topic}

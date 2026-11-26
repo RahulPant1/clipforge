@@ -74,7 +74,7 @@ function LiveLink({ job, c, p, post, busy, act }) {
   )
 }
 
-export default function PublishStep({ job, busy, act }) {
+export default function PublishStep({ job, busy, act, openPost }) {
   const clips = job.clips.filter((c) => c.approved && c.file)
   const posts = clips.flatMap((c) => Object.values(c.content || {}))
   const posted = posts.filter((p) => p.status === 'posted').length
@@ -90,7 +90,7 @@ export default function PublishStep({ job, busy, act }) {
     <div>
       <div className="step-head">
         <div>
-          <h2>Publish</h2>
+          <h2>Delivery checklist</h2>
           <p className="muted">
             Your posting checklist. Download the files, copy each field into the platform, then click the status to
             move it along: <b>○ draft → ✓ approved → ● posted</b>. Paste the live link and it's kept in your History.
@@ -120,6 +120,8 @@ export default function PublishStep({ job, busy, act }) {
               <span>
                 <b title={c.title}>#{c.index} {c.title}</b>
                 <Files job={job} c={c} />
+                {Object.keys(c.content || {}).length > 0 && <button className="linkbtn"
+                  type="button" onClick={() => openPost(c.index)}>Edit platform copy</button>}
               </span>
             </span>
             {PLATFORMS.map((p) => {

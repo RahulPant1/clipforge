@@ -11,7 +11,7 @@ function shortSource(src) {
 
 const LABEL = { review: 'needs review', queued: 'queued', running: 'running', done: 'done', failed: 'failed' }
 
-export default function JobList({ jobs, selectedId, onSelect, onDelete }) {
+export default function JobList({ jobs, selectedId, onSelect, onDelete, showHeading = true }) {
   if (!jobs.length) return <div className="card muted">No jobs yet.</div>
   // new jobs waiting their turn (a batch), oldest first = the order the worker takes them
   const waiting = jobs.filter((j) => j.status === 'queued' && !j.clips.length)
@@ -19,7 +19,7 @@ export default function JobList({ jobs, selectedId, onSelect, onDelete }) {
 
   return (
     <div className="card list">
-      <h3>Jobs</h3>
+      {showHeading && <h3>Jobs</h3>}
       {jobs.map((j) => {
         const approved = j.clips.filter((c) => c.approved).length
         const place = waiting.indexOf(j.id) // ≥ 0: not started yet — can be removed
@@ -28,7 +28,7 @@ export default function JobList({ jobs, selectedId, onSelect, onDelete }) {
           <div key={j.id} className={`job ${j.id === selectedId ? 'sel' : ''}`} onClick={() => onSelect(j.id)}>
             <div className="job-top">
               <span className={`pill ${j.status}`}>{LABEL[j.status]}</span>
-              <span className="src" title={j.source}>{j.purpose === 'learn' && '📚 '}{j.title || shortSource(j.source)}</span>
+              <button type="button" className="src job-open" title={j.source}>{j.purpose === 'learn' && '📚 '}{j.title || shortSource(j.source)}</button>
               <button
                 className="x"
                 title={place >= 0 ? 'Remove from the queue' : isBusy(j) ? 'Wait for this job to finish before deleting it'

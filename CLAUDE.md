@@ -569,9 +569,12 @@ For a later discussion (not planned yet):
 26. [ ] Desktop app. Cheap version first: FastAPI serves frontend/dist (no Vite) + a Windows shortcut that starts the
         backend in WSL and opens `msedge --app=http://localhost:8000`. Installable app for others = Windows-native
         backend (no WSL), installer with GPU check, first-run model downloads, yt-dlp self-update, then a Tauri shell.
-27. [ ] ComfyUI as an optional local generator over its HTTP API (workflow JSON in, frames out), behind GPU_LOCK and
-        unloaded after use like Gemma (8 GB VRAM: SDXL-class images fine, video models slow): B-roll stills/loops when
-        your folder has no match (item 19 / G), stylised cover backgrounds, upscaling. Not ClipForge-as-ComfyUI-nodes.
+27. [x] Optional local ComfyUI image generation under GPU_LOCK using SDXL Lightning. Generate and review images,
+        save them as MP4 B-roll with optional pan and zoom, or draft a script and storyboard with Gemma, generate
+        its images and create a captioned, line-aligned short with a saved voice.
+    - [x] Retry unfinished image batches with lower GPU memory usage, recover the active workspace after reload,
+          and offer local Kokoro narration presets alongside trained voices.
+    - [ ] Cover backgrounds, upscaling and LTX image-to-video as separate follow-ups.
 30. [x] Clip judge + gap detector (judge.py, app.judge_eval), learning mode v1 (learn.py), scene thumbnails
         (scenes/scene_K.jpg, made on request for older indexes). [ ] later: Q&A over a video (BM25 over transcript
         chunks first), search by meaning only if word search falls short (small CPU embedding model).
@@ -590,8 +593,13 @@ For a later discussion (not planned yet):
       Keep study notes as a separate task. Move technical job controls into Advanced settings.
 - [x] **One next action after approval:** offer Keep original audio or Use a saved voice in one action
       bar, then show the relevant narration review or export action.
-- [x] **Simpler editing and narrow-screen navigation:** group Script → Short into Script & voice,
-      Footage, and Preview & export. On narrow screens, collapse navigation and prioritize the current workspace.
+- [x] **Desktop editing workspace:** Projects, Voice Library, and Brand navigation with a collapsible rail.
+      Script → Short has a portrait monitor, a scene strip, and one export action. Video jobs group source review,
+      short editing, and delivery. Voice and Learn use focused views.
+- [x] **Shared source-review player:** use one media element for Source, Transcript and Pick clips, with
+      candidate playback, timing and approvals beside it.
+- [x] **Compact Projects home and background storyboards:** collapse saved project lists initially, surface the
+      latest draft and jobs needing attention, and persist per-scene generation progress with failure-only retries.
 
 ### Voice roadmap
 

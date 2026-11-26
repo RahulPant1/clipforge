@@ -103,10 +103,11 @@ export default function RevoicePanel({ onVoiceLibrary }) {
               Select sentences for pickups
             </button> : <>
               <span className="small" role="status">{picked.length} of 20 selected</span>
-              <button className="btn" disabled={!!busy || !picked.length} onClick={exportPickups}>Export selected pickups</button>
+              <button className="btn" disabled={!!busy || !picked.length} onClick={exportPickups}>Export {picked.length || 'selected'} pickups</button>
               <button className="btn ghost" disabled={!!busy} onClick={() => setPickups(null)}>Cancel selection</button>
             </>}
           </div>}
+          <div className="revoice-desktop">
           <ul className="dub-lines">
             {s.lines.map((ln) => (
               <Line key={ln.i} ln={ln} stale={stale.has(ln.i)} busy={!!busy} maxRate={item.max_rate}
@@ -139,7 +140,7 @@ export default function RevoicePanel({ onVoiceLibrary }) {
                 {item.has_video
                   ? <video controls preload="metadata" src={api.revoiceFile(item.id, item.output, s.track_version)} />
                   : <audio controls src={api.revoiceFile(item.id, item.output, s.track_version)} />}
-                <a className="btn sm" href={api.revoiceFile(item.id, item.output, s.track_version)} download={`${item.name}-revoiced${item.has_video ? '.mp4' : '.wav'}`}>⬇ Download</a>
+                <a className="btn sm" href={api.revoiceFile(item.id, item.output, s.track_version)} download={`${item.name}-revoiced${item.has_video ? '.mp4' : '.wav'}`}>Download full recording</a>
               </>
             )}
             {item.pickup_output && (
@@ -153,6 +154,7 @@ export default function RevoicePanel({ onVoiceLibrary }) {
                   download={`${item.name}-pickup${item.has_video ? '.mp4' : '.wav'}`}>Download sentence pickup</a>
               </>
             )}
+          </div>
           </div>
         </>
       )}

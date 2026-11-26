@@ -36,6 +36,10 @@ def library_root() -> Path:
     return (settings.broll_dir or settings.data_dir / "broll").resolve()
 
 
+def asset_id(relative: Path) -> str:
+    return hashlib.sha256(relative.as_posix().encode()).hexdigest()[:24]
+
+
 def library_assets() -> dict[str, tuple[Path, Path]]:
     root = library_root()
     assets = {}
@@ -50,8 +54,7 @@ def library_assets() -> dict[str, tuple[Path, Path]]:
         except (OSError, RuntimeError, ValueError):
             continue
         relative = candidate.relative_to(root)
-        ident = hashlib.sha256(relative.as_posix().encode()).hexdigest()[:24]
-        assets[ident] = (resolved, relative)
+        assets[asset_id(relative)] = (resolved, relative)
     return assets
 
 

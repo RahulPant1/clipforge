@@ -123,7 +123,7 @@ function Versions({ v, busy, run, sampleText }) {
   return (
     <>
       <div className="card vl-step">
-        <h3>2 · Build a version</h3>
+        <h3>Build a version</h3>
         <p className="muted small">Averages the voice over every used recording and takes the best one's pace and tone
           as the reference — a <b>reference voice prompt</b>, cached for reuse. The model itself is not trained or
           changed. Each build is kept as a new version with a test sample, so you can hear what new recordings did.</p>
@@ -270,6 +270,8 @@ export default function VoiceLab({ onRevoice }) {
     if (r?.file) setSamples((s) => [{ ...r, text: say, version: ver || r.voice?.built?.version }, ...s].slice(0, 8))
   }
 
+  const [voiceTab, setVoiceTab] = useState('Audition')
+
   if (!list) return <div className="voice-wrap">{err ? <div className="banner error">{err}</div> : 'Loading…'}</div>
   const used = v ? v.recordings.filter((r) => r.use) : []
   const total = used.reduce((a, r) => a + r.seconds, 0)
@@ -291,11 +293,6 @@ export default function VoiceLab({ onRevoice }) {
       {err && <div className="banner error">{err}</div>}
 
       <div className="vl-head">
-        <select value={vid || ''} onChange={(e) => { setVid(e.target.value); setSamples([]); setVer('') }}
-                disabled={!list.voices.length} aria-label="Voice">
-          {list.voices.map((x) => <option key={x.id} value={x.id}>{x.name}{x.built ? ` (v${x.built.version})` : ''}</option>)}
-          {!list.voices.length && <option value="">No voices yet</option>}
-        </select>
         <button className="btn" disabled={!!busy} onClick={() => setCreating(true)}>+ New voice</button>
         {v && <button className="btn ghost" disabled={!!busy}
                       onClick={() => window.confirm(`Delete “${v.name}”, its recordings and all versions?`)
@@ -310,12 +307,28 @@ export default function VoiceLab({ onRevoice }) {
                   })} />
       )}
 
+      <div className="voice-desktop">
+        <nav className="card form" aria-label="Trained voices">
+          <h3>Trained voices</h3>
+          {list.voices.map((item) => <button key={item.id} type="button" className="btn ghost"
+            aria-pressed={item.id === vid}
+            onClick={() => { setVid(item.id); setSamples([]); setVer(''); setVoiceTab('Audition') }}>
+            {item.name}{item.built ? ` · v${item.built.version}` : ''}
+          </button>)}
+          {!list.voices.length && <p className="muted">Create a voice to get started.</p>}
+        </nav>
+        <div className="form voice-detail">
       {v && (
         <>
+          <nav className="row-btns" aria-label="Voice details">
+            {['Audition', 'Recordings', 'Versions'].map((tab) => <button key={tab} type="button"
+              className="btn ghost" aria-pressed={voiceTab === tab} onClick={() => setVoiceTab(tab)}>{tab}</button>)}
+          </nav>
+          <div hidden={voiceTab !== 'Recordings'}>
           <Profile v={v} busy={!!busy} run={run} languages={list.languages || ['Auto']} />
 
           <div className="card vl-step">
-            <h3>1 · Recordings ({used.length} used · {Math.round(total)} s)</h3>
+            <h3>Recordings ({used.length} used · {Math.round(total)} s)</h3>
             <p className="muted small">Quiet room, mic 15–20 cm away, a normal speaking voice. 6–10 takes of 5–15 s in
               different moods (1–2 minutes in all). Add more any time, then build a new version. Long takes are split at
               sentence ends.</p>
@@ -343,10 +356,13 @@ export default function VoiceLab({ onRevoice }) {
             )}
           </div>
 
+          </div>
+          <div hidden={voiceTab !== 'Versions'}>
           <Versions key={v.id} v={v} busy={!!busy} run={run} sampleText={list.sample_text || ''} />
 
-          <div className="card vl-step">
-            <h3>3 · Try it</h3>
+          </div>
+          <div className="card vl-step" hidden={voiceTab !== 'Audition'}>
+            <h3>Audition</h3>
             <textarea rows={3} value={say} maxLength={2000} onChange={(e) => setSay(e.target.value)} />
             <div className="row-btns">
               <select value={ver} onChange={(e) => setVer(e.target.value)} title="Which version speaks">
@@ -385,6 +401,9 @@ export default function VoiceLab({ onRevoice }) {
           </div>
         </>
       )}
+
+        </div>
+      </div>
 
       <Pronunciations voices={list.voices} busy={!!busy} run={run} />
       <button type="button" className="btn ghost" onClick={onRevoice}>Re-voice a recording</button>

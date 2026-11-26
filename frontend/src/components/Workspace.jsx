@@ -10,21 +10,15 @@ import ShortsStep from './steps/ShortsStep.jsx'
 import SourceStep from './steps/SourceStep.jsx'
 import TranscriptStep from './steps/TranscriptStep.jsx'
 
-const STEPS = [
-  { key: 'source', label: 'Source', hint: 'video in' },
-  { key: 'transcript', label: 'Transcript', hint: 'read & add clips' },
-  { key: 'pick', label: 'Pick clips', hint: 'trim & approve' },
-  { key: 'shorts', label: 'Shorts', hint: 'look & re-render' },
-  { key: 'posts', label: 'Posts', hint: 'edit copy' },
-  { key: 'publish', label: 'Publish', hint: 'track posting' },
-]
-const LEARN = { key: 'learn', label: '📚 Learn', hint: 'study notes & quiz' }
-
-// Learn jobs: video → transcript → study notes. Shorts jobs get the Learn step once they have notes too.
-const stepsFor = (job) => (job.purpose === 'learn' ? [STEPS[0], STEPS[1], LEARN] : job.learn ? [...STEPS, LEARN] : STEPS)
+const REVIEW = [['source', 'Source'], ['transcript', 'Transcript'], ['pick', 'Pick clips']]
+const DELIVER = [['posts', 'Posts'], ['publish', 'Publish tracker']]
 
 export default function Workspace({ job, onChanged }) {
+  const sourcePlayer = useRef(null)
+  const [playhead, setPlayhead] = useState(0)
+  const [previewRange, setPreviewRange] = useState(null)
   const [step, setStep] = useState(() => defaultStep(job))
+  const [postClip, setPostClip] = useState(null)
   const [transcript, setTranscript] = useState(null)
   const [actionErr, setActionErr] = useState('')
   const prevStatus = useRef(job.status)
@@ -66,9 +60,44 @@ export default function Workspace({ job, onChanged }) {
     }
   }
 
-  const go = (k) => states[k] !== 'locked' && setStep(k)
+  const go = (k) => {
+    if (states[k] === 'locked') return
+    if (k !== step) setPreviewRange(null)
+    setStep(k)
+  }
   const reloadTranscript = () => setTranscript(null) // after a caption fix (the effect above refetches)
-  const props = { job, busy, act, go, transcript, onChanged, reloadTranscript }
+  const groups = [
+    ['Review source', job.purpose === 'learn' ? REVIEW.slice(0, 2) : REVIEW],
+    ...(job.purpose === 'learn' ? [] : [
+      ['Edit shorts', [['shorts', 'Shorts']]],
+      ['Deliver', DELIVER],
+    ]),
+    ...(job.purpose === 'learn' || job.learn ? [['Learn', [['learn', 'Study notes']]]] : []),
+  ]
+  const currentGroup = groups.find(([, entries]) => entries.some(([key]) => key === step))
+  const reviewing = currentGroup?.[0] === 'Review source'
+  useEffect(() => {
+    if (!reviewing) sourcePlayer.current?.pause()
+  }, [reviewing])
+  const sourceReady = job.clips.length > 0 || !!job.learn || states.transcript !== 'locked'
+  const seekSource = (time, play = false) => {
+    const player = sourcePlayer.current
+    if (!player) return
+    player.currentTime = time
+    setPlayhead(time)
+    if (play) player.play().catch(() => {})
+  }
+  const props = { job, busy, act, go, transcript, onChanged, reloadTranscript, sourcePlayer, playhead,
+    seekSource, setPreviewRange }
+  const updatePlayhead = (event) => {
+    const player = event.currentTarget
+    if (step === 'pick' && !player.paused && previewRange) {
+      const skip = previewRange.removed?.find(([start, end]) => player.currentTime >= start && player.currentTime < end)
+      if (skip) player.currentTime = Math.min(skip[1], previewRange.end)
+      if (player.currentTime >= previewRange.end) player.pause()
+    }
+    setPlayhead(player.currentTime)
+  }
 
   return (
     <div className="workspace">
@@ -77,26 +106,18 @@ export default function Workspace({ job, onChanged }) {
           <b>{job.title}</b>{job.channel && <span className="muted"> · {job.channel}</span>}
         </div>
       )}
-      <nav className="stepper">
-        {stepsFor(job).map((s, i) => {
-          const st = states[s.key]
-          return (
-            <button
-              key={s.key}
-              className={`step ${step === s.key ? 'on' : ''} ${st}`}
-              onClick={() => go(s.key)}
-              disabled={st === 'locked'}
-              title={st === 'locked' ? 'Not available yet' : s.hint}
-            >
-              <span className="num">{i + 1}</span>
-              <span className="lbl">
-                {s.label}
-                <small>{s.hint}</small>
-              </span>
-            </button>
-          )
+      <nav className="stepper" aria-label="Project workspace">
+        {groups.map(([label, entries]) => {
+          const available = entries.find(([key]) => states[key] !== 'locked')
+          return <button key={label} type="button" className={`step ${currentGroup?.[0] === label ? 'on' : ''}`}
+            disabled={!available} aria-pressed={currentGroup?.[0] === label}
+            onClick={() => go(available[0])}>{label}</button>
         })}
       </nav>
+      {currentGroup?.[1].length > 1 && <nav className="row-btns workspace-views" aria-label={currentGroup[0]}>
+        {currentGroup[1].map(([key, label]) => <button key={key} type="button" className="btn ghost"
+          disabled={states[key] === 'locked'} aria-pressed={step === key} onClick={() => go(key)}>{label}</button>)}
+      </nav>}
 
       {busy && (
         <div className="busy">
@@ -112,8 +133,9 @@ export default function Workspace({ job, onChanged }) {
       )}
       {job.error && !busy && <div className="banner error">⚠ {job.error}</div>}
       {job.narration && (
-        <section className="card" aria-label="Narration progress">
-          <h3>Narration progress</h3>
+        <details className="card" aria-label="Narration queue">
+          <summary>Narration queue · {Object.values(job.narration.items).filter((item) => item.status === 'ready').length}
+            /{Object.keys(job.narration.items).length} ready</summary>
           <ul>
             {Object.entries(job.narration.items).map(([index, item]) => (
               <li key={index} className={item.status === 'failed' ? 'err' : ''}>
@@ -135,7 +157,7 @@ export default function Workspace({ job, onChanged }) {
           {Object.values(job.narration.items).some((item) => item.status === 'ready') && (
             <p className="muted small">Export ready narration using Create shorts &amp; posts or Re-render.</p>
           )}
-        </section>
+        </details>
       )}
       {actionErr && (
         <div className="banner error" onClick={() => setActionErr('')}>
@@ -143,14 +165,20 @@ export default function Workspace({ job, onChanged }) {
         </div>
       )}
 
+      <div className={`source-review-layout ${reviewing && sourceReady ? 'with-player' : ''}`}>
+        {sourceReady && <section className="card shared-source-player" hidden={!reviewing}>
+          <video ref={sourcePlayer} src={api.fileUrl(job.id, 'source.mp4')} controls preload="metadata"
+            aria-label="Source review player" onTimeUpdate={updatePlayhead} />
+        </section>}
       <div className="stepbody">
         {step === 'source' && <SourceStep {...props} />}
         {step === 'transcript' && <TranscriptStep {...props} />}
         {step === 'pick' && <PickStep {...props} />}
         {step === 'shorts' && <ShortsStep {...props} />}
-        {step === 'posts' && <PostsStep {...props} />}
-        {step === 'publish' && <PublishStep {...props} />}
+        {step === 'posts' && <PostsStep {...props} selectedClip={postClip} onSelectClip={setPostClip} />}
+        {step === 'publish' && <PublishStep {...props} openPost={(index) => { setPostClip(index); go('posts') }} />}
         {step === 'learn' && <LearnStep {...props} />}
+      </div>
       </div>
     </div>
   )

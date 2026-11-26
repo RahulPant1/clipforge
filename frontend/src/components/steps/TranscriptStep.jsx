@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { api } from '../../api.js'
 import { fmt, fmtPrecise } from '../../util.js'
 
@@ -21,8 +21,7 @@ function ScriptSwitch({ job, busy, act, reloadTranscript }) {
   )
 }
 
-export default function TranscriptStep({ job, busy, act, go, transcript, reloadTranscript }) {
-  const player = useRef(null)
+export default function TranscriptStep({ job, busy, act, go, transcript, reloadTranscript, sourcePlayer: player, seekSource }) {
   const [q, setQ] = useState('')
   const [sel, setSel] = useState({ start: null, end: null })
   const [title, setTitle] = useState('')
@@ -44,12 +43,7 @@ export default function TranscriptStep({ job, busy, act, go, transcript, reloadT
 
   const clipAt = (s) => job.clips.find((c) => s.end > c.start && s.start < c.end)
 
-  const seek = (t) => {
-    const v = player.current
-    if (!v) return
-    v.currentTime = t
-    v.play().catch(() => {})
-  }
+  const seek = (t) => seekSource(t, true)
 
   const playhead = () => Math.round((player.current?.currentTime ?? 0) * 100) / 100
   const noSpeech = !(transcript || []).length || job.clips.some((c) => c.visual)
@@ -68,7 +62,6 @@ export default function TranscriptStep({ job, busy, act, go, transcript, reloadT
   return (
     <div className="transcript-step">
       <div className="tplayer">
-        <video ref={player} src={api.fileUrl(job.id, 'source.mp4')} controls preload="metadata" />
         <div className="card addclip">
           <h3>Make your own clip</h3>
           <p className="muted">
@@ -106,6 +99,11 @@ export default function TranscriptStep({ job, busy, act, go, transcript, reloadT
           <input className="search" placeholder={sceneCount ? 'Search what is said or shown…' : 'Search…'} value={q}
                  onChange={(e) => setQ(e.target.value)} />
         </div>
+          {job.clips.length > 0 && <div className="scene-strip" role="group" aria-label="Clip candidates">
+            {job.clips.map((clip) => <button key={clip.index} className="btn ghost" onClick={() => seek(clip.start)}>
+              <span>{clip.title}</span><small>{fmt(clip.start)}{clip.approved ? ' · Approved' : ''}</small>
+            </button>)}
+          </div>}
         {sceneCount > 0 && (
           <label className="scene-toggle muted small" title={`Described by ${scenes.model || 'Gemma'} from one frame per scene`}>
             <input type="checkbox" checked={showScenes} onChange={(e) => setShowScenes(e.target.checked)} />

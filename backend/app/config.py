@@ -10,6 +10,9 @@ class Settings(BaseSettings):
     # Storage
     data_dir: Path = Path("data")
     broll_dir: Path | None = None  # local MP4 library (defaults to data/broll)
+    comfyui_dir: Path = Path.home() / ".local/share/clipforge-comfy-benchmark"
+    kokoro_dir: Path = Path.home() / ".local/share/clipforge-kokoro"
+    comfyui_checkpoint: str = "sdxl_lightning_4step.safetensors"
     # History of every video + its shorts (library.py): readable folders + "ClipForge history.xlsx".
     # Default data/library; e.g. /mnt/c/Users/<you>/Videos/ClipForge to browse it in Windows (files copied there).
     library_dir: Path | None = None
@@ -126,6 +129,7 @@ class Settings(BaseSettings):
     # Sound design (sfx.py): whoosh on jump cuts + pop on keywords, and background music from data/sounds/music,
     # ducked under the voice. Defaults for new shorts; each short can switch them in the Shorts step.
     sfx_default: bool = False
+    ace_step_launcher: Path = Path.home() / ".local/share/ace-step/ace-step"
     music_default: str = ""  # a file name in data/sounds/music ("" = no music)
     sfx_whoosh_db: float = -14.0  # effect loudness (the starter sounds peak near -6 dBFS)
     sfx_pop_db: float = -12.0

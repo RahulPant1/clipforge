@@ -3,7 +3,7 @@ import { api } from '../../api.js'
 import { PLATFORMS } from '../../util.js'
 import PostEditor from '../PostEditor.jsx'
 
-export default function PostsStep({ job, busy, act, go }) {
+export default function PostsStep({ job, busy, act, go, selectedClip, onSelectClip }) {
   const [platform, setPlatform] = useState('youtube')
   const clips = job.clips.filter((c) => c.approved && (c.file || Object.keys(c.content || {}).length))
 
@@ -16,8 +16,7 @@ export default function PostsStep({ job, busy, act, go }) {
           <h2>Posts</h2>
           <p className="muted">
             Edit the copy, try a <b>🎲 New angle</b> if it feels samey, and mark each one <b>Approved</b> when it's
-            ready. Each platform gets its own style. Want them to sound like you? Add a few of your posts
-            under <b>🎙 Brand voice</b> in the sidebar.
+            ready. Add examples under <b>Brand → Writing style</b> to guide the tone.
           </p>
         </div>
       </div>
@@ -31,8 +30,13 @@ export default function PostsStep({ job, busy, act, go }) {
         ))}
       </div>
 
+      <label>Short <select value={selectedClip ?? ''}
+        onChange={(event) => onSelectClip(event.target.value ? Number(event.target.value) : null)}>
+        <option value="">All shorts</option>
+        {clips.map((clip) => <option key={clip.index} value={clip.index}>{clip.title}</option>)}
+      </select></label>
       <div className="post-rows">
-        {clips.map((c) => (
+        {clips.filter((c) => selectedClip == null || c.index === selectedClip).map((c) => (
           <div key={c.index} className="post-row">
             <div className="post-clip">
               {c.file ? (

@@ -58,8 +58,13 @@ from .models import (
     RenderOptions,
     ReplaceWords,
     Retry,
+    SaveVisual,
+    ScriptBrief,
     ScriptBrollPlanRequest,
     ScriptChoice,
+    ScriptMusicGeneration,
+    ScriptMusicPreview,
+    ScriptMusicSuggestion,
     ScriptNarrationRequest,
     ScriptShortDraft,
     ScriptShortRequest,
@@ -70,6 +75,10 @@ from .models import (
     SmartTopic,
     SpeakRequest,
     Stage,
+    StoryboardRequest,
+    ThemeAsset,
+    ThemeMatchRequest,
+    VisualBatch,
     Vocabulary,
     VoiceBuild,
     VoiceCreate,
@@ -91,15 +100,20 @@ from .pipeline import (
     hinglish,
     inserts,
     judge,
+    kokoro,
     learn,
+    music,
     narration_review,
     quote,
     revoice,
     scenes,
     script_short,
     sfx,
+    storyboard,
+    themes,
     transcript_edit,
     tts,
+    visuals,
     vocabulary,
     voice,
     waveform,
@@ -115,6 +129,7 @@ from .pipeline.llm import OllamaClient
 from .pipeline.presets import POSITIONS, all_presets, get_preset
 from .pipeline.reframe import people, source_size, tracked_path, visible_speaker_turns
 from .pipeline.render import ASPECTS, FEED, extra_aspects, render_clip
+from .pipeline.storyboard_jobs import StoryboardJobs
 from .watch import Watcher
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -259,9 +274,11 @@ def create_app(pipeline=None, start_worker: bool = True, llm_factory=OllamaClien
             tts_state["v"] = tts.status()
         return tts_state["v"]
 
-    def gpu_work(fn):
+    storyboard_jobs = StoryboardJobs()
+
+    def gpu_work(fn, *, wait=False):
         """Run fn() holding GPU_LOCK with Gemma unloaded (8 GB: Whisper / TTS need the room). 409 while busy."""
-        if not GPU_LOCK.acquire(timeout=2):
+        if not GPU_LOCK.acquire(timeout=-1 if wait else 2):
             raise HTTPException(409, "GPU is busy with a job — try again when it finishes")
         try:
             try:
@@ -417,7 +434,101 @@ def create_app(pipeline=None, start_worker: bool = True, llm_factory=OllamaClien
     @app.get("/api/script-shorts")
     def list_script_shorts() -> dict:
         return {"items": script_short.recent(), "assets": script_short.assets(),
-                "max_seconds": script_short.MAX_SECONDS}
+                "max_seconds": script_short.MAX_SECONDS, "image_generation": visuals.status(),
+                "kokoro_voices": kokoro.voices(), "music_generation": music.available()}
+
+    @app.get("/api/script-shorts/themes")
+    def theme_library() -> dict:
+        return {"items": themes.catalog()}
+
+    @app.post("/api/script-shorts/themes")
+    def save_theme_asset(body: ThemeAsset) -> dict:
+        try:
+            return themes.save(body)
+        except ValueError as error:
+            raise HTTPException(400, str(error)) from None
+
+    @app.post("/api/script-shorts/themes/match")
+    def match_theme(body: ThemeMatchRequest) -> dict:
+        return gemma_review(lambda llm: themes.match(body, llm))
+
+    @app.post("/api/script-shorts/write")
+    def write_script(body: ScriptBrief) -> dict:
+        return gemma_review(lambda llm: storyboard.draft(body.brief, llm))
+
+    @app.post("/api/script-shorts/music/suggest")
+    def suggest_script_music(body: ScriptMusicSuggestion) -> dict:
+        return {"prompt": gemma_review(lambda llm: music.suggest(body.text, llm))}
+
+    @app.post("/api/script-shorts/music", status_code=201)
+    def generate_script_music(body: ScriptMusicGeneration) -> dict:
+        return {"track": gpu_work(lambda: music.generate(body.prompt, body.duration))}
+
+    @app.post("/api/script-shorts/music/preview")
+    def preview_script_mix(body: ScriptMusicPreview) -> Response:
+        try:
+            mixed = script_short.preview_mix(body.preview_id, body.music, body.music_gain_db)
+        except KeyError:
+            raise HTTPException(404, "Narration preview expired. Regenerate it before previewing the mix.") from None
+        except ValueError as error:
+            raise HTTPException(400, str(error)) from None
+        except RuntimeError as error:
+            raise HTTPException(502, str(error)) from None
+        return Response(mixed, media_type="audio/mp4", headers={"Cache-Control": "no-store"})
+
+    @app.get("/api/sounds/music/{track}")
+    def preview_music(track: str) -> FileResponse:
+        path = sfx.music_path(track)
+        if path is None:
+            raise HTTPException(404, "Music track not found")
+        return FileResponse(path)
+
+    @app.post("/api/script-shorts/storyboard")
+    def plan_storyboard(body: StoryboardRequest) -> dict:
+        return {"scenes": gemma_review(lambda llm: storyboard.plan(body.text, body.count, llm))}
+
+    @app.post("/api/script-shorts/images")
+    def generate_script_images(body: VisualBatch) -> dict:
+        return {"images": gpu_work(lambda: visuals.generate(body.images))}
+
+    @app.get("/api/script-shorts/drafts/{draft_id}/image-job")
+    def storyboard_image_status(draft_id: str) -> dict:
+        try:
+            return {"job": storyboard_jobs.get(draft_id)}
+        except KeyError:
+            raise HTTPException(404, "Draft not found") from None
+
+    @app.post("/api/script-shorts/drafts/{draft_id}/image-job", status_code=202)
+    def queue_storyboard_images(draft_id: str, indexes: list[int]) -> dict:
+        try:
+            job = storyboard_jobs.submit(draft_id, indexes, lambda fn: gpu_work(fn, wait=True))
+            return {"job": job}
+        except KeyError:
+            raise HTTPException(404, "Draft not found") from None
+        except ValueError as error:
+            raise HTTPException(400, str(error)) from None
+        except RuntimeError as error:
+            raise HTTPException(409, str(error)) from None
+
+    @app.get("/api/script-shorts/images/{ident}")
+    def preview_script_image(ident: str) -> FileResponse:
+        try:
+            return FileResponse(visuals.image_path(ident), media_type="image/png")
+        except KeyError:
+            raise HTTPException(404, "Generated image not found") from None
+
+    @app.post("/api/script-shorts/images/{ident}/reference")
+    def describe_script_reference(ident: str) -> dict:
+        return {"reference": gemma_review(lambda llm: themes.describe_reference(ident, llm))}
+
+    @app.post("/api/script-shorts/images/{ident}/broll")
+    def save_script_image(ident: str, body: SaveVisual) -> dict:
+        try:
+            return visuals.save(ident, body.motion)
+        except KeyError:
+            raise HTTPException(404, "Generated image not found") from None
+        except (OSError, RuntimeError) as error:
+            raise HTTPException(502, str(error)) from None
 
     @app.get("/api/script-shorts/drafts")
     def list_script_drafts() -> dict:

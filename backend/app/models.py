@@ -604,14 +604,96 @@ class ScriptBrollPlanRequest(BaseModel):
     assets: list[str] = Field(min_length=1, max_length=6)
 
 
-class ScriptShortRequest(ScriptNarrationRequest):
+class ScriptBrief(BaseModel):
+    brief: str = Field(min_length=1, max_length=1600)
+
+
+class StoryboardRequest(BaseModel):
+    text: str = Field(min_length=1, max_length=1200)
+    count: int = Field(3, ge=1, le=6)
+
+
+class VisualPrompt(BaseModel):
+    prompt: str = Field(min_length=1, max_length=1000)
+    seed: int | None = Field(None, ge=0, le=2**32 - 1)
+
+
+class VisualBatch(BaseModel):
+    images: list[VisualPrompt] = Field(min_length=1, max_length=6)
+
+
+SceneMotion = Literal["pan-zoom", "push", "pan", "still"]
+
+
+class SaveVisual(BaseModel):
+    motion: bool | SceneMotion = True
+
+
+class StoryboardScene(BaseModel):
+    line: int = Field(ge=0)
+    prompt: str = Field(max_length=600)
+    image_id: str | None = Field(None, pattern=r"^[0-9a-f]{32}$")
+    text: str = Field("", max_length=1200)
+    asset_id: str | None = Field(None, pattern=r"^[0-9a-f]{24}$")
+    motion: SceneMotion | None = None
+
+
+class ThemeAsset(BaseModel):
+    theme: str = Field(min_length=1, max_length=80)
+    kind: Literal["image", "music", "video"]
+    asset: str = Field(min_length=1, max_length=255)
+    description: str = Field(min_length=1, max_length=600)
+
+
+class ThemeMatchRequest(BaseModel):
+    theme: str = Field(min_length=1, max_length=80)
+    text: str = Field(min_length=1, max_length=1200)
+    reference: str = Field("", max_length=350)
+    scenes: list[StoryboardScene] = Field(min_length=1, max_length=6)
+
+
+class ScriptMusicSuggestion(BaseModel):
+    text: str = Field(min_length=1, max_length=1200)
+
+
+class ScriptMusicGeneration(BaseModel):
+    prompt: str = Field(min_length=1, max_length=480)
+    duration: int = Field(20, ge=10, le=30)
+
+
+class ScriptMusicPreview(BaseModel):
+    preview_id: str = Field(pattern=r"^[0-9a-f]{32}$")
+    music: str = Field(min_length=1, max_length=255)
+    music_gain_db: float = Field(0, ge=-18, le=6)
+
+
+class ScriptGraphic(BaseModel):
+    kind: Literal["label", "arrow", "highlight"]
+    line: int = Field(ge=0)
+    duration: float = Field(2.5, ge=0.5, le=8)
+    text: str = Field("", max_length=60)
+    horizontal: Literal["left", "center", "right"] = "center"
+    vertical: Literal["top", "middle", "bottom"] = "top"
+    direction: Literal["left", "right", "up", "down"] = "right"
+
+
+class ScriptCaptionOptions(BaseModel):
+    graphics: list[ScriptGraphic] = Field(default_factory=list, max_length=12)
+    music: str = Field("", max_length=255)
+    music_gain_db: float = Field(0, ge=-18, le=6)
+    caption_style: Literal["karaoke", "simple", "none"] = "simple"
+    caption_preset: str | None = Field(None, max_length=80)
+    caption_position: Literal["bottom", "middle"] | None = None
+
+
+class ScriptShortRequest(ScriptNarrationRequest, ScriptCaptionOptions):
     title: str = Field("Script short", max_length=120)
     assets: list[str] = Field(min_length=1, max_length=6)
     preview_id: str | None = Field(None, pattern=r"^[0-9a-f]{32}$")
     scene_starts: list[int] | None = Field(None, max_length=6)
 
 
-class ScriptShortDraft(BaseModel):
+class ScriptShortDraft(ScriptCaptionOptions):
     id: str | None = Field(None, pattern=r"^[0-9a-f]{10}$")
     title: str = Field("", max_length=120)
     text: str = Field("", max_length=1200)
@@ -622,6 +704,12 @@ class ScriptShortDraft(BaseModel):
     timing: Literal["equal", "lines"] = "equal"
     section: Literal["script", "footage", "export"] = "script"
     preview_id: str | None = Field(None, pattern=r"^[0-9a-f]{32}$")
+    storyboard: list[StoryboardScene] = Field(default_factory=list, max_length=6)
+    image_motion: bool = True
+    theme: str = Field("", max_length=80)
+    theme_music_prompt: str = Field("", max_length=480)
+    visual_reference: str = Field("", max_length=350)
+    reference_image: str | None = Field(None, pattern=r"^[0-9a-f]{32}$")
 
 
 class DubBatchDraft(BaseModel):

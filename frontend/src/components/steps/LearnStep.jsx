@@ -49,6 +49,7 @@ function Quiz({ quiz, seek }) {
 export default function LearnStep({ job, busy, act }) {
   const [data, setData] = useState(null)
   const [copied, setCopied] = useState(false)
+  const [view, setView] = useState('Summary')
   const player = useRef(null)
   useEffect(() => {
     api.learnNotes(job.id).then(setData).catch(() => setData({ notes: null }))
@@ -81,9 +82,23 @@ export default function LearnStep({ job, busy, act }) {
   }
 
   return (
-    <div className="learn">
+    <div className="learn learn-desktop">
       <div className="learn-top">
         <video ref={player} src={api.fileUrl(job.id, 'source.mp4')} controls preload="metadata" />
+        <div className="card">
+          <div className="learn-h"><h3>Chapters</h3>
+            <button className="btn sm ghost" onClick={copy} title="YouTube description format">{copied ? 'Copied' : 'Copy for YouTube'}</button>
+          </div>
+          <ul className="learn-list">{n.chapters.map((c, i) => <li key={i}><At t={c.t} /> {c.title}</li>)}</ul>
+        </div>
+      </div>
+      <div className="learn-study form">
+        <nav className="row-btns" aria-label="Study views">
+          {['Summary', 'Notes', 'Quiz'].map((tab) => <button key={tab} type="button" className="btn ghost"
+            disabled={tab === 'Quiz' && !n.quiz.length} aria-pressed={view === tab}
+            onClick={() => setView(tab)}>{tab}</button>)}
+        </nav>
+        <div className="form" hidden={view !== 'Summary'}>
         <div className="card">
           <h3>Summary</h3>
           <p>{n.summary || <span className="muted">No summary (the summary step failed — notes below are per part).</span>}</p>
@@ -95,15 +110,6 @@ export default function LearnStep({ job, busy, act }) {
           </div>
           <p className="muted small">By {n.model || 'Gemma'} from the transcript — check anything important against the video.</p>
         </div>
-      </div>
-
-      <div className="learn-grid">
-        <div className="card">
-          <div className="learn-h"><h3>Chapters</h3>
-            <button className="btn sm ghost" onClick={copy} title="YouTube description format">{copied ? 'Copied' : 'Copy for YouTube'}</button>
-          </div>
-          <ul className="learn-list">{n.chapters.map((c, i) => <li key={i}><At t={c.t} /> {c.title}</li>)}</ul>
-        </div>
         <div className="card">
           <h3>Key concepts</h3>
           <ul className="learn-list">
@@ -112,17 +118,11 @@ export default function LearnStep({ job, busy, act }) {
         </div>
       </div>
 
+      <div className="form" hidden={view !== 'Notes'}>
       <div className="card">
         <h3>Notes</h3>
         <ul className="learn-list">{n.notes.map((x, i) => <li key={i}><At t={x.t} /> <b>{x.title}</b> — {x.note}</li>)}</ul>
       </div>
-
-      {n.quiz.length > 0 && (
-        <div className="card">
-          <h3>Quiz</h3>
-          <Quiz quiz={n.quiz} seek={seek} />
-        </div>
-      )}
 
       <div className="learn-grid">
         {n.hands_on.length > 0 && (
@@ -131,6 +131,15 @@ export default function LearnStep({ job, busy, act }) {
         {n.next_steps.length > 0 && (
           <div className="card"><h3>Learn next</h3><ul>{n.next_steps.map((x, i) => <li key={i}>{x}</li>)}</ul></div>
         )}
+      </div>
+      </div>
+      {n.quiz.length > 0 && (
+        <div className="card" hidden={view !== 'Quiz'}>
+          <h3>Quiz</h3>
+          <Quiz quiz={n.quiz} seek={seek} />
+        </div>
+      )}
+
       </div>
     </div>
   )

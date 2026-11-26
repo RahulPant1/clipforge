@@ -2,6 +2,7 @@
 new voice. Whisper and the voice engine are faked; ffmpeg is real."""
 import shutil
 import subprocess
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -197,9 +198,11 @@ def test_multiple_pickups_keep_the_audio_between_them(tmp_path, fakes):
 
 
 def test_script_short_renders_ordered_broll_and_captions(tmp_path, monkeypatch, fakes):
-    from app.models import ScriptShortRequest
+    from app.models import ScriptGraphic, ScriptShortRequest
     from app.pipeline import script_short
 
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(settings, "data_dir", Path("data"))
     library = tmp_path / "footage"
     library.mkdir()
     monkeypatch.setattr(settings, "broll_dir", library)
@@ -252,6 +255,7 @@ def test_script_short_renders_ordered_broll_and_captions(tmp_path, monkeypatch, 
     draft = script_short.save_draft(ScriptShortDraft(
         title=request.title, text=request.text, voice=request.voice, version=1, assets=ordered,
         scene_lines={ordered[1]: 2}, timing="lines", section="export", preview_id=preview["id"],
+        caption_style="karaoke", caption_preset="neon", caption_position="middle",
     ))
     assert script_short.drafts() == [draft]
     assert script_short.preview_view(draft["preview_id"]) == preview
@@ -267,8 +271,9 @@ def test_script_short_renders_ordered_broll_and_captions(tmp_path, monkeypatch, 
         tone(out_dir / names[0], 0.6, freq=450)
         return [{"seconds": 0.6}]
 
-    monkeypatch.setattr(tts, "speak", retake_voice)
-    revised = script_short.retake(preview["id"], 1, request)
+    with monkeypatch.context() as retake_mocks:
+        retake_mocks.setattr(tts, "speak", retake_voice)
+        revised = script_short.retake(preview["id"], 1, request)
     assert [line["start"] for line in revised["lines"]] == pytest.approx([0, 0.8, 1.4])
     rate, before = read_audio(preview["id"])
     _, after = read_audio(revised["id"])
@@ -276,8 +281,20 @@ def test_script_short_renders_ordered_broll_and_captions(tmp_path, monkeypatch, 
     assert before[int(1.6 * rate) * 2:] == after[int(1.4 * rate) * 2:]
     assert before[int(0.8 * rate) * 2:int(1.4 * rate) * 2] != after[int(0.8 * rate) * 2:int(1.4 * rate) * 2]
     assert script_short.preview_view(preview["id"]) == preview
-    request.preview_id = revised["id"]
+    request = request.model_copy(update={key: draft[key] for key in (
+        "caption_style", "caption_preset", "caption_position",
+    )} | {"preview_id": revised["id"]})
+    ass_calls = []
+    build_ass = script_short.captions.build_ass
+
+    def capture_ass(*args, **kwargs):
+        if args[0]:
+            ass_calls.append((kwargs["preset"].id, kwargs["position"], kwargs["animate"]))
+        return build_ass(*args, **kwargs)
+
+    monkeypatch.setattr(script_short.captions, "build_ass", capture_ass)
     result = script_short.create(request)
+    assert ass_calls == [("neon", "middle", True)]
     assert result["duration"] == 2.2 and result["version"] == 1
     assert fakes == [["Capture this example.", "Explain this step.", "Now show the result."], ["Explain this step."]]
     assert script_short.recent() == [result]
@@ -292,3 +309,43 @@ def test_script_short_renders_ordered_broll_and_captions(tmp_path, monkeypatch, 
             "-vf", "crop=2:2:0:0,format=rgb24", "-f", "rawvideo", "-",
         ], capture_output=True, check=True)
         assert result.stdout[channel] > 200 and sum(result.stdout[:3]) < 300
+
+    # Export synthesizes narration and mixes a short reusable music track without extending the short.
+    music_folder = script_short.sfx.music_dir()
+    music_folder.mkdir(parents=True)
+    tone(music_folder / "music.wav", 0.8, freq=600)
+    def music_band(gain):
+        mixed = script_short.preview_mix(revised["id"], "music.wav", gain)
+        decoded = subprocess.check_output([
+            "ffmpeg", "-v", "error", "-i", "pipe:0", "-ac", "1", "-ar", "8000", "-f", "f32le", "pipe:1",
+        ], input=mixed)
+        samples = np.frombuffer(decoded, dtype="<f4")[5000:11000]
+        spectrum = np.abs(np.fft.rfft(samples))
+        return spectrum[450]
+
+    assert music_band(0) > 1.5 * music_band(-12)
+    direct = script_short.create(request.model_copy(update={
+        "preview_id": None, "scene_starts": None, "caption_style": "none", "music": "music.wav", "music_gain_db": -12,
+        "graphics": [
+            ScriptGraphic(
+                kind=kind, line=2, duration=0.7, text="Water here", vertical=vertical,
+            )
+            for kind, vertical in [("arrow", "top"), ("label", "middle"), ("highlight", "bottom")]
+        ],
+    }))
+    assert revoice.probe(script_short.file(direct["id"], "short.mp4")) == pytest.approx((2.4, True, True), abs=0.06)
+    assert direct["music"] == "music.wav"
+    assert direct["music_gain_db"] == -12
+
+    def animated_pixels(timestamp):
+        frame = subprocess.check_output([
+            "ffmpeg", "-v", "error", "-ss", str(timestamp), "-i", str(script_short.file(direct["id"], "short.mp4")),
+            "-frames:v", "1", "-vf", "scale=180:320,format=rgb24", "-f", "rawvideo", "-",
+        ])
+        rgb = np.frombuffer(frame, np.uint8).reshape(320, 180, 3)
+        return [(rgb[start:end, :, 0] > 140).sum() for start, end in ((40, 90), (125, 180), (190, 250))]
+
+    assert animated_pixels(1.4) == [0, 0, 0]
+    assert all(count > 25 for count in animated_pixels(1.95))
+    assert ass_calls == [("neon", "middle", True)]
+    assert script_short.file(direct["id"], "captions.srt").stat().st_size > 0

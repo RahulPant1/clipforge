@@ -22,9 +22,17 @@ const REVOICE = 'revoice'
 const LEARN_VIDEO = 'learn-video'
 const creationPages = [null, VIDEO_SHORTS, REVOICE, SCRIPT_SHORT, LEARN_VIDEO]
 
-function CreateHome({ onChoose }) {
-  return <div className="newjob-wrap">
-    <h2>Create</h2>
+function CreateHome({ onChoose, jobs, onDelete, onDraft, showCreate }) {
+  const [drafts, setDrafts] = useState([])
+  useEffect(() => { api.scriptDrafts().then(({ items }) => setDrafts(items)).catch(() => {}) }, [])
+  const active = jobs.filter((job) => isBusy(job) || ['review', 'failed'].includes(job.status))
+  return <div className="projects-home form">
+    <div className="row-btns"><h2>Projects</h2>
+      <details className="project-tools"><summary>Project tools</summary>
+        <History revision={jobs.filter((job) => !isBusy(job)).map((job) => job.id).join(',')} />
+      </details>
+    </div>
+    {showCreate && <>
     <div className="create-paths">
       <button className="card create-path" onClick={() => onChoose(VIDEO_SHORTS)}>
         <strong>Make shorts from a video</strong>
@@ -40,12 +48,37 @@ function CreateHome({ onChoose }) {
       </button>
     </div>
     <button className="btn ghost create-learn" onClick={() => onChoose(LEARN_VIDEO)}>Learn from a video</button>
+    </>}
+    {(drafts.length > 0 || active.length > 0) && <section className="card">
+      <h3>Continue working</h3>
+      <div className="row-btns">
+        {drafts[0] && <button className="btn ghost" onClick={() => onDraft(drafts[0].id)}>
+          Resume {drafts[0].title || 'latest draft'}
+        </button>}
+        {active.slice(0, 5).map((job) => <button key={job.id} className="btn ghost" onClick={() => onChoose(job.id)}>
+          {job.title || job.source} · {job.status === 'review' ? 'Needs review' : job.status}
+        </button>)}
+      </div>
+    </section>}
+    <details className="card project-list"><summary>Video projects · {jobs.length}</summary>
+      {jobs.length ? <JobList jobs={jobs} selectedId={null} onSelect={onChoose} onDelete={onDelete} showHeading={false} />
+        : <p className="muted">Your video projects appear here.</p>}
+    </details>
+    <details className="card project-list"><summary>Script drafts · {drafts.length}</summary>
+      <div className="form">{drafts.map((draft) => <button key={draft.id} className="btn ghost" onClick={() => onDraft(draft.id)}>
+        {draft.title || draft.text.slice(0, 60) || 'Untitled draft'}
+      </button>)}</div>
+      {!drafts.length && <p className="muted">Saved script drafts appear here.</p>}
+    </details>
   </div>
 }
 
 export default function App() {
   const [jobs, setJobs] = useState([])
   const [menuOpen, setMenuOpen] = useState(false)
+  const [railCollapsed, setRailCollapsed] = useState(false)
+  const [showCreate, setShowCreate] = useState(true)
+  const [openDraftId, setOpenDraftId] = useState(null)
   const [selectedId, setSelectedId] = useState(null) // null = "new job" screen, VOICE = brand voice
   const [error, setError] = useState('')
 
@@ -101,6 +134,7 @@ export default function App() {
 
   const navigate = (id) => {
     setSelectedId(id)
+    setOpenDraftId(null)
     setMenuOpen(false)
   }
 
@@ -133,27 +167,25 @@ export default function App() {
 
       {error && <div className="banner error">{error}</div>}
 
-      <main>
+      <main className={railCollapsed ? "rail-collapsed" : ""}>
         <aside id="workspace-navigation" className={menuOpen ? 'menu-open' : ''}
           onKeyDown={(event) => { if (event.key === 'Escape') setMenuOpen(false) }}>
-          <button className={`newjob ${creationPages.includes(selectedId) ? 'on' : ''}`} onClick={() => navigate(null)}>
-            + Create
-          </button>
-          <button className={`voicebtn ${selectedId === VOICE ? 'on' : ''}`} onClick={() => navigate(VOICE)}>
-            🎙 Brand voice
-          </button>
-          <button className={`voicebtn ${selectedId === KIT ? 'on' : ''}`} onClick={() => navigate(KIT)}>
-            🎨 Brand kit
-          </button>
-          <button className={`voicebtn ${selectedId === SPEECH ? 'on' : ''}`} onClick={() => navigate(SPEECH)}>
-            🗣 Voice Library
-          </button>
-          <History revision={jobs.filter((job) => !isBusy(job)).map((job) => job.id).join(',')} />
-          <JobList jobs={jobs} selectedId={selectedId} onSelect={navigate} onDelete={onDelete} />
+          <button className="btn ghost rail-toggle" onClick={() => setRailCollapsed(true)}>Hide project rail</button>
+          <button className={`voicebtn ${creationPages.includes(selectedId) || selected ? 'on' : ''}`}
+            onClick={() => { navigate(null); setShowCreate(false) }}>Projects</button>
+          <button className={`voicebtn ${selectedId === SPEECH ? 'on' : ''}`} onClick={() => navigate(SPEECH)}>Voice Library</button>
+          <button className={`voicebtn ${[VOICE, KIT].includes(selectedId) ? 'on' : ''}`} onClick={() => navigate(KIT)}>Brand</button>
+          {selectedId !== null && <JobList jobs={jobs} selectedId={selectedId} onSelect={navigate} onDelete={onDelete} />}
+          <button className="newjob" onClick={() => { navigate(null); setShowCreate(true) }}>+ New project</button>
         </aside>
         <section className="detail">
+          {railCollapsed && <button className="btn ghost rail-toggle" onClick={() => setRailCollapsed(false)}>Show project rail</button>}
+          {[VOICE, KIT].includes(selectedId) && <nav className="row-btns brand-nav" aria-label="Brand settings">
+            <button className="btn ghost" aria-pressed={selectedId === KIT} onClick={() => navigate(KIT)}>Visual identity</button>
+            <button className="btn ghost" aria-pressed={selectedId === VOICE} onClick={() => navigate(VOICE)}>Writing style</button>
+          </nav>}
           {selectedId !== null && creationPages.includes(selectedId) &&
-            <button className="btn sm ghost create-back" onClick={() => navigate(null)}>← Back to Create</button>}
+            <button className="btn sm ghost create-back" onClick={() => navigate(null)}>← Back to Projects</button>}
           {selectedId === VOICE ? (
             <BrandVoice />
           ) : selectedId === SPEECH ? (
@@ -161,9 +193,9 @@ export default function App() {
           ) : selectedId === KIT ? (
             <BrandKit />
           ) : selectedId === SCRIPT_SHORT ? (
-            <ScriptShort />
+            <ScriptShort openDraftId={openDraftId} />
           ) : selectedId === REVOICE ? (
-            <div className="newjob-wrap"><RevoicePanel onVoiceLibrary={() => navigate(SPEECH)} /></div>
+            <div className="revoice-workspace"><RevoicePanel onVoiceLibrary={() => navigate(SPEECH)} /></div>
           ) : selected ? (
             <Workspace key={selected.id} job={selected} onChanged={changed} />
           ) : selectedId === VIDEO_SHORTS || selectedId === LEARN_VIDEO ? (
@@ -174,7 +206,8 @@ export default function App() {
               }}
               onOpen={navigate}
             />
-          ) : <CreateHome onChoose={navigate} />}
+          ) : <CreateHome onChoose={navigate} jobs={jobs} onDelete={onDelete} showCreate={showCreate}
+            onDraft={(id) => { navigate(SCRIPT_SHORT); setOpenDraftId(id) }} />}
         </section>
       </main>
     </div>

@@ -14,16 +14,18 @@ class Draft(BaseModel):
     text: str = Field(min_length=1, max_length=1200)
 
 
-def draft(brief: str, llm: LLM) -> dict:
+def draft(brief: str, llm: LLM, source_notes: str = "") -> dict:
     if not brief.strip():
         raise ValueError("Enter a topic or brief")
     output = llm.chat_json(
-        "Write a standalone short-video voiceover from the brief below. Aim for 60–90 spoken words "
+        "Write a standalone short-video voiceover from the brief below. "
+        "Aim for 95–115 spoken words for a 45–60 second short "
         "with a clear opening, concrete examples when appropriate, and a concise ending. Use up to "
         "six short beats separated by newlines. Write only spoken prose in text, without scene "
-        "directions, markdown or headings. Avoid invented statistics, quotes and claims. Use the "
+        "directions, markdown or headings. Use supplied notes as evidence. "
+        "Avoid invented statistics, quotes, links and claims. Use the "
         f"language requested in the brief, defaulting to {settings.content_language}.\n"
-        + json.dumps({"brief": brief}, ensure_ascii=False),
+        + json.dumps({"brief": brief, "source_notes": source_notes}, ensure_ascii=False),
         Draft.model_json_schema(), temperature=0.5, think=settings.content_think,
     )
     try:

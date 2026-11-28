@@ -744,3 +744,30 @@ main.rail-collapsed > aside { display: none; }
 }
 .with-player .step-grid { grid-template-columns: minmax(0, 1fr); }
 .with-player .transcript-step > .tlist { grid-row: 1; }
+
+.script-desktop-preview:has(.studio-timeline) { min-width: 0; max-height: calc(100vh - 24px); overflow-y: auto; }
+.script-desktop-preview:has(.studio-timeline) .portrait-frame { width: min(100%, 220px, 29vh); }
+.studio-timeline { width: 100%; min-width: 0; }
+.studio-timeline audio, [aria-label="Selected scene controls"] audio { width: 100%; }
+.studio-tracks { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 5px; }
+.studio-tracks > span { color: var(--muted); font-size: .75rem; }
+.studio-track { display: flex; gap: 2px; min-width: 0; overflow-x: auto; }
+.studio-track > button { flex-basis: 0; min-width: 24px; padding: 3px; border: 1px solid var(--line);
+  border-radius: 4px; background: var(--panel); color: inherit; cursor: pointer; }
+.studio-track > button[aria-pressed="true"] { border-color: var(--accent); }
+.music-track { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding-inline: 5px; }
+
+.studio-review-items { margin: 0; padding: 0; list-style: none; gap: 6px; }
+.studio-review-items > li { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+
+.studio-finish { grid-template-columns: minmax(0, 1fr); }
+.studio-finish-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.studio-finish-toolbar h3, .studio-finish-toolbar p { margin: 0; }
+.studio-review-desk { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 14px; align-items: start; }
+.studio-scene-inspector { min-width: 0; }
+.studio-scene-inspector .studio-review-items { max-height: 145px; overflow-y: auto; }
+.studio-finish-settings { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; align-items: start; }
+@media (max-width: 1050px) {
+  .studio-review-desk, .studio-finish-settings { grid-template-columns: minmax(0, 1fr); }
+  .studio-review-desk .script-desktop-preview { position: static; max-height: none; }
+}

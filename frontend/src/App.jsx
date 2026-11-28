@@ -43,8 +43,8 @@ function CreateHome({ onChoose, jobs, onDelete, onDraft, showCreate }) {
         <span>Replace one sentence or narrate the entire recording in a saved voice.</span>
       </button>
       <button className="card create-path" onClick={() => onChoose(SCRIPT_SHORT)}>
-        <strong>Make a short from a script</strong>
-        <span>Turn a script, a saved voice, and local B-roll into a captioned short.</span>
+        <strong>Content Creation Studio</strong>
+        <span>Turn an idea or script into a finished YouTube short.</span>
       </button>
     </div>
     <button className="btn ghost create-learn" onClick={() => onChoose(LEARN_VIDEO)}>Learn from a video</button>

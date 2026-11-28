@@ -594,9 +594,15 @@ class SentencePickups(BaseModel):
 
 
 class ScriptNarrationRequest(BaseModel):
+    previous_id: str | None = Field(None, pattern=r"^[0-9a-f]{32}$")
     text: str = Field(min_length=1, max_length=1200)
     voice: str = Field(min_length=1, max_length=40)
     version: int | None = Field(None, ge=1)
+
+
+class RestoreScriptTake(ScriptNarrationRequest):
+    take_preview_id: str = Field(pattern=r"^[0-9a-f]{32}$")
+    take_line: int = Field(ge=0)
 
 
 class ScriptBrollPlanRequest(BaseModel):
@@ -606,6 +612,27 @@ class ScriptBrollPlanRequest(BaseModel):
 
 class ScriptBrief(BaseModel):
     brief: str = Field(min_length=1, max_length=1600)
+    source_notes: str = Field("", max_length=3000)
+
+
+class StudioLineEdit(BaseModel):
+    text: str = Field(min_length=1, max_length=1200)
+    line: int = Field(ge=0)
+    replacement: str = Field(min_length=1, max_length=240)
+
+
+class StudioPublishOptions(BaseModel):
+    title: str = Field("", max_length=100)
+    description: str = Field("", max_length=3500)
+    cover_text: str = Field("", max_length=100)
+    cover_time: float = Field(0, ge=0, le=60)
+    sources: str = Field("", max_length=1000)
+
+
+class StudioPublishRequest(BaseModel):
+    text: str = Field(min_length=1, max_length=1200)
+    title: str = Field("", max_length=120)
+    source_notes: str = Field("", max_length=3000)
 
 
 class StoryboardRequest(BaseModel):
@@ -687,6 +714,9 @@ class ScriptCaptionOptions(BaseModel):
 
 
 class ScriptShortRequest(ScriptNarrationRequest, ScriptCaptionOptions):
+    cut_token: str | None = Field(None, pattern=r"^[a-f0-9]{64}$")
+    draft_id: str | None = Field(None, pattern=r"^[0-9a-f]{10}$")
+    publish: StudioPublishOptions | None = None
     title: str = Field("Script short", max_length=120)
     assets: list[str] = Field(min_length=1, max_length=6)
     preview_id: str | None = Field(None, pattern=r"^[0-9a-f]{32}$")
@@ -694,6 +724,12 @@ class ScriptShortRequest(ScriptNarrationRequest, ScriptCaptionOptions):
 
 
 class ScriptShortDraft(ScriptCaptionOptions):
+    approved_takes: list[str] = Field(default_factory=list, max_length=300)
+    previous_id: str | None = Field(None, pattern=r"^[0-9a-f]{32}$")
+    studio_auto_cut: bool = False
+    studio_generate_music: bool = False
+    publish: StudioPublishOptions | None = None
+    source_notes: str = Field("", max_length=3000)
     id: str | None = Field(None, pattern=r"^[0-9a-f]{10}$")
     title: str = Field("", max_length=120)
     text: str = Field("", max_length=1200)

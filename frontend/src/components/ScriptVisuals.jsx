@@ -2,9 +2,10 @@ import { useState } from 'react'
 import { api } from '../api.js'
 
 export default function ScriptVisuals({ setup, script, scenes, setScenes, busy, run, onSave,
-  onUseStoryboard, canCreate, motion, setMotion, selected, onSelect, narrationLines, imageJob, queueImages, reference, setReference, onStandalone }) {
+  onUseStoryboard, canCreate, motion, setMotion, selected, onSelect, narrationLines, imageJob, queueImages, reference, setReference, onStandalone, onRevise, assets = [] }) {
   const [prompt, setPrompt] = useState('')
   const [image, setImage] = useState(null)
+  const [lineEdit, setLineEdit] = useState(null)
   const [count, setCount] = useState(3)
   const ready = !!scenes.length && scenes.every((scene) => scene.image_id || scene.asset_id)
 
@@ -87,6 +88,19 @@ export default function ScriptVisuals({ setup, script, scenes, setScenes, busy, 
                   index === selected ? { ...item, prompt: value, image_id: null, asset_id: null } : item))
               }} />
           </label>
+          {scenes[selected].text && <details>
+            <summary>Revise opening narration line</summary>
+            <label>Revised line
+              <textarea rows={2} maxLength={240}
+                value={lineEdit?.index === selected ? lineEdit.text : scenes[selected].text}
+                disabled={!!busy || generating}
+                onChange={(event) => setLineEdit({ index: selected, text: event.target.value })} />
+            </label>
+            <button type="button" className="btn ghost"
+              disabled={!!busy || generating || lineEdit?.index !== selected || !lineEdit?.text.trim()
+                || lineEdit.text.trim() === scenes[selected].text}
+              onClick={() => onRevise(selected, lineEdit.text)}>Save line revision</button>
+          </details>}
           {selected > 0 && narrationLines?.length ? <label>Start at narration line
             <select value={scenes[selected].line} disabled={!!busy || generating} onChange={(event) => {
               const line = Number(event.target.value)
@@ -98,6 +112,18 @@ export default function ScriptVisuals({ setup, script, scenes, setScenes, busy, 
                 && <option key={index} value={index}>{index + 1} · {line.text}</option>)}
             </select>
           </label> : <span className="muted small">Starts at line {scenes[selected].line + 1} · {scenes[selected].text}</span>}
+          {assets.length > 0 && <label>Replace this scene with local footage
+            <select value={scenes[selected].asset_id ?? ''} disabled={!!busy || generating}
+              onChange={(event) => {
+                const asset = event.target.value || null
+                setScenes((items) => items.map((item, index) =>
+                  index === selected ? { ...item, asset_id: asset, image_id: asset ? null : item.image_id } : item))
+              }}>
+              <option value="">Choose footage</option>
+              {assets.filter((asset) => !scenes.some((item, index) => index !== selected && item.asset_id === asset.id))
+                .map((asset) => <option key={asset.id} value={asset.id}>{asset.name}</option>)}
+            </select>
+          </label>}
           {scenes[selected].asset_id && <button type="button" className="btn ghost" disabled={!!busy || generating}
             onClick={() => setScenes((items) => items.map((item, index) =>
               index === selected ? { ...item, asset_id: null } : item))}>Remove matched video</button>}

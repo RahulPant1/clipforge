@@ -667,3 +667,45 @@ desktop packaging, video Q&A, Blender and ComfyUI can wait until the narration w
   separate environment only if keeping source ambience matters. Try it on CPU on a short sample and
   listen for residual original dialogue before using it across a batch.
   [Demucs setup](README.md#optional-source-ambience)
+
+### Content Creation Studio backlog
+
+- [x] **Brief to first cut (vertical pilot).** Generate a script and storyboard, reuse theme matches, queue missing images,
+  assemble narration and cuts, and optionally generate missing music.
+- [x] **Scene revisions.** Revise a scene's opening narration line and reuse unchanged takes when the voice and spoken text
+  match. Keep scene visuals and motion editable independently.
+- [x] **YouTube upload package.** Review title options, description and source credits, pick a thumbnail frame, and
+  download the video, captions, thumbnail and copy together. Verify factual claims before exporting.
+- [ ] **Longer landscape explainers.** Add a 2–4 minute 16:9 project format, chapter controls, and checkpointed exports.
+- [ ] **Research workflow.** Import source material on demand, map evidence to individual claims, and verify links.
+- [x] **Scene review workspace.** Review a scene beside the portrait preview, hear and revise its lines, approve takes,
+  and audition or restore previous versions with matching wording and voice.
+- [x] **Compact review timeline.** Seek across scenes and narration lines and see whether a scene's takes are approved.
+- [x] **Full-cut playback and review queue.** Preview the stitched visuals, narration, captions, and music with the
+  export renderer. Jump directly to flagged narration or scenes with pending take approvals.
+- [x] **Reuse a matching full-cut render for export.** Reuse video and captions from the local preview cache,
+  run publishing packaging on the export, and render afresh when settings or inputs change or the cache expires.
+- [x] **Finish review desk.** Put the preview and timeline beside the review queue and selected scene, with
+  a visible export action and collapsed finishing settings below.
+- [x] **Scene-only preview.** Render the selected scene with its final-cut caption and graphics timings and an
+  excerpt of the ducked music mix.
+- [x] **Full-cut timeline seeking.** Use the rendered scene boundaries to seek the mixed preview and keep the playhead in sync.
+- [x] **Local Studio MCP prototype.** Queue a script and storyboard draft through stdio, poll it after reconnecting,
+  and list the draft and any exports created in Studio.
+- [ ] **Advanced scene editing.** Add independent voice and render-model overrides and editable timeline cuts.
+- [ ] **Stronger visual continuity.** Benchmark subject-reference conditioning across camera changes and recurring episodes.
+- [ ] **Thumbnail variations.** Compare alternate frames and title treatments together in the publishing review.
+- [ ] **Repurpose Studio exports.** Send landscape explainers to the existing Shorts workflow with their source context.
+- [ ] **Publishing analytics.** Revisit after enough uploads to compare topic, hook, title, and thumbnail performance.
+
+### Clip selection evidence experiment
+
+- [x] **Compare a deterministic evidence boost on fixed windows.** Six fixtures from four saved sources matched
+  14 of 14 approved reference moments with baseline scoring and 13 of 14 with the boost. The four mixed and
+  sparse excerpts each had at most five candidates. A follow-up with the full candidate pools on those sources
+  dropped one reference moment in each case. Keep the production ranker. The references came from past
+  ClipForge picks, so the results measure agreement with those approvals.
+- [x] **Check the same boost on fresh candidate pools.** Marked seven transcript reference moments before
+  running Gemma on a spacetime excerpt and a hiring tutorial. With normal reasoning, both rankers matched
+  two of seven references in their top five. The boost increased boundary error on the matched mixed-footage
+  example from 10.32 to 13.87 seconds. Keep the current ranker.

@@ -314,6 +314,40 @@ def test_script_short_renders_ordered_broll_and_captions(tmp_path, monkeypatch, 
     music_folder = script_short.sfx.music_dir()
     music_folder.mkdir(parents=True)
     tone(music_folder / "music.wav", 0.8, freq=600)
+    mix_request = request.model_copy(update={
+        "music": "music.wav", "music_gain_db": -12,
+        "graphics": [ScriptGraphic(kind="label", line=2, duration=0.7, text="Water here", vertical="top")],
+    })
+    full_mix = tmp_path / "full-mix.mp4"
+    full_mix.write_bytes(script_short.preview_cut(mix_request)[0])
+    preview_scene = tmp_path / "scene.mp4"
+    previously_exported = script_short.recent()
+    preview_scene.write_bytes(script_short.preview_scene(mix_request, 1))
+    assert script_short.recent() == previously_exported
+    assert revoice.probe(preview_scene) == pytest.approx((0.8, True, True), abs=0.06)
+
+    def frame_at(path, timestamp):
+        data = subprocess.check_output([
+            "ffmpeg", "-v", "error", "-ss", str(timestamp), "-i", str(path), "-frames:v", "1",
+            "-vf", "scale=90:160", "-pix_fmt", "rgb24", "-f", "rawvideo", "-",
+        ])
+        return np.frombuffer(data, dtype=np.uint8).astype(float)
+
+    scene_start = round(1.4 * script_short.FPS) / script_short.FPS
+    assert np.abs(frame_at(preview_scene, 0.25) - frame_at(full_mix, scene_start + 0.25)).mean() < 2
+
+    def audio_at(path, timestamp):
+        data = subprocess.check_output([
+            "ffmpeg", "-v", "error", "-ss", str(timestamp), "-i", str(path), "-t", "0.3",
+            "-ac", "1", "-ar", "8000", "-f", "f32le", "-",
+        ])
+        return np.frombuffer(data, dtype="<f4")
+
+    assert np.corrcoef(audio_at(preview_scene, 0.12), audio_at(full_mix, scene_start + 0.12))[0, 1] > 0.95
+    with pytest.raises(ValueError, match="Choose a scene"):
+        script_short.preview_scene(mix_request, 2)
+    assert len(fakes) == 2
+
     def music_band(gain):
         mixed = script_short.preview_mix(revised["id"], "music.wav", gain)
         decoded = subprocess.check_output([
@@ -347,5 +381,67 @@ def test_script_short_renders_ordered_broll_and_captions(tmp_path, monkeypatch, 
 
     assert animated_pixels(1.4) == [0, 0, 0]
     assert all(count > 25 for count in animated_pixels(1.95))
-    assert ass_calls == [("neon", "middle", True)]
+    assert ass_calls == [("neon", "middle", True)] * 3
     assert script_short.file(direct["id"], "captions.srt").stat().st_size > 0
+
+
+def test_studio_revises_one_take_and_packages_existing_visuals(tmp_path, monkeypatch, fakes):
+    from zipfile import ZipFile
+
+    from app.models import ScriptShortRequest, StudioPublishOptions
+    from app.pipeline import script_short
+
+    monkeypatch.setattr(settings, "data_dir", tmp_path / "data")
+    monkeypatch.setattr(settings, "broll_dir", tmp_path / "footage")
+    settings.broll_dir.mkdir()
+    media(settings.broll_dir / "scenes.mp4", seconds=1)
+    voice = tts.create("Studio", consent=True)
+    voice["builds"] = [{"version": 1, "prompt": "test.pt"}]
+    tts.save(voice)
+    asset = script_short.assets()[0]["id"]
+    original = ScriptShortRequest(text="First approved take. Wrong fact. Last approved take.", voice=voice["id"],
+                                  assets=[asset])
+    first = script_short.preview(original)
+    edited = original.model_copy(update={"text": "First approved take. Correct fact. Last approved take.",
+                                         "previous_id": first["id"]})
+    revised = script_short.preview(edited)
+    assert revised["reused_lines"] == 2
+    assert fakes[1:] == [["Correct fact."]]
+    assert [revised["lines"][i]["take_id"] for i in (0, 2)] == [first["lines"][i]["take_id"] for i in (0, 2)]
+    assert revised["lines"][1]["history"][0]["text"] == "Wrong fact."
+    assert script_short.line_audio(first["id"], 0) == script_short.line_audio(revised["id"], 0)
+    music_folder = script_short.sfx.music_dir()
+    music_folder.mkdir(parents=True)
+    tone(music_folder / "score.wav", 0.8, freq=600)
+    cut = edited.model_copy(update={"preview_id": revised["id"], "music": "score.wav", "music_gain_db": -8})
+    playback, boundaries, token = script_short.preview_cut(cut)
+    assert token
+    assert boundaries == [0.0, pytest.approx(revised["duration"], abs=1 / script_short.FPS)]
+    assert script_short.recent() == []
+    published = script_short.create(cut.model_copy(update={
+        "cut_token": token, "title": "Renamed without changing the cut", "publish": StudioPublishOptions(
+            title="The correct fact", description="An explainer", cover_text="Watch this",
+            sources="https://example.org/reviewed-source", cover_time=1,
+        ),
+    }))
+    assert published["youtube_package"]
+    assert published["reused_cut"]
+    assert playback == script_short.file(published["id"], "short.mp4").read_bytes()
+    assert script_short.preview_cut(cut) == (playback, boundaries, token)
+    changed = script_short.create(cut.model_copy(update={"music_gain_db": -16, "cut_token": token}))
+    assert not changed["reused_cut"]
+    assert playback != script_short.file(changed["id"], "short.mp4").read_bytes()
+    (script_short._cut_cache() / token / "captions.srt").unlink()
+    fallback = script_short.create(cut.model_copy(update={"cut_token": token}))
+    assert not fallback["reused_cut"]
+
+    with ZipFile(script_short.file(published["id"], "youtube-package.zip")) as archive:
+        assert set(archive.namelist()) == {"short.mp4", "captions.srt", "thumbnail.jpg", "youtube.txt"}
+        assert "https://example.org/reviewed-source" in archive.read("youtube.txt").decode()
+        assert archive.read("thumbnail.jpg").startswith(b"\xff\xd8")
+    assert fakes[1:] == [["Correct fact."]]
+    alternate = script_short.retake(revised["id"], 1, edited)
+    restored = script_short.retake(alternate["id"], 1, edited, (revised["id"], 1))
+    assert restored["lines"][1]["take_id"] == revised["lines"][1]["take_id"]
+    assert script_short.line_audio(restored["id"], 1) == script_short.line_audio(revised["id"], 1)
+    assert fakes[1:] == [["Correct fact."], ["Correct fact."]]

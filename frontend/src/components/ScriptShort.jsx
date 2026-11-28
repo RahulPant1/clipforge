@@ -5,9 +5,24 @@ import ScriptGraphics from './ScriptGraphics.jsx'
 import ScriptMusic from './ScriptMusic.jsx'
 import ScriptVisuals from './ScriptVisuals.jsx'
 import ThemeLibrary from './ThemeLibrary.jsx'
+import StudioPublish, { blankPublish } from './StudioPublish.jsx'
+import StudioReviewQueue from './StudioReviewQueue.jsx'
+import StudioSceneReview from './StudioSceneReview.jsx'
+import StudioTimeline from './StudioTimeline.jsx'
 import TakeReview from './TakeReview.jsx'
 
 const recoveryKey = 'clipforge.script-short.recovery.v1'
+
+function CutPlayer({ blob, playback, onProgress, label }) {
+  const [source, setSource] = useState(null)
+  useEffect(() => {
+    const url = URL.createObjectURL(blob)
+    setSource(url)
+    return () => URL.revokeObjectURL(url)
+  }, [blob])
+  return <video ref={playback} className="srcvid" controls autoPlay aria-label={label} src={source}
+    onTimeUpdate={onProgress} onSeeked={onProgress} />
+}
 
 function restoreWorkspace() {
   try {
@@ -15,6 +30,16 @@ function restoreWorkspace() {
   } catch {
     return {}
   }
+}
+
+function fillThemeMatches(scenes, plan) {
+  const used = new Set(scenes.flatMap((scene) => [scene.image_id, scene.asset_id].filter(Boolean)))
+  return scenes.map((scene, index) => {
+    const asset = plan.scenes[index]?.asset
+    if (scene.image_id || scene.asset_id || !asset || used.has(asset.asset)) return scene
+    used.add(asset.asset)
+    return asset.kind === 'video' ? { ...scene, asset_id: asset.asset } : { ...scene, image_id: asset.asset }
+  })
 }
 
 export default function ScriptShort({ openDraftId }) {
@@ -29,7 +54,19 @@ export default function ScriptShort({ openDraftId }) {
   const [sceneSelection, setSceneSelection] = useState(0)
   const [catalog, setCatalog] = useState(null)
   const [monitor, setMonitor] = useState('edit')
+  const [fullCut, setFullCut] = useState(null)
+  const [sceneCut, setSceneCut] = useState(null)
+  const [reviewTarget, setReviewTarget] = useState(null)
+  const playback = useRef(null)
+  const portraitPreview = useRef(null)
+  const [cutTime, setCutTime] = useState(0)
   const [captionPresets, setCaptionPresets] = useState(null)
+  const [studio, setStudio] = useState(recovery.studio ?? {
+    notes: '', publish: null, previousId: null, autoCut: false, generateMusic: false,
+  })
+  const [approvedTakes, setApprovedTakes] = useState(recovery.approvedTakes ?? [])
+  const [packageChecked, setPackageChecked] = useState(false)
+  const setStudioField = (key, value) => setStudio((current) => ({ ...current, [key]: value }))
   const [graphics, setGraphics] = useState(recovery.graphics ?? [])
   const [musicGain, setMusicGain] = useState(recovery.musicGain ?? 0)
   const [music, setMusic] = useState(recovery.music ?? "")
@@ -76,15 +113,15 @@ export default function ScriptShort({ openDraftId }) {
     try {
       window.localStorage.setItem(recoveryKey, JSON.stringify({
         section, draftId, voice, version, title, text, brief, storyboard, imageMotion,
-        chosen, preview, timing, sceneLines, result, captionLook, music, musicGain, creative, themeMusicPrompt, graphics,
+        chosen, preview, timing, sceneLines, result, captionLook, music, musicGain, creative, themeMusicPrompt, graphics, studio, approvedTakes,
       }))
     } catch {
       // Named drafts still work if this browser blocks local storage.
     }
-  }, [section, draftId, voice, version, title, text, brief, storyboard, imageMotion, chosen, preview, timing, sceneLines, result, captionLook, music, musicGain, creative, themeMusicPrompt, graphics])
+  }, [section, draftId, voice, version, title, text, brief, storyboard, imageMotion, chosen, preview, timing, sceneLines, result, captionLook, music, musicGain, creative, themeMusicPrompt, graphics, studio, approvedTakes])
 
-  const saveDraft = async (copy = false) => {
-    setBusy('draft')
+  const saveDraft = async (copy = false, overrides = {}, silent = false) => {
+    if (!silent) setBusy('draft')
     setError('')
     setNotice('')
     try {
@@ -92,16 +129,19 @@ export default function ScriptShort({ openDraftId }) {
         version: preview?.version ?? (version ? Number(version) : null), assets: chosen,
         scene_lines: Object.fromEntries(chosen.filter((id) => id in sceneLines).map((id) => [id, sceneLines[id]])),
         timing, section, preview_id: preview?.id ?? null, storyboard, image_motion: imageMotion, ...captionLook, music, music_gain_db: musicGain,
-        graphics, theme: creative.theme, theme_music_prompt: themeMusicPrompt, visual_reference: creative.reference, reference_image: creative.image })
+        graphics, theme: creative.theme, theme_music_prompt: themeMusicPrompt, visual_reference: creative.reference, reference_image: creative.image,
+        approved_takes: approvedTakes, publish: studio.publish, source_notes: studio.notes, studio_auto_cut: studio.autoCut,
+        studio_generate_music: studio.generateMusic, previous_id: studio.previousId, ...overrides })
       setDrafts((previous) => [saved, ...previous.filter((draft) => draft.id !== saved.id)])
       setDraftId(saved.id)
       setDraftToOpen(saved.id)
       setNotice('Draft saved on this device.')
       return saved
     } catch (failure) {
+      if (silent) throw failure
       setError(failure.message)
     } finally {
-      setBusy('')
+      if (!silent) setBusy('')
     }
   }
   useEffect(() => { setImageJob(null) }, [draftId])
@@ -165,6 +205,14 @@ export default function ScriptShort({ openDraftId }) {
         setNotice('Draft opened. Generate a fresh narration preview to use saved scene timing.')
       }
     }
+    setStudio({ notes: draft.source_notes ?? '', publish: draft.publish ?? null, previousId: draft.previous_id ?? null,
+      autoCut: draft.studio_auto_cut ?? false, generateMusic: draft.studio_generate_music ?? false })
+    setPackageChecked(false)
+    setFullCut(null)
+    setSceneCut(null)
+    setReviewTarget(null)
+    setMonitor('edit')
+    setApprovedTakes(draft.approved_takes ?? [])
     setDraftId(draft.id)
     setDraftToOpen(draft.id)
     setSceneSelection(0)
@@ -202,7 +250,14 @@ export default function ScriptShort({ openDraftId }) {
   }, [openDraftId, drafts])
 
   const newDraft = () => {
+    setFullCut(null)
+    setSceneCut(null)
+    setReviewTarget(null)
+    setMonitor('edit')
+    setApprovedTakes([])
     setDraftId('')
+    setStudio({ notes: '', publish: null, previousId: null, autoCut: false, generateMusic: false })
+    setPackageChecked(false)
     setDraftToOpen('')
     setStandalone(null)
     setTitle('')
@@ -246,7 +301,7 @@ export default function ScriptShort({ openDraftId }) {
     setTiming('equal')
     setSceneLines({})
   }
-  const narration = () => ({ text: text.trim(), voice, version: version ? Number(version) : null })
+  const narration = () => ({ text: text.trim(), voice, version: version ? Number(version) : null, previous_id: studio.previousId })
   const run = async (operation, fn) => {
     setBusy(operation)
     setError('')
@@ -262,12 +317,14 @@ export default function ScriptShort({ openDraftId }) {
   const changeScript = (value) => {
     setText(value)
     setStoryboard([])
+    setStudioField('previousId', null)
+    setPackageChecked(false)
     invalidatePreview()
   }
   const writeScript = () => {
     if (text.trim() && !window.confirm('Replace the current script with a generated draft?')) return
     run('write', async () => {
-      const draft = await api.writeScript(brief.trim())
+      const draft = await api.writeScript(brief.trim(), studio.notes)
       setTitle(draft.title)
       changeScript(draft.text)
     })
@@ -279,35 +336,113 @@ export default function ScriptShort({ openDraftId }) {
     setPlan(null)
     setNotice('Image saved to your local B-roll library.')
   }
-  const useStoryboard = async () => {
+  const useStoryboard = async (scenes = storyboard) => {
     const generatedAssets = []
-    for (const scene of storyboard) {
+    for (const scene of scenes) {
       generatedAssets.push(scene.asset_id || (await api.saveScriptImage(scene.image_id, scene.motion ?? imageMotion)).id)
     }
     const take = preview ?? await api.previewScriptNarration(narration())
     setPreview(take)
+    let preparedMusic = music
+    if (studio.autoCut && studio.generateMusic && !music && catalog?.music_generation) {
+      const prompt = themeMusicPrompt || (await api.suggestScriptMusic(text.trim())).prompt
+      preparedMusic = (await api.generateScriptMusic(prompt, Math.min(30, Math.max(10, Math.ceil(take.duration))))).track
+      setMusic(preparedMusic)
+    }
     setChosen(generatedAssets)
-    setSceneLines(Object.fromEntries(generatedAssets.map((id, index) => [id, storyboard[index].line])))
+    setSceneLines(Object.fromEntries(generatedAssets.map((id, index) => [id, scenes[index].line])))
     setTiming('lines')
     setPlan(null)
     await refresh()
     moveToSection('export')
+    if (studio.autoCut) {
+      await saveDraft(false, {
+        section: 'export', preview_id: take.id, storyboard: scenes, assets: generatedAssets, music: preparedMusic,
+        scene_lines: Object.fromEntries(generatedAssets.map((id, index) => [id, scenes[index].line])),
+        timing: 'lines', studio_auto_cut: false,
+      }, true)
+      setNotice('First cut ready. Review the narration, scenes, and YouTube copy before exporting.')
+    }
   }
 
   const applyTheme = (plan) => {
-    setStoryboard((items) => {
-      const used = new Set(items.flatMap((item) => [item.image_id, item.asset_id].filter(Boolean)))
-      return items.map((item, index) => {
-        const asset = plan.scenes[index]?.asset
-        if (item.image_id || item.asset_id || !asset || used.has(asset.asset)) return item
-        used.add(asset.asset)
-        return asset.kind === 'video' ? { ...item, asset_id: asset.asset } : { ...item, image_id: asset.asset }
-      })
-    })
+    setStoryboard((items) => fillThemeMatches(items, plan))
     if (!music && plan.music.asset) setMusic(plan.music.asset.asset)
     if (!music && !plan.music.asset) setThemeMusicPrompt(plan.music_prompt)
     setNotice('Theme matches applied. Generate remaining images in Storyboard and any missing music in Finish.')
   }
+
+  const startFirstCut = () => run('studio-start', async () => {
+    const draft = text.trim() ? { text: text.trim(), title } : await api.writeScript(brief.trim(), studio.notes)
+    let scenes = storyboard.length ? storyboard : (await api.scriptStoryboard(draft.text, 4)).scenes
+    let chosenMusic = music
+    let prompt = themeMusicPrompt
+    if (creative.theme.trim()) {
+      const matches = await api.matchTheme({
+        theme: creative.theme.trim(), text: draft.text, reference: creative.reference, scenes,
+      })
+      scenes = fillThemeMatches(scenes, matches)
+      chosenMusic ||= matches.music.asset?.asset ?? ''
+      prompt = matches.music_prompt
+    }
+    const missing = scenes.flatMap((scene, index) => scene.image_id || scene.asset_id ? [] : [index])
+    if (missing.length && !catalog?.image_generation.available) {
+      throw new Error('Set up ComfyUI or add existing footage for the storyboard scenes.')
+    }
+    const saved = await saveDraft(false, { ...draft, storyboard: scenes, music: chosenMusic,
+      theme_music_prompt: prompt, studio_auto_cut: true, section: 'footage' }, true)
+    setTitle(draft.title)
+    setText(draft.text)
+    setStoryboard(scenes)
+    setThemeMusicPrompt(prompt)
+    setMusic(chosenMusic)
+    moveToSection('footage')
+    if (missing.length) setImageJob((await api.queueStoryboardImages(saved.id, missing)).job)
+    setStudioField('autoCut', true)
+  })
+
+  useEffect(() => {
+    if (!studio.autoCut || busy || !storyboard.length
+        || !storyboard.every((scene) => scene.image_id || scene.asset_id)
+        || ['queued', 'running'].includes(imageJob?.status)) return
+    setStudioField('autoCut', false)
+    run('studio-assemble', useStoryboard)
+  }, [studio.autoCut, busy, storyboard, imageJob?.status])
+
+  const isApproved = (index) => approvedTakes.includes(preview?.lines[index]?.take_id)
+  const toggleApproval = (id) => setApprovedTakes((current) => current.includes(id)
+    ? current.filter((item) => item !== id) : [...current, id].slice(-300))
+  const reviseNarrationLine = (index, replacement, regenerate = false) => run('revise-line', async () => {
+    if (isApproved(index)) throw new Error('Unlock this take to edit the line.')
+    const revised = await api.studioEditLine({ text, line: index, replacement })
+    const previousId = preview?.id ?? studio.previousId
+    setStudioField('previousId', previousId)
+    setText(revised.text)
+    setStoryboard((current) => current.map((item) => item.line === index ? { ...item, text: revised.line } : item))
+    setPreview(null)
+    setPackageChecked(false)
+    if (regenerate) {
+      const take = await api.previewScriptNarration({ ...narration(), text: revised.text, previous_id: previousId })
+      setPreview(take)
+      setNotice(`Line ${index + 1} regenerated · ${take.reused_lines} other takes reused · visuals kept.`)
+    } else {
+      setNotice('Scene line revised. Refresh narration to reuse the other takes.')
+    }
+  })
+  const reviseSceneLine = (index, replacement) => reviseNarrationLine(storyboard[index].line, replacement)
+  const restoreTake = (index, entry) => run('restore-take', async () => {
+    if (isApproved(index)) return
+    setPreview(await api.restoreScriptTake(preview.id, index, {
+      ...narration(), take_preview_id: entry.preview_id, take_line: entry.line,
+    }))
+    setNotice(`Take restored for line ${index + 1}. Other takes and visuals kept.`)
+  })
+  const replaceSceneFootage = (assetId) => run('replace-scene', async () => {
+    const scenes = storyboard.map((item, index) => index === sceneIndex ? { ...item, asset_id: assetId || null } : item)
+    if (scenes.every((item) => item.image_id || item.asset_id)) await useStoryboard(scenes)
+    setStoryboard(scenes)
+    setMonitor('edit')
+  })
 
   const previewNarration = async () => {
     setBusy('preview')
@@ -335,6 +470,7 @@ export default function ScriptShort({ openDraftId }) {
   }
 
   const retakeLine = async (index) => {
+    if (isApproved(index)) return
     setBusy(`retake-${index}`)
     setError('')
     setNotice('')
@@ -375,15 +511,45 @@ export default function ScriptShort({ openDraftId }) {
 
   const graphicsReady = graphics.every((item) => preview?.lines[item.line] && item.duration >= 0.5
     && item.duration <= 8 && (item.kind !== 'label' || item.text.trim()))
+  const cutSettings = (take) => ({
+    text: text.trim(), voice, version: take?.version ?? (version ? Number(version) : null),
+    ...captionLook, music, music_gain_db: musicGain, assets: chosen, graphics,
+    preview_id: take?.id ?? null, scene_starts: sceneStarts,
+  })
+  const cutKey = JSON.stringify(cutSettings(preview))
+  const currentCut = fullCut?.key === cutKey ? fullCut : null
+  useEffect(() => {
+    if (fullCut && !currentCut) setFullCut(null)
+  }, [fullCut, currentCut])
+
+  const prepareCut = () => {
+    if (currentCut) {
+      setCutTime(0)
+      setMonitor('full')
+      return
+    }
+    run('full-cut', async () => {
+      const take = preview ?? await api.previewScriptNarration(narration())
+      setPreview(take)
+      const settings = cutSettings(take)
+      const cut = await api.previewScriptCut(settings)
+      setFullCut({ key: JSON.stringify(settings), ...cut })
+      setCutTime(0)
+      setMonitor('full')
+    })
+  }
+
   const generate = async (event) => {
     event.preventDefault()
     if (busy || section !== 'export' || !scriptReady || !footageReady || !graphicsReady) return
     setBusy('render')
     setError('')
     try {
-      const created = await api.createScriptShort({ ...narration(), title: title.trim() || 'Script short', ...captionLook, music, music_gain_db: musicGain,
-        assets: chosen, graphics, preview_id: preview?.id ?? null, scene_starts: sceneStarts })
+      const created = await api.createScriptShort({ ...cutSettings(preview), cut_token: currentCut?.token,
+        draft_id: draftId || null, title: title.trim() || 'Script short',
+        publish: packageChecked ? (studio.publish ?? blankPublish) : null })
       setResult(created)
+      if (created.reused_cut) setNotice('Export saved using the full-cut preview.')
       setMonitor('export')
       await refresh()
     } catch (failure) {
@@ -393,16 +559,119 @@ export default function ScriptShort({ openDraftId }) {
     }
   }
 
-  const sceneIndex = Math.min(sceneSelection, Math.max(0, storyboard.length - 1))
-  const scene = storyboard[sceneIndex]
+  const plannedScenes = storyboard.length > 0 && (!chosen.length ||
+    (chosen.length === storyboard.length && timing === 'lines' && (!preview || sceneStarts.every(
+      (line, index) => line === storyboard[index].line &&
+        (!storyboard[index].asset_id || storyboard[index].asset_id === chosen[index])))))
+  const reviewScenes = plannedScenes ? storyboard : (chosen.length ? chosen : [null]).map((assetId, index) => {
+    if (!index || !preview) return { asset_id: assetId, line: 0 }
+    const start = (index * preview.duration) / chosen.length
+    const line = preview.lines.findIndex((item) => item.start >= start)
+    return { asset_id: assetId, start: sceneStarts ? undefined : start,
+      line: sceneStarts?.[index] ?? (line === -1 ? preview.lines.length : line) }
+  })
+  const activeScenes = section === 'export' ? reviewScenes : storyboard
+  const sceneIndex = Math.min(sceneSelection, Math.max(0, activeScenes.length - 1))
+  const scene = activeScenes[sceneIndex]
   const look = captionPresets?.presets.find((item) => item.id === (captionLook.caption_preset ?? captionPresets.default))
   const sample = (scene?.text || text).trim().split(/\s+/).slice(0, look?.words ?? 3).join(' ')
-  const frame = scene?.image_id && api.scriptImage(scene.image_id)
+  const frame = !scene?.asset_id && scene?.image_id && api.scriptImage(scene.image_id)
   const showingExport = section === 'export' && result && monitor === 'export'
 
-  return <div className="script-desktop">
+  const showingFull = section === 'export' && currentCut && monitor === 'full'
+
+  const currentSceneCut = sceneCut?.key === cutKey && sceneCut.index === sceneIndex ? sceneCut : null
+  const showingScene = section === 'export' && currentSceneCut && monitor === 'scene'
+  const prepareSceneCut = () => {
+    if (currentSceneCut && !showingScene) {
+      setMonitor('scene')
+      return
+    }
+    if (showingScene && playback.current) {
+      playback.current.currentTime = 0
+      playback.current.play().catch(() => {})
+      return
+    }
+    run('scene-cut', async () => {
+      const take = preview ?? await api.previewScriptNarration(narration())
+      setPreview(take)
+      const settings = cutSettings(take)
+      const blob = await api.previewScriptScene(sceneIndex, settings)
+      setSceneCut({ key: JSON.stringify(settings), index: sceneIndex, blob })
+      setMonitor('scene')
+      portraitPreview.current?.scrollIntoView({ block: 'nearest' })
+    })
+  }
+
+  const updateCutTime = (event) => {
+    const time = event.currentTarget.currentTime
+    const boundaries = currentCut?.boundaries
+    setCutTime(time)
+    if (boundaries) setSceneSelection(Math.max(0, boundaries.slice(0, -1).findLastIndex((start) => start <= time)))
+  }
+  const seekCut = (time) => {
+    if (playback.current) playback.current.currentTime = time
+    setCutTime(time)
+  }
+
+  const pauseOtherPlayback = (event) => {
+    const player = playback.current
+    if (!player) return
+    if (event.target === player) {
+      event.currentTarget.querySelectorAll('video, audio').forEach((media) => {
+        if (media !== player) media.pause()
+      })
+    } else if (event.target instanceof HTMLMediaElement) {
+      player.pause()
+    }
+  }
+  const jumpToReview = (index, line) => {
+    setSceneSelection(index)
+    setReviewTarget({ line })
+    setMonitor('edit')
+  }
+
+  const portrait = <section ref={portraitPreview} className="card script-desktop-preview" aria-label="Portrait preview">
+      <h3>Portrait preview</h3>
+      {section === 'export' && <div className="row-btns" role="group" aria-label="Portrait preview mode">
+        <button type="button" className="btn sm ghost" aria-pressed={!showingExport && !showingFull && !showingScene}
+          onClick={() => setMonitor('edit')}>Edit preview</button>
+        <button type="button" className="btn sm ghost" aria-pressed={!!showingFull}
+          disabled={!!busy || !scriptReady || !footageReady || !graphicsReady} onClick={prepareCut}>
+          {busy === 'full-cut' ? 'Preparing full cut…' : 'Play full cut'}
+        </button>
+        {result && <button type="button" className="btn sm ghost" aria-pressed={!!showingExport}
+          onClick={() => setMonitor('export')}>Last export</button>}
+      </div>}
+      {showingFull && <CutPlayer blob={currentCut.blob} playback={playback} onProgress={updateCutTime} label="Full cut preview" />}
+      {showingScene && <CutPlayer blob={currentSceneCut.blob} playback={playback} label={`Scene ${sceneIndex + 1} preview`} />}
+      {showingExport && <video className="srcvid" controls preload="metadata"
+        aria-label="Script short preview" src={api.scriptShortFile(result.id, 'short.mp4')} />}
+      {!showingExport && !showingFull && !showingScene && <div className="portrait-frame">
+        {frame ? <img src={frame} alt={`Storyboard scene ${sceneIndex + 1}`} />
+          : scene?.asset_id ? <video controls preload="metadata" src={api.brollAssetUrl(scene.asset_id)} />
+            : chosen.length ? <video controls preload="metadata" src={api.brollAssetUrl(chosen[0])} />
+            : <span className="muted">Add a storyboard image or footage to preview it here.</span>}
+        {frame && section === 'export' && sample && captionLook.caption_style !== 'none' &&
+          <span className={`portrait-caption ${(captionLook.caption_position ?? captionPresets?.position) === 'middle' ? 'middle' : ''}`}
+            style={{ fontFamily: look?.font, color: cssCaptionColor(captionLook.caption_style === 'karaoke' ? look?.active : look?.text),
+              fontWeight: look?.bold === false ? 400 : 700,
+              background: look?.box ? cssCaptionColor(look.outline_color) : undefined }}>
+            {look?.uppercase === false ? sample : sample.toUpperCase()}
+          </span>}
+      </div>}
+      {section === 'export' && !!chosen.length && <StudioTimeline scenes={reviewScenes} selected={sceneIndex}
+        onSelect={(index) => {
+          setSceneSelection(index)
+          if (!showingFull) setMonitor('edit')
+        }}
+        fullCut={showingFull ? { time: cutTime, seek: seekCut, boundaries: currentCut.boundaries } : null}
+        take={preview} approved={approvedTakes} music={music} />}
+    </section>
+
+  return <div className={`script-desktop${section === 'export' ? ' studio-finish' : ''}`} onPlayCapture={pauseOtherPlayback}>
     <div className="script-desktop-controls">
-    <h2>Script → Short</h2>
+    <h2>Content Creation Studio</h2>
     <p className="muted">Write your narration, choose a voice, and arrange B-roll for a captioned 9:16 video. Changes are kept in this browser.</p>
     {error && <p className="banner error" role="alert">{error}</p>}
     <div className="card row-btns">
@@ -427,25 +696,6 @@ export default function ScriptShort({ openDraftId }) {
             disabled={!!busy} onClick={() => moveToSection(key)}>{label}</button>
         ))}
       </div>
-      {section === 'export' && <details open className="script-section form">
-        <summary>Caption styling</summary>
-        <Seg label="Captions" value={captionLook.caption_style ?? 'simple'} disabled={!!busy}
-          options={[['karaoke', 'Animated'], ['simple', 'Simple'], ['none', 'Off']]}
-          onChange={(value) => setCaption('caption_style', value)} />
-        {captionPresets && captionLook.caption_style !== 'none' && <>
-          <div className="opt-col">
-            <span className="muted">Caption look</span>
-            <div className="looks">
-              {captionPresets.presets.map((preset) => <LookChip key={preset.id} p={preset}
-                on={(captionLook.caption_preset ?? captionPresets.default) === preset.id} disabled={!!busy}
-                onPick={() => setCaption('caption_preset', preset.id)} />)}
-            </div>
-          </div>
-          <Seg label="Position" value={captionLook.caption_position ?? captionPresets.position} disabled={!!busy}
-            options={[['bottom', 'Bottom'], ['middle', 'Middle']]}
-            onChange={(value) => setCaption('caption_position', value)} />
-        </>}
-      </details>}
       <section className="script-section form" hidden={section !== 'script'} aria-label="Script and voice">
         <details>
           <summary>Draft a script from a topic</summary>
@@ -454,6 +704,8 @@ export default function ScriptShort({ openDraftId }) {
               placeholder="Explain why watering at the roots helps houseplants"
               onChange={(event) => setBrief(event.target.value)} />
           </label>
+          <label>Source notes or links <textarea rows={3} value={studio.notes} maxLength={3000} disabled={!!busy}
+            onChange={(event) => { setStudioField('notes', event.target.value); setPackageChecked(false) }} /></label>
           <button type="button" className="btn" disabled={!!busy || !brief.trim()} onClick={writeScript}>
             {busy === 'write' ? 'Drafting script…' : 'Generate script'}
           </button>
@@ -485,10 +737,21 @@ export default function ScriptShort({ openDraftId }) {
           </select></label>}
         </div>
         <div className="row-btns">
+          <button type="button" className="primary" disabled={!!busy || studio.autoCut || !voice || (!text.trim() && !brief.trim())}
+            onClick={startFirstCut}>{busy === 'studio-start' ? 'Preparing first cut…' : 'Generate first cut'}</button>
+          {studio.autoCut && <button type="button" className="btn ghost"
+            disabled={!!busy} onClick={() => run('studio-manual', async () => {
+              await saveDraft(false, { studio_auto_cut: false }, true)
+              setStudioField('autoCut', false)
+            })}>Switch to manual assembly</button>}
+          {catalog?.music_generation && <label><input type="checkbox" checked={studio.generateMusic} disabled={!!busy}
+            onChange={(event) => setStudioField('generateMusic', event.target.checked)} /> Generate missing music</label>}
+        </div>
+        <div className="row-btns">
           <button type="button" className="btn" disabled={!!busy || !voice || !text.trim()} onClick={previewNarration}>
             {busy === 'preview' ? 'Generating narration preview…' : 'Preview narration'}
           </button>
-          {preview && <span className="muted small">{preview.duration.toFixed(1)} s{preview.version && ` · v${preview.version}`} · reused in export</span>}
+          {preview && <span className="muted small">{preview.duration.toFixed(1)} s{preview.reused_lines > 0 && ` · ${preview.reused_lines} takes reused`}{preview.version && ` · v${preview.version}`} · reused in export</span>}
         </div>
         {preview && <div>
           <audio ref={audio} controls preload="metadata" aria-label="Narration preview" src={api.scriptNarrationAudio(preview.id)} />
@@ -499,7 +762,7 @@ export default function ScriptShort({ openDraftId }) {
                 <button type="button" className="btn sm ghost" onClick={() => listenToLine(line.start)}>
                   Play from {line.start.toFixed(2)} s
                 </button>{' '}{line.text}
-                <button type="button" className="btn sm ghost" disabled={!!busy}
+                <button type="button" className="btn sm ghost" disabled={!!busy || isApproved(index)}
                   onClick={() => retakeLine(index)} aria-label={`Regenerate line ${index + 1}`}>
                   {busy === `retake-${index}` ? 'Regenerating…' : 'Retake'}
                 </button>
@@ -516,7 +779,7 @@ export default function ScriptShort({ openDraftId }) {
           motion={imageMotion} setMotion={setImageMotion} selected={sceneIndex} onSelect={setSceneSelection}
           narrationLines={preview?.lines} imageJob={imageJob} queueImages={queueImages}
           reference={creative} setReference={(values) => setCreative((current) => ({ ...current, ...values }))}
-          onStandalone={setStandalone} />
+          onStandalone={setStandalone} onRevise={reviseSceneLine} assets={catalog?.assets} />
         <ThemeLibrary theme={creative.theme} onTheme={(theme) => setCreative((current) => ({ ...current, theme }))}
           selectedImage={scene?.image_id} standaloneImage={standalone} selectedVideo={scene?.asset_id || asset} track={music}
           scenes={storyboard} script={text} reference={creative.reference}
@@ -592,22 +855,79 @@ export default function ScriptShort({ openDraftId }) {
           {!timingValid && <p className="warn small">Choose a different, later script line for each scene.</p>}
         </>}
       </section>
-      <section className="script-section form" hidden={section !== 'export'} aria-label="Preview and export">
-        <p className="muted small">{voiceName ?? 'Choose a voice'} · {chosen.length}
-          {chosen.length === 1 ? ' clip' : ' clips'}{preview && ` · ${preview.duration.toFixed(1)} s narration ready`}</p>
-        <ScriptGraphics items={graphics} setItems={setGraphics} take={preview} busy={busy}
-          canPreview={scriptReady} onPreview={previewNarration} onPlay={listenToLine} />
-        {!graphicsReady && <p className="warn small">Check the narration line, duration, and label text for each graphic.</p>}
-        <ScriptMusic initialPrompt={themeMusicPrompt} script={text} track={music} onSelect={setMusic} available={catalog?.music_generation}
-          narrationDuration={preview?.duration} busy={busy} run={run} gain={musicGain} onGain={setMusicGain}
-          voice={voice} voiceVersion={version} takeId={preview?.id}
-          onPreview={async () => {
-            const take = preview ?? await api.previewScriptNarration(narration())
-            setPreview(take)
-            return { blob: await api.previewScriptMix(take.id, music, musicGain), takeId: take.id }
-          }} />
+      {section === 'export' && <section className="form" aria-label="Finish review desk">
+        <div className="studio-finish-toolbar">
+          <div>
+            <h3>Review and export</h3>
+            <p className="muted small">{voiceName ?? 'Choose a voice'} · {chosen.length}
+              {chosen.length === 1 ? ' clip' : ' clips'}{preview && ` · ${preview.duration.toFixed(1)} s narration`}</p>
+          </div>
+          <button type="submit" className="primary" disabled={!!busy || !scriptReady || !footageReady || !graphicsReady}>
+            {busy === 'render' ? (preview ? 'Rendering video…' : 'Generating narration and rendering…') : 'Export short'}
+          </button>
+        </div>
+        {!graphicsReady && <p className="warn small">Check the narration line, duration, and label text in Animated graphics.</p>}
         {!scriptReady && <p className="warn small">Add a script and choose a saved voice.</p>}
         {!footageReady && <p className="warn small">Add available footage and check scene timing.</p>}
+        {result && <div className="card">
+          <h3>{result.title}</h3>
+          <div className="row-btns">
+            {result.youtube_package && <a className="btn" href={api.scriptShortFile(result.id, 'youtube-package.zip')}
+              download="youtube-package.zip">Download YouTube package</a>}
+            <a className="btn" href={api.scriptShortFile(result.id, 'short.mp4')} download="script-short.mp4">Download video</a>
+            <a className="btn ghost" href={api.scriptShortFile(result.id, 'captions.srt')} download="captions.srt">Download captions</a>
+          </div>
+        </div>}
+        <div className="studio-review-desk">
+          {portrait}
+          <div className="form studio-scene-inspector">
+            <StudioReviewQueue scenes={reviewScenes} take={preview} approved={approvedTakes}
+              busy={busy} onJump={jumpToReview} />
+            <StudioSceneReview scene={scene} index={sceneIndex} nextScene={reviewScenes[sceneIndex + 1]}
+              target={reviewTarget} onPreviewScene={prepareSceneCut}
+              canPreviewScene={scriptReady && footageReady && graphicsReady && sceneIndex < chosen.length}
+              take={preview} busy={busy} approved={approvedTakes} onApprove={toggleApproval} onPrepare={previewNarration}
+              onRevise={(index, replacement) => reviseNarrationLine(index, replacement, true)}
+              onRetake={retakeLine} onRestore={restoreTake} onReplace={plannedScenes ? replaceSceneFootage : null}
+              assets={(catalog?.assets ?? []).filter((item) =>
+                !storyboard.some((other, index) => index !== sceneIndex && other.asset_id === item.id))}
+              voice={voiceName ?? 'Narration'} />
+          </div>
+        </div>
+        <div className="studio-finish-settings" role="group" aria-label="Finish settings">
+          <details className="card script-section form">
+            <summary>Caption styling</summary>
+            <Seg label="Captions" value={captionLook.caption_style ?? 'simple'} disabled={!!busy}
+              options={[['karaoke', 'Animated'], ['simple', 'Simple'], ['none', 'Off']]}
+              onChange={(value) => setCaption('caption_style', value)} />
+            {captionPresets && captionLook.caption_style !== 'none' && <>
+              <div className="opt-col">
+                <span className="muted">Caption look</span>
+                <div className="looks">
+                  {captionPresets.presets.map((preset) => <LookChip key={preset.id} p={preset}
+                    on={(captionLook.caption_preset ?? captionPresets.default) === preset.id} disabled={!!busy}
+                    onPick={() => setCaption('caption_preset', preset.id)} />)}
+                </div>
+              </div>
+              <Seg label="Position" value={captionLook.caption_position ?? captionPresets.position} disabled={!!busy}
+                options={[['bottom', 'Bottom'], ['middle', 'Middle']]}
+                onChange={(value) => setCaption('caption_position', value)} />
+            </>}
+          </details>
+          <StudioPublish text={text} title={title} notes={studio.notes} options={studio.publish}
+            setOptions={(update) => setStudio((current) => ({ ...current, publish: update(current.publish) }))}
+            duration={preview?.duration} busy={busy} run={run} checked={packageChecked} setChecked={setPackageChecked} />
+          <ScriptGraphics items={graphics} setItems={setGraphics} take={preview} busy={busy}
+            canPreview={scriptReady} onPreview={previewNarration} onPlay={listenToLine} />
+          <ScriptMusic initialPrompt={themeMusicPrompt} script={text} track={music} onSelect={setMusic} available={catalog?.music_generation}
+            narrationDuration={preview?.duration} busy={busy} run={run} gain={musicGain} onGain={setMusicGain}
+            voice={voice} voiceVersion={version} takeId={preview?.id}
+            onPreview={async () => {
+              const take = preview ?? await api.previewScriptNarration(narration())
+              setPreview(take)
+              return { blob: await api.previewScriptMix(take.id, music, musicGain), takeId: take.id }
+            }} />
+        </div>
         {!!catalog?.items.length && <div className="card">
           <label>Completed shorts <select value={result?.id || ''} onChange={(event) => {
             setResult(catalog.items.find((item) => item.id === event.target.value) ?? null)
@@ -617,49 +937,18 @@ export default function ScriptShort({ openDraftId }) {
             {catalog.items.map((item) => <option key={item.id} value={item.id}>{item.title} · {item.duration} s</option>)}
           </select></label>
         </div>}
-        {result && <div className="card">
-          <h3>{result.title}</h3>
-          <div className="row-btns">
-            <a className="btn" href={api.scriptShortFile(result.id, 'short.mp4')} download="script-short.mp4">Download video</a>
-            <a className="btn ghost" href={api.scriptShortFile(result.id, 'captions.srt')} download="captions.srt">Download captions</a>
-          </div>
-        </div>}
-      </section>
-      <div className="script-next row-btns">
+      </section>}
+      {section !== 'export' && <div className="script-next row-btns">
         {section !== 'script' && <button type="button" className="btn ghost" disabled={!!busy}
-          onClick={() => moveToSection(section === 'export' ? 'footage' : 'script')}>Back</button>}
+          onClick={() => moveToSection('script')}>Back</button>}
         {section === 'script' && <button type="button" className="primary"
           disabled={!!busy || !scriptReady} onClick={() => moveToSection('footage')}>Continue to storyboard</button>}
         {section === 'footage' && <button type="button" className="primary"
           disabled={!!busy || !footageReady} onClick={() => moveToSection('export')}>Continue to finish</button>}
-        {section === 'export' && <button type="submit" className="primary" disabled={!!busy || !scriptReady || !footageReady || !graphicsReady}>
-          {busy === 'render' ? (preview ? 'Rendering video…' : 'Generating narration and rendering…') : 'Export short'}
-        </button>}
-      </div>
+      </div>}
       {busy && <span className="muted small" role="status">Longer scripts can take a few minutes.</span>}
     </form>
     </div>
-    <section className="card script-desktop-preview" aria-label="Portrait preview">
-      <h3>Portrait preview</h3>
-      {section === 'export' && result && <div className="row-btns" role="group" aria-label="Portrait preview mode">
-        <button type="button" className="btn sm ghost" aria-pressed={!showingExport} onClick={() => setMonitor('edit')}>Edit preview</button>
-        <button type="button" className="btn sm ghost" aria-pressed={!!showingExport} onClick={() => setMonitor('export')}>Last export</button>
-      </div>}
-      {showingExport && <video className="srcvid" controls preload="metadata"
-        aria-label="Script short preview" src={api.scriptShortFile(result.id, 'short.mp4')} />}
-      {!showingExport && <div className="portrait-frame">
-        {frame ? <img src={frame} alt={`Storyboard scene ${sceneIndex + 1}`} />
-          : scene?.asset_id ? <video controls preload="metadata" src={api.brollAssetUrl(scene.asset_id)} />
-            : chosen.length ? <video controls preload="metadata" src={api.brollAssetUrl(chosen[0])} />
-            : <span className="muted">Add a storyboard image or footage to preview it here.</span>}
-        {frame && section === 'export' && sample && captionLook.caption_style !== 'none' &&
-          <span className={`portrait-caption ${(captionLook.caption_position ?? captionPresets?.position) === 'middle' ? 'middle' : ''}`}
-            style={{ fontFamily: look?.font, color: cssCaptionColor(captionLook.caption_style === 'karaoke' ? look?.active : look?.text),
-              fontWeight: look?.bold === false ? 400 : 700,
-              background: look?.box ? cssCaptionColor(look.outline_color) : undefined }}>
-            {look?.uppercase === false ? sample : sample.toUpperCase()}
-          </span>}
-      </div>}
-    </section>
+    {section !== 'export' && portrait}
   </div>
 }

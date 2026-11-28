@@ -80,7 +80,7 @@ YouTube URL / file
   sentence's audio window. To combine fixes, use **Select sentences for pickups** and export up to 20
   selected sentences together. Each export starts from the original. If a replacement needs too much
   speedup, shorten the wording and try again.
-- **Script → Short:** choose **New project → Make a short from a script**, paste a script, choose a saved voice version,
+- **Content Creation Studio:** choose **New project → Content Creation Studio**, paste a script, choose a saved voice version,
   and arrange up to six MP4s from your local B-roll library. Footage plays in order for equal parts of the
   narration and loops when needed. The export is a captioned 720×1280 MP4 with a separate SRT, up to 60
   seconds of narration. **Preview narration** lets you listen before rendering and reuses the same audio
@@ -88,6 +88,24 @@ YouTube URL / file
   change at a specific line of the preview. With footage selected, use **Suggest B-roll plan** to review a
   Gemma-proposed sequence. Gemma describes only your shortlist and reuses descriptions of unchanged footage.
   The desktop workspace keeps the portrait preview beside **Script**, **Storyboard**, and **Finish**.
+  The **Finish** review desk keeps the timeline below the preview and the review queue and scene controls alongside it.
+  Select a scene to hear, revise, regenerate, or approve individual lines. Use **Preview this scene** to play
+  just that scene with its visuals, narration, captions, graphics, and music mix. Caption styling, graphics, background music,
+  and the YouTube upload package are in collapsible panels below the desk.
+  **Take history** lets you listen to earlier takes and restore versions with matching wording and voice.
+  The timeline lets you seek by scene or narration line. Select **Play full cut** to preview footage,
+  narration, captions, graphics, and the music mix together before export. The scene strip, narration markers,
+  and playhead seek the video while full-cut playback is open. Export reuses the current preview when
+  its render inputs still match. Use **Review queue** to jump
+  to flagged lines or scenes with unapproved takes. Approving a take clears its queue entry.
+  For a first cut, enter a brief or paste a script, add optional source notes, choose a voice, and select
+  **Generate first cut**. ClipForge reuses theme matches when a theme is selected, queues missing images,
+  and prepares the narration and scene cuts. **Generate missing music** is optional. Image generation
+  continues while the tab is closed; audio and final assembly resume when you reopen the draft.
+  To change a scene, use **Revise opening narration line** or select replacement footage. Preparing the
+  revised narration reuses unchanged takes when the voice and spoken text match.
+  In **Finish → YouTube upload package**, review claims, choose a title, edit the description and source
+  credits, and select a thumbnail frame. The ZIP contains the video, SRT, JPEG and upload copy.
   Open **Caption styling** in **Finish** to use the same font and colour presets as
   the Shorts editor, choose animated or simple captions, and set their position. Turning off burned-in
   captions still produces a separate SRT. Animated captions can use the Brand Kit accent.
@@ -277,6 +295,19 @@ bash scripts/setup_tts.sh      # optional: 🗣 Your voice (own env, ~3 GB + ~4 
 ```
 Open http://localhost:5173 (works from the Windows browser too).
 
+### Sharing a test build
+
+Share a pinned Git revision or a source ZIP from that revision. Include the setup scripts, example settings,
+frontend lockfile, license and one short sample video you have permission to distribute. Have testers create
+their own local data and model folders. Leave your `backend/.env`, cookies, voice recordings, generated media,
+downloaded model weights and dependency folders out of the handoff.
+
+The current setup is for a tester comfortable with Ubuntu in WSL2 or with Linux. They need Miniconda, Node
+and a reachable Ollama instance. A machine without a compatible NVIDIA GPU should set `WHISPER_DEVICE=cpu`
+and `WHISPER_COMPUTE_TYPE=int8` in its own `backend/.env`. The existing `ENCODER=libx264` default works on CPU.
+Use a local video upload for the first smoke test. Local voice generation, scene image generation and generated
+music each have separate setup requirements, so include only the extras the tester needs for their task.
+
 CLI only:
 ```bash
 cd backend && conda activate clipforge
@@ -436,6 +467,11 @@ agreement with the first (baseline) variant — then each variant's clips. Your 
 run's candidates, so they favour that setup; use `--repeat` to see run-to-run noise. Needs Ollama; don't run
 it while a job is selecting clips.
 
+For offline evidence experiments, run `python -m app.evidence_eval manifest.json --jobs data/jobs --cache /tmp/clipforge-signals`
+from `backend/`. Each manifest entry supplies `job`, `name`, `profile`, `range` and `references` (start/end
+pairs in source seconds). The evaluator compares the same recorded candidate windows before and after an
+audio/visual evidence boost. It reports top-five reference matches, overlap rejections, boundary error and elapsed time.
+
 ### Continuous integration
 Every push and pull request runs [`.github/workflows/ci.yml`](.github/workflows/ci.yml) on GitHub's Ubuntu runner:
 `ruff` + `pytest` for the backend and `npm run build` for the frontend. It needs no GPU or Ollama — the LLM is
@@ -447,6 +483,22 @@ FFmpeg 8.0 and 8.0.1 have a bug where the `aselect` audio filter does nothing (f
 ClipForge therefore cuts audio with `atrim` + `concat` instead, with every cut snapped to the video frame grid,
 so jump cuts stay in sync on every FFmpeg version. If you change the jump-cut filters, don't reintroduce
 `aselect` — CI would catch it on its FFmpeg 8.0.1.
+
+## Local Studio MCP
+
+Start ClipForge as usual. In the ClipForge Python environment, install the optional adapter dependency from
+`backend/` with `python -m pip install -r requirements-mcp.txt`. Configure the MCP client's stdio command to run
+`python -m app.studio_mcp` with its working directory set to `backend/`. If the client cannot set a working
+directory, set its `PYTHONPATH` to the absolute `backend/` path and use the environment's absolute Python path.
+The adapter connects to the running API on `127.0.0.1:8000`. Set `CLIPFORGE_MCP_PORT` for a different local port.
+
+- `create_studio_draft` accepts a brief and optional source notes, then returns a job ID immediately.
+- `studio_job_status` polls that ID and returns the draft ID when the script and storyboard are ready.
+  The job continues in ClipForge if the MCP client disconnects.
+- `list_studio_outputs` returns the saved draft path and any subsequent exports linked to it.
+
+Open the draft under **Projects → Script drafts** to choose a voice, generate assets, review, and export.
+The adapter returns local paths and status metadata to the connected client.
 
 ## License
 [Apache License 2.0](LICENSE) for ClipForge's own code (copyright notice in [NOTICE](NOTICE)). Models and tools it runs keep their own terms — notably Gemma

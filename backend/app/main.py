@@ -57,6 +57,7 @@ from .models import (
     RecordingEdit,
     RenderOptions,
     ReplaceWords,
+    RestoreScriptTake,
     Retry,
     SaveVisual,
     ScriptBrief,
@@ -76,6 +77,8 @@ from .models import (
     SpeakRequest,
     Stage,
     StoryboardRequest,
+    StudioLineEdit,
+    StudioPublishRequest,
     ThemeAsset,
     ThemeMatchRequest,
     VisualBatch,
@@ -110,6 +113,7 @@ from .pipeline import (
     script_short,
     sfx,
     storyboard,
+    studio,
     themes,
     transcript_edit,
     tts,
@@ -130,6 +134,7 @@ from .pipeline.presets import POSITIONS, all_presets, get_preset
 from .pipeline.reframe import people, source_size, tracked_path, visible_speaker_turns
 from .pipeline.render import ASPECTS, FEED, extra_aspects, render_clip
 from .pipeline.storyboard_jobs import StoryboardJobs
+from .pipeline.studio_jobs import StudioDraftJobs
 from .watch import Watcher
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -275,6 +280,7 @@ def create_app(pipeline=None, start_worker: bool = True, llm_factory=OllamaClien
         return tts_state["v"]
 
     storyboard_jobs = StoryboardJobs()
+    studio_draft_jobs = StudioDraftJobs()
 
     def gpu_work(fn, *, wait=False):
         """Run fn() holding GPU_LOCK with Gemma unloaded (8 GB: Whisper / TTS need the room). 409 while busy."""
@@ -410,7 +416,7 @@ def create_app(pipeline=None, start_worker: bool = True, llm_factory=OllamaClien
                 "stale": [ln.i for ln in sc.lines if dub.stale(sc, ln)] if sc.voice else [],
                 "max_rate": dub.MAX_RATE, "take_issues": dub.take_issues(sc, dub.pronunciation_dictionary())}
 
-    def gemma_review(fn):
+    def gemma_review(fn, *, wait=False):
         def review():
             model = llm_factory()
             try:
@@ -420,7 +426,7 @@ def create_app(pipeline=None, start_worker: bool = True, llm_factory=OllamaClien
                     model.unload()
                 except (OSError, RuntimeError):
                     logging.debug("Could not unload Gemma after review", exc_info=True)
-        return gpu_work(review)
+        return gpu_work(review, wait=wait)
 
     def review_dub_take(script: DubScript, line_id: int) -> dict:
         dictionary = dub.pronunciation_dictionary()
@@ -454,7 +460,7 @@ def create_app(pipeline=None, start_worker: bool = True, llm_factory=OllamaClien
 
     @app.post("/api/script-shorts/write")
     def write_script(body: ScriptBrief) -> dict:
-        return gemma_review(lambda llm: storyboard.draft(body.brief, llm))
+        return gemma_review(lambda llm: storyboard.draft(body.brief, llm, body.source_notes))
 
     @app.post("/api/script-shorts/music/suggest")
     def suggest_script_music(body: ScriptMusicSuggestion) -> dict:
@@ -482,6 +488,22 @@ def create_app(pipeline=None, start_worker: bool = True, llm_factory=OllamaClien
         if path is None:
             raise HTTPException(404, "Music track not found")
         return FileResponse(path)
+
+    @app.post("/api/script-shorts/line")
+    def edit_studio_line(body: StudioLineEdit) -> dict:
+        lines = script_short.script_lines(body.text)
+        replacement = body.replacement.strip()
+        if body.line >= len(lines) or script_short.script_lines(replacement) != [replacement]:
+            raise HTTPException(400, "Replace the scene opening with one narration line")
+        lines[body.line] = replacement
+        text = "\n".join(lines)
+        if len(text) > 1200:
+            raise HTTPException(400, "Keep the script under 1,200 characters")
+        return {"text": text, "line": replacement}
+
+    @app.post("/api/script-shorts/publish-copy")
+    def suggest_studio_publish(body: StudioPublishRequest) -> dict:
+        return gemma_review(lambda llm: studio.suggest_publish(body, llm))
 
     @app.post("/api/script-shorts/storyboard")
     def plan_storyboard(body: StoryboardRequest) -> dict:
@@ -530,6 +552,27 @@ def create_app(pipeline=None, start_worker: bool = True, llm_factory=OllamaClien
         except (OSError, RuntimeError) as error:
             raise HTTPException(502, str(error)) from None
 
+    @app.post("/api/script-shorts/studio-jobs", status_code=202)
+    def submit_studio_draft(body: ScriptBrief) -> dict:
+        try:
+            return studio_draft_jobs.submit(body, lambda fn: gemma_review(fn, wait=True))
+        except RuntimeError as error:
+            raise HTTPException(409, str(error)) from None
+
+    @app.get("/api/script-shorts/studio-jobs/{ident}")
+    def get_studio_draft_status(ident: str) -> dict:
+        try:
+            return studio_draft_jobs.get(ident)
+        except KeyError:
+            raise HTTPException(404, "Studio job not found") from None
+
+    @app.get("/api/script-shorts/studio-jobs/{ident}/outputs")
+    def list_studio_draft_outputs(ident: str) -> dict:
+        try:
+            return studio_draft_jobs.outputs(ident)
+        except KeyError:
+            raise HTTPException(404, "Studio job or draft not found") from None
+
     @app.get("/api/script-shorts/drafts")
     def list_script_drafts() -> dict:
         return {"items": script_short.drafts()}
@@ -548,6 +591,17 @@ def create_app(pipeline=None, start_worker: bool = True, llm_factory=OllamaClien
     @app.post("/api/script-shorts/narration/{ident}/lines/{line_id}/retake")
     def retake_script_line(ident: str, line_id: int, body: ScriptNarrationRequest) -> dict:
         return gpu_work(lambda: script_short.retake(ident, line_id, body))
+
+    @app.get("/api/script-shorts/narration/{ident}/lines/{line_id}/audio")
+    def script_line_audio(ident: str, line_id: int) -> Response:
+        try:
+            return Response(script_short.line_audio(ident, line_id), media_type="audio/wav")
+        except KeyError:
+            raise HTTPException(404, "This narration take is no longer available") from None
+
+    @app.post("/api/script-shorts/narration/{ident}/lines/{line_id}/restore")
+    def restore_script_line(ident: str, line_id: int, body: RestoreScriptTake) -> dict:
+        return gpu_work(lambda: script_short.retake(ident, line_id, body, (body.take_preview_id, body.take_line)))
 
     @app.post("/api/script-shorts/narration")
     def preview_script_narration(body: ScriptNarrationRequest) -> dict:
@@ -576,6 +630,19 @@ def create_app(pipeline=None, start_worker: bool = True, llm_factory=OllamaClien
         return {"suggestion": gemma_review(
             lambda llm: narration_review.suggest(line["text"], line["spoken"], line["heard"], llm),
         )}
+
+    @app.post("/api/script-shorts/preview-scene/{index}")
+    def preview_script_scene(index: int, body: ScriptShortRequest) -> Response:
+        video = gpu_work(lambda: script_short.preview_scene(body, index))
+        return Response(video, media_type="video/mp4", headers={"Cache-Control": "no-store"})
+
+    @app.post("/api/script-shorts/preview-cut")
+    def preview_script_cut(body: ScriptShortRequest) -> Response:
+        video, boundaries, token = gpu_work(lambda: script_short.preview_cut(body))
+        headers = {"Cache-Control": "no-store", "X-Scene-Boundaries": ",".join(map(str, boundaries))}
+        if token:
+            headers["X-Cut-Token"] = token
+        return Response(video, media_type="video/mp4", headers=headers)
 
     @app.post("/api/script-shorts", status_code=201)
     def create_script_short(body: ScriptShortRequest) -> dict:

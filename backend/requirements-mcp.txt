@@ -1,0 +1,2 @@
+# Optional local stdio adapter.
+mcp>=1.26,<2
